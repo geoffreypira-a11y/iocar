@@ -3472,7 +3472,11 @@ function useSupabaseTable(token, garageId, table) {
     if (!token || !garageId) { setReady(true); return; }
     setReady(false);
     sb.select(token, table, `garage_id=eq.${garageId}`)
-      .then(rows => setData(rows || []))
+      .then(rows => {
+        // Aplatir : {id, garage_id, data:{marque...}} → {id, garage_id, marque...}
+        const flat = (rows || []).map(r => r.data ? { ...r.data, id: r.id, garage_id: r.garage_id, _supabase_id: r.id } : r);
+        setData(flat);
+      })
       .catch(() => setData([]))
       .finally(() => setReady(true));
   }, [token, garageId]);
@@ -3481,7 +3485,8 @@ function useSupabaseTable(token, garageId, table) {
     setData(rows);
     if (!token || !garageId) return;
     for (const row of rows) {
-      await sb.upsert(token, table, { ...row, garage_id: garageId }).catch(() => {});
+      const { garage_id: _g, _supabase_id, ...rest } = row;
+      await sb.upsert(token, table, { id: row.id, garage_id: garageId, data: rest }).catch(() => {});
     }
   }, [token, garageId]);
 
@@ -3491,7 +3496,8 @@ function useSupabaseTable(token, garageId, table) {
       return exists ? prev.map(x => x.id === row.id ? row : x) : [row, ...prev];
     });
     if (!token || !garageId) return;
-    await sb.upsert(token, table, { ...row, garage_id: garageId }).catch(() => {});
+    const { garage_id: _g, _supabase_id, ...rest } = row;
+    await sb.upsert(token, table, { id: row.id, garage_id: garageId, data: rest }).catch(() => {});
   }, [token, garageId]);
 
   const deleteOne = useCallback(async (id) => {
@@ -3736,16 +3742,19 @@ function SuspendedScreen({ garage, onLogout }) {
 /* ═══════════════════════════════════════════════════════════════
    ADMIN PAGE — Dashboard garages IO Car
 ═══════════════════════════════════════════════════════════════ */
-function AdminPage({ token }) {
-  const [garages, setGarages] = useState([]);
-  const [loading, setLoading] = useState(true);
+function AdminPage({ token, garages: garagesProp, setGarages: setGaragesProp }) {
+  const [garages, setGarages] = useState(garagesProp || []);
+  const [loading, setLoading] = useState(!garagesProp);
   const [search, setSearch]   = useState("");
   const [updating, setUpdating] = useState(null);
   const [exporting, setExporting] = useState(false);
   const [backupInfo, setBackupInfo] = useState(null);
   const [backupLoading, setBackupLoading] = useState(false);
+  const [expandedGarage, setExpandedGarage] = useState(null); // garage id pour voir les données
+  const [garageData, setGarageData] = useState(null); // { vehicles, orders, clients, livre_police }
 
   useEffect(() => {
+    if (garagesProp && garagesProp.length > 0) { setGarages(garagesProp); setLoading(false); return; }
     fetch(`${SUPABASE_URL}/rest/v1/garages?order=created_at.desc`, {
       headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}`, "Content-Type": "application/json" }
     })
@@ -3753,18 +3762,50 @@ function AdminPage({ token }) {
       .then(data => { setGarages(Array.isArray(data) ? data : []); setLoading(false); })
       .catch(() => setLoading(false));
 
-    // Vérifier la dernière sauvegarde
     checkBackup();
   }, [token]);
 
+  // Charger les données d'un garage
+  const loadGarageData = async (garageId) => {
+    if (expandedGarage === garageId) { setExpandedGarage(null); setGarageData(null); return; }
+    setExpandedGarage(garageId);
+    const tables = ["vehicles", "orders", "clients", "livre_police"];
+    const data = {};
+    for (const table of tables) {
+      const r = await fetch(
+        `${SUPABASE_URL}/rest/v1/${table}?garage_id=eq.${garageId}&order=created_at.desc`,
+        { headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}` } }
+      );
+      data[table] = r.ok ? await r.json() : [];
+    }
+    setGarageData(data);
+  };
+
+  // Supprimer une entrée d'un garage
+  const deleteEntry = async (table, id) => {
+    if (!window.confirm("Supprimer cette entrée ? Irréversible.")) return;
+    await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${id}`, {
+      method: "DELETE",
+      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}` }
+    });
+    setGarageData(prev => ({
+      ...prev,
+      [table]: prev[table].filter(x => x.id !== id)
+    }));
+  };
+
   const checkBackup = async () => {
     try {
-      const r = await fetch(`${SUPABASE_URL}/storage/v1/object/info/backups/backup_latest.json`, {
-        headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}` }
+      // Lister les fichiers du bucket backups
+      const r = await fetch(`${SUPABASE_URL}/storage/v1/object/list/backups`, {
+        method: "POST",
+        headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ prefix: "", limit: 10 })
       });
       if (r.ok) {
-        const info = await r.json();
-        setBackupInfo(info);
+        const files = await r.json();
+        const backup = files.find(f => f.name === "backup_latest.json");
+        if (backup) setBackupInfo(backup);
       }
     } catch(e) {}
   };
@@ -4119,6 +4160,14 @@ function AdminPage({ token }) {
                       <button
                         className="btn btn-ghost btn-sm"
                         style={{ fontSize: 11 }}
+                        title={`Explorer les données de ${g.name || g.email}`}
+                        onClick={() => loadGarageData(g.id)}
+                      >
+                        {expandedGarage === g.id ? "▲ Fermer" : "📂 Données"}
+                      </button>
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        style={{ fontSize: 11 }}
                         title={`Exporter les données de ${g.name || g.email}`}
                         onClick={async () => {
                           const tables = ["vehicles", "orders", "clients", "livre_police"];
@@ -4143,6 +4192,54 @@ function AdminPage({ token }) {
                       </button>
                     </div>
                   </td>
+                </tr>
+                {/* Données du garage — expandable */}
+                {expandedGarage === g.id && garageData && (
+                  <tr><td colSpan={11} style={{ padding: 0, background: "var(--card2)" }}>
+                    <div style={{ padding: "16px 20px" }}>
+                      {["vehicles", "orders", "clients", "livre_police"].map(table => (
+                        <div key={table} style={{ marginBottom: 16 }}>
+                          <div style={{ fontFamily: "Syne", fontSize: 12, fontWeight: 700, color: "var(--gold)", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>
+                            {table === "vehicles" ? "🚗 Véhicules" : table === "orders" ? "📄 Factures/BC" : table === "clients" ? "👥 Clients" : "📋 Livre de Police"}
+                            <span style={{ fontSize: 11, color: "var(--muted)", fontWeight: 400, marginLeft: 8 }}>({garageData[table].length})</span>
+                          </div>
+                          {garageData[table].length === 0 ? (
+                            <div style={{ fontSize: 12, color: "var(--muted)", padding: "8px 0" }}>Aucune donnée</div>
+                          ) : (
+                            <div style={{ maxHeight: 200, overflowY: "auto", borderRadius: 8, border: "1px solid var(--border2)" }}>
+                              <table style={{ fontSize: 11 }}>
+                                <thead>
+                                  <tr>
+                                    {table === "vehicles" && <><th>Marque</th><th>Modèle</th><th>Plaque</th><th>Statut</th><th>Action</th></>}
+                                    {table === "orders" && <><th>Réf</th><th>Type</th><th>Client</th><th>TTC</th><th>Date</th><th>Action</th></>}
+                                    {table === "clients" && <><th>Nom</th><th>Email</th><th>Statut</th><th>Action</th></>}
+                                    {table === "livre_police" && <><th>N°</th><th>Marque</th><th>Plaque</th><th>Entrée</th><th>Sortie</th><th>Action</th></>}
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {garageData[table].map(row => {
+                                    const d = row.data || row;
+                                    return (
+                                      <tr key={row.id}>
+                                        {table === "vehicles" && <><td>{d.marque}</td><td>{d.modele}</td><td>{d.plate}</td><td>{d.statut}</td></>}
+                                        {table === "orders" && <><td>{d.ref}</td><td>{d.type}</td><td>{d.client?.name}</td><td>{fmtDec(calcOrder(d).ttc)}</td><td>{d.date_creation}</td></>}
+                                        {table === "clients" && <><td>{d.prenom} {d.nom}</td><td>{d.email}</td><td>{d.statut}</td></>}
+                                        {table === "livre_police" && <><td>{d.num_ordre}</td><td>{d.marque}</td><td>{d.immat}</td><td>{d.date_entree}</td><td>{d.date_sortie || "—"}</td></>}
+                                        <td>
+                                          <button className="btn btn-danger btn-xs" onClick={() => deleteEntry(table, row.id)}>🗑</button>
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </td></tr>
+                )}
                 </tr>
               ))}
             </tbody>
@@ -4412,7 +4509,8 @@ export default function App() {
             </div>
             <button className="btn btn-ghost btn-sm" onClick={handleLogout}>🚪 Déconnexion</button>
           </div>
-          <AdminPage token={token} />
+          {/* Contenu admin — dashboard OU accès aux données des garages */}
+          <AdminPage token={token} garages={garages} setGarages={setGarages} />
         </div>
 
       ) : (
