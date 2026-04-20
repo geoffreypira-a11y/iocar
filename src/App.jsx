@@ -444,10 +444,11 @@ function getPayStatut(c) {
   return { label: "💰 À encaisser", cls: "badge-red" };
 }
 const STATUTS_FLEET = {
-  disponible: { label: "Disponible", cls: "badge-green" },
-  réservé: { label: "Réservé", cls: "badge-gold" },
-  vendu: { label: "Vendu", cls: "badge-muted" },
-  atelier: { label: "Atelier", cls: "badge-orange" },
+  disponible: { label: "Disponible",  cls: "badge-green" },
+  réservé:    { label: "Réservé",     cls: "badge-gold" },
+  vendu:      { label: "Vendu",       cls: "badge-blue" },
+  livré:      { label: "Livré",       cls: "badge-muted" },
+  atelier:    { label: "Atelier",     cls: "badge-orange" },
 };
 
 function calcOrder(o) {
@@ -1198,8 +1199,8 @@ function FleetPage({ vehicles, setVehicles, apiKey, usage, setUsage, livrePolice
   const save = (v) => {
     const exists = vehicles.find(x => x.id === v.id);
 
-    // Véhicule passé "vendu" → retirer de la flotte + date sortie LP
-    if (v.statut === "vendu") {
+    // Véhicule passé "vendu" → mettre à jour date sortie LP mais GARDER dans la flotte
+    if (v.statut === "vendu" || v.statut === "livré") {
       if (setLivrePolice && livrePolice) {
         const lpEntry = livrePolice.find(e => e.vehicle_id === v.id || e.immat === v.plate);
         if (lpEntry && !lpEntry.date_sortie) {
@@ -1208,9 +1209,6 @@ function FleetPage({ vehicles, setVehicles, apiKey, usage, setUsage, livrePolice
           ));
         }
       }
-      setVehicles(vehicles.filter(x => x.id !== v.id));
-      setModal(null);
-      return;
     }
 
     const next = exists ? vehicles.map(x => x.id === v.id ? v : x) : [v, ...vehicles];
@@ -1351,6 +1349,13 @@ function FleetPage({ vehicles, setVehicles, apiKey, usage, setUsage, livrePolice
                   <td>
                     <div style={{ display: "flex", gap: 6 }}>
                       <button className="btn btn-ghost btn-xs" onClick={() => setFiche(v)}>🏷 Fiche</button>
+                      {v.statut === "vendu" && (
+                        <button className="btn btn-ghost btn-xs" style={{ color: "var(--green)" }}
+                          title="Marquer comme livré"
+                          onClick={() => save({ ...v, statut: "livré" })}>
+                          🚗 Livré
+                        </button>
+                      )}
                       <button className="btn btn-ghost btn-xs" onClick={() => setModal(v)}>✏️</button>
                       <button className="btn btn-danger btn-xs" onClick={() => setPendingDelete({ id: v.id, label: `${v.marque} ${v.modele} ${v.plate ? `(${v.plate})` : ""}` })}>🗑</button>
                     </div>
@@ -2028,7 +2033,7 @@ function PrintDoc({ order, dealer, onClose, isDemo }) {
 /* ═══════════════════════════════════════════════════════════════
    ORDERS PAGE
 ═══════════════════════════════════════════════════════════════ */
-function OrdersPage({ orders, setOrders, vehicles, dealer, apiKey, usage, setUsage, clients, setClients, isDemo }) {
+function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKey, usage, setUsage, clients, setClients, isDemo, isAdmin }) {
   const [tab, setTabLocal] = useState("all");
   const [modal, setModal] = useState(null);
   const [print, setPrint] = useState(null);
@@ -2094,6 +2099,14 @@ function OrdersPage({ orders, setOrders, vehicles, dealer, apiKey, usage, setUsa
   const toFacture = (o) => {
     const updated = { ...o, type: "facture", ref: nextRef(orders, "facture"), date_creation: today() };
     setOrders(orders.map(x => x.id === o.id ? updated : x));
+
+    // Passer le véhicule lié en "vendu" automatiquement
+    if (o.vehicle_id && vehicles) {
+      const veh = vehicles.find(v => v.id === o.vehicle_id);
+      if (veh && veh.statut !== "vendu" && veh.statut !== "livré") {
+        setVehiclesRaw(vehicles.map(v => v.id === o.vehicle_id ? { ...v, statut: "vendu" } : v));
+      }
+    }
 
     // Passer le prospect en "client" dans le CRM
     if (setClients && clients) {
@@ -2236,16 +2249,16 @@ function OrdersPage({ orders, setOrders, vehicles, dealer, apiKey, usage, setUsa
                       {o.type === "facture" && c.reste > 0.01 && !isDemo && (
                         <button className="btn btn-ghost btn-xs" style={{ color: "var(--green)" }} onClick={() => setPayment(o)}>💳</button>
                       )}
-                      {/* Modifier : bloqué en démo sur les factures */}
-                      {(!isDemo || o.type !== "facture") && (
+                      {/* Modifier : bloqué sur les factures sauf admin */}
+                      {(o.type !== "facture" || isAdmin) && (
                         <button className="btn btn-ghost btn-xs" onClick={() => setModal(o)}>✏️</button>
                       )}
-                      {/* Supprimer : bloqué en démo sur les factures */}
-                      {(!isDemo || o.type !== "facture") && (
+                      {/* Supprimer : bloqué sur les factures sauf admin */}
+                      {(o.type !== "facture" || isAdmin) && (
                         <button className="btn btn-danger btn-xs" onClick={() => setPendingDelete({ id: o.id, label: o.ref })}>🗑</button>
                       )}
-                      {isDemo && o.type === "facture" && (
-                        <span style={{ fontSize: 10, color: "var(--muted)", padding: "4px 6px" }} title="Facture validée — non modifiable en démo">🔒</span>
+                      {o.type === "facture" && !isAdmin && (
+                        <span style={{ fontSize: 10, color: "var(--muted)", padding: "4px 6px" }} title="Facture non supprimable — obligation légale">🔒</span>
                       )}
                     </div>
                   </td>
@@ -3441,42 +3454,41 @@ function exportComptableCSV(orders, dealer) {
 /* ═══════════════════════════════════════════════════════════════
    SUPABASE DATA HOOKS
 ═══════════════════════════════════════════════════════════════ */
-function useSupabaseTable(token, userId, table) {
+function useSupabaseTable(token, garageId, table) {
   const [data, setData] = useState([]);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    // Pas de session → ready immédiatement, données vides
-    if (!token || !userId) { setReady(true); return; }
+    if (!token || !garageId) { setReady(true); return; }
     setReady(false);
-    sb.select(token, table, `garage_id=eq.${userId}`)
+    sb.select(token, table, `garage_id=eq.${garageId}`)
       .then(rows => setData(rows || []))
       .catch(() => setData([]))
       .finally(() => setReady(true));
-  }, [token, userId]);
+  }, [token, garageId]);
 
   const save = useCallback(async (rows) => {
     setData(rows);
-    if (!token || !userId) return;
+    if (!token || !garageId) return;
     for (const row of rows) {
-      await sb.upsert(token, table, { ...row, garage_id: userId }).catch(() => {});
+      await sb.upsert(token, table, { ...row, garage_id: garageId }).catch(() => {});
     }
-  }, [token, userId]);
+  }, [token, garageId]);
 
   const saveOne = useCallback(async (row) => {
     setData(prev => {
       const exists = prev.find(x => x.id === row.id);
       return exists ? prev.map(x => x.id === row.id ? row : x) : [row, ...prev];
     });
-    if (!token || !userId) return;
-    await sb.upsert(token, table, { ...row, garage_id: userId }).catch(() => {});
-  }, [token, userId]);
+    if (!token || !garageId) return;
+    await sb.upsert(token, table, { ...row, garage_id: garageId }).catch(() => {});
+  }, [token, garageId]);
 
   const deleteOne = useCallback(async (id) => {
     setData(prev => prev.filter(x => x.id !== id));
-    if (!token || !userId) return;
+    if (!token || !garageId) return;
     await sb.delete(token, table, id).catch(() => {});
-  }, [token, userId]);
+  }, [token, garageId]);
 
   return [data, setData, ready, saveOne, deleteOne];
 }
@@ -3734,17 +3746,24 @@ export default function App() {
 
   // ── Mode SUPABASE : données distantes ─────────────────────
   const userId = isDemo ? null : user?.id;
-  const [vehicles,    setVehicles,    vReady]    = useSupabaseTable(token, userId, "vehicles");
-  const [orders,      setOrders,      oReady]    = useSupabaseTable(token, userId, "orders");
-  const [clients,     setClients,     cReady]    = useSupabaseTable(token, userId, "clients");
-  const [livrePolice, setLivrePolice, lpReady]   = useSupabaseTable(token, userId, "livre_police");
+  // garageId est mis à jour quand le garage est chargé
+  const [garageId, setGarageId] = useState(null);
+
+  const [vehicles,    setVehicles,    vReady]    = useSupabaseTable(token, garageId, "vehicles");
+  const [orders,      setOrders,      oReady]    = useSupabaseTable(token, garageId, "orders");
+  const [clients,     setClients,     cReady]    = useSupabaseTable(token, garageId, "clients");
+  const [livrePolice, setLivrePolice, lpReady]   = useSupabaseTable(token, garageId, "livre_police");
 
   // Charger le profil garage (Supabase uniquement)
   useEffect(() => {
     if (isDemo) { setGarage(null); setGarageReady(true); setAppLoading(false); return; }
     if (!token || !userId) { setAppLoading(false); setGarageReady(true); return; }
     sb.getGarage(token, userId)
-      .then(g => { setGarage(g); setGarageReady(true); })
+      .then(g => {
+        setGarage(g);
+        setGarageId(g?.id || null); // ← met à jour garageId pour les tables
+        setGarageReady(true);
+      })
       .catch(() => setGarageReady(true))
       .finally(() => setAppLoading(false));
   }, [token, userId, isDemo]);
@@ -3945,7 +3964,7 @@ export default function App() {
         <main className={`content${isDemo ? " demo-offset" : ""}`}>
           {tab === "dashboard"   && <Dashboard vehicles={activeVehicles} setVehicles={setVehiclesRaw} orders={activeOrders} setTab={setTab} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} />}
           {tab === "fleet"       && <FleetPage vehicles={activeVehicles} setVehicles={setVehiclesRaw} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} livrePolice={activeLivrePolice} setLivrePolice={setLivrePoliceRaw} isDemo={isDemo} />}
-          {tab === "orders"      && <OrdersPage orders={activeOrders} setOrders={setOrdersRaw} vehicles={activeVehicles} dealer={dealer} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} clients={activeClients} setClients={setClientsRaw} isDemo={isDemo} />}
+          {tab === "orders"      && <OrdersPage orders={activeOrders} setOrders={setOrdersRaw} vehicles={activeVehicles} setVehiclesRaw={setVehiclesRaw} dealer={dealer} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} clients={activeClients} setClients={setClientsRaw} isDemo={isDemo} isAdmin={isAdmin} />}
           {tab === "crm"         && <CrmPage clients={activeClients} setClients={setClientsRaw} orders={activeOrders} isDemo={isDemo} />}
           {tab === "livrepolice" && (isDemo ? (
             <div className="page" style={{ textAlign: "center", paddingTop: 80 }}>
