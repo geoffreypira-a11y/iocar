@@ -2257,7 +2257,7 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
                       {(o.type !== "facture" || isAdmin) && (
                         <button className="btn btn-danger btn-xs" onClick={() => setPendingDelete({ id: o.id, label: o.ref })}>🗑</button>
                       )}
-                      {o.type === "facture" && !isAdmin && (
+                      {o.type === "facture" && !isAdmin && !isDemo && (
                         <span style={{ fontSize: 10, color: "var(--muted)", padding: "4px 6px" }} title="Facture non supprimable — obligation légale">🔒</span>
                       )}
                     </div>
@@ -3723,6 +3723,228 @@ function SuspendedScreen({ garage, onLogout }) {
   );
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   ADMIN PAGE — Dashboard garages IO Car
+═══════════════════════════════════════════════════════════════ */
+function AdminPage({ token }) {
+  const [garages, setGarages] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch]   = useState("");
+  const [updating, setUpdating] = useState(null);
+
+  useEffect(() => {
+    // Charger tous les garages
+    fetch(`${SUPABASE_URL}/rest/v1/garages?order=created_at.desc`, {
+      headers: {
+        "apikey": SUPABASE_KEY,
+        "Authorization": `Bearer ${token}`,
+        "Content-Type": "application/json"
+      }
+    })
+      .then(r => r.json())
+      .then(data => { setGarages(Array.isArray(data) ? data : []); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [token]);
+
+  const toggleActive = async (g) => {
+    setUpdating(g.id);
+    const newVal = !g.is_active;
+    const updated_at = new Date().toISOString();
+    await fetch(`${SUPABASE_URL}/rest/v1/garages?id=eq.${g.id}`, {
+      method: "PATCH",
+      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}`, "Content-Type": "application/json", "Prefer": "return=minimal" },
+      body: JSON.stringify({ is_active: newVal, updated_at })
+    });
+    setGarages(garages.map(x => x.id === g.id ? { ...x, is_active: newVal, updated_at } : x));
+    setUpdating(null);
+  };
+
+  const setPlan = async (g, plan) => {
+    setUpdating(g.id);
+    const updated_at = new Date().toISOString();
+    await fetch(`${SUPABASE_URL}/rest/v1/garages?id=eq.${g.id}`, {
+      method: "PATCH",
+      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}`, "Content-Type": "application/json", "Prefer": "return=minimal" },
+      body: JSON.stringify({ plan, updated_at })
+    });
+    setGarages(garages.map(x => x.id === g.id ? { ...x, plan, updated_at } : x));
+    setUpdating(null);
+  };
+
+  const filtered = garages.filter(g =>
+    !search || `${g.name} ${g.email} ${g.siret}`.toLowerCase().includes(search.toLowerCase())
+  );
+
+  const stats = {
+    total: garages.length,
+    actifs: garages.filter(g => g.is_active).length,
+    suspendus: garages.filter(g => !g.is_active).length,
+    pro: garages.filter(g => g.plan === "pro").length,
+    annual: garages.filter(g => g.plan === "annual").length,
+    monthly: garages.filter(g => g.plan === "monthly").length,
+    trial: garages.filter(g => g.plan === "trial").length,
+  };
+
+  const mrr = (stats.monthly * 24.99) + (stats.annual * (274.89 / 12)) + (stats.pro * 24.99);
+
+  return (
+    <div className="page">
+      <div className="page-header">
+        <div>
+          <div className="page-title">🛡 Dashboard Admin</div>
+          <div className="page-sub">IO Car — Vue globale des concessions</div>
+        </div>
+      </div>
+
+      {/* KPIs */}
+      <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(160px,1fr))", marginBottom: 28 }}>
+        {[
+          ["Garages total", stats.total, "var(--text)"],
+          ["Actifs", stats.actifs, "var(--green)"],
+          ["Suspendus", stats.suspendus, "var(--red)"],
+          ["MRR estimé", `${fmtDec(mrr)}`, "var(--gold)"],
+          ["Mensuel", stats.monthly, "var(--blue)"],
+          ["Annuel", stats.annual, "var(--green)"],
+          ["Essai", stats.trial, "var(--muted2)"],
+        ].map(([label, val, color]) => (
+          <div key={label} className="kpi">
+            <div className="kpi-label">{label}</div>
+            <div className="kpi-val" style={{ fontSize: 24, color }}>{val}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Recherche */}
+      <input className="search-input" style={{ marginBottom: 16, width: "100%", maxWidth: 400 }}
+        placeholder="Rechercher par nom, email, SIRET..."
+        value={search} onChange={e => setSearch(e.target.value)} />
+
+      {/* Table */}
+      {loading ? (
+        <div style={{ textAlign: "center", padding: 40, color: "var(--muted)" }}>Chargement...</div>
+      ) : (
+        <div className="tbl-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Concession</th>
+                <th>Email</th>
+                <th>SIRET</th>
+                <th>Clé RapidAPI</th>
+                <th>Plaques ce mois</th>
+                <th>Plaques total</th>
+                <th>Plan</th>
+                <th>Statut</th>
+                <th>Inscrit le</th>
+                <th>Dernière MAJ</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.length === 0 && (
+                <tr><td colSpan={7} style={{ textAlign: "center", color: "var(--muted)", padding: 40 }}>Aucun garage trouvé</td></tr>
+              )}
+              {filtered.map(g => (
+                <tr key={g.id}>
+                  <td style={{ fontWeight: 600 }}>{g.name || "—"}</td>
+                  <td style={{ fontSize: 12, color: "var(--muted)" }}>{g.email || "—"}</td>
+                  <td style={{ fontFamily: "DM Mono", fontSize: 11 }}>{g.siret || "—"}</td>
+                  <td>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      <input
+                        className="form-input"
+                        style={{ padding: "3px 8px", fontSize: 10, fontFamily: "DM Mono", width: 160 }}
+                        defaultValue={g.rapidapi_key || ""}
+                        placeholder="Clé RapidAPI..."
+                        onBlur={async e => {
+                          const val = e.target.value.trim();
+                          if (val === (g.rapidapi_key || "")) return;
+                          const updated_at = new Date().toISOString();
+                          await fetch(`${SUPABASE_URL}/rest/v1/garages?id=eq.${g.id}`, {
+                            method: "PATCH",
+                            headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}`, "Content-Type": "application/json", "Prefer": "return=minimal" },
+                            body: JSON.stringify({ rapidapi_key: val, updated_at })
+                          });
+                          setGarages(garages.map(x => x.id === g.id ? { ...x, rapidapi_key: val, updated_at } : x));
+                        }}
+                      />
+                      {g.rapidapi_key && <span style={{ color: "var(--green)", fontSize: 10 }}>✓</span>}
+                    </div>
+                  </td>
+                  <td style={{ textAlign: "center" }}>
+                    {(() => {
+                      const mk = new Date().toISOString().slice(0, 7);
+                      const u = typeof g.api_usage === "string" ? JSON.parse(g.api_usage || "{}") : (g.api_usage || {});
+                      const mois = u[mk] || 0;
+                      return (
+                        <span style={{ fontFamily: "DM Mono", fontWeight: 700, color: mois >= 10 ? "var(--orange)" : "var(--text)" }}>
+                          {mois}
+                          {mois >= 10 && <span style={{ fontSize: 9, color: "var(--orange)", marginLeft: 4 }}>+payant</span>}
+                        </span>
+                      );
+                    })()}
+                  </td>
+                  <td style={{ textAlign: "center" }}>
+                    {(() => {
+                      const u = typeof g.api_usage === "string" ? JSON.parse(g.api_usage || "{}") : (g.api_usage || {});
+                      const total = Object.values(u).reduce((s, v) => s + (parseInt(v) || 0), 0);
+                      return <span style={{ fontFamily: "DM Mono", fontWeight: 700 }}>{total}</span>;
+                    })()}
+                  </td>
+                  <td>
+                    <select
+                      className="form-input"
+                      style={{ padding: "3px 8px", fontSize: 11, width: "auto" }}
+                      value={g.plan || "trial"}
+                      onChange={e => setPlan(g, e.target.value)}
+                      disabled={updating === g.id}
+                    >
+                      <option value="trial">Essai</option>
+                      <option value="monthly">Mensuel</option>
+                      <option value="annual">Annuel</option>
+                      <option value="pro">Pro</option>
+                    </select>
+                  </td>
+                  <td>
+                    <span className={`badge ${g.is_active ? "badge-green" : "badge-red"}`}>
+                      {g.is_active ? "✅ Actif" : "⛔ Suspendu"}
+                    </span>
+                  </td>
+                  <td style={{ fontSize: 11, color: "var(--muted)" }}>
+                    {g.created_at ? new Date(g.created_at).toLocaleDateString("fr-FR") : "—"}
+                  </td>
+                  <td>
+                    {g.updated_at ? (
+                      <div>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text)" }}>
+                          {new Date(g.updated_at).toLocaleDateString("fr-FR")}
+                        </div>
+                        <div style={{ fontSize: 10, color: "var(--muted)" }}>
+                          {new Date(g.updated_at).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}
+                        </div>
+                      </div>
+                    ) : <span style={{ color: "var(--muted)", fontSize: 11 }}>—</span>}
+                  </td>
+                  <td>
+                    <button
+                      className={`btn btn-sm ${g.is_active ? "btn-danger" : "btn-primary"}`}
+                      onClick={() => toggleActive(g)}
+                      disabled={updating === g.id}
+                      style={{ fontSize: 11 }}
+                    >
+                      {updating === g.id ? "..." : g.is_active ? "⛔ Suspendre" : "✅ Activer"}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [tab, setTab]               = useState("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -3786,14 +4008,33 @@ export default function App() {
     if (token && garage?.id) await sb.update(token, "garages", garage.id, data).catch(() => {});
   };
 
-  // Quota API plaque
+  // Quota API plaque — sauvegardé en localStorage ET dans Supabase
   const monthKey = new Date().toISOString().slice(0, 7);
   const [usage, setUsageLocal] = useState(() => {
     try { return JSON.parse(localStorage.getItem("iocar_usage") || "{}"); } catch(e) { return {}; }
   });
+
+  // Charger api_usage depuis Supabase au login
+  useEffect(() => {
+    if (isDemo || !garage?.api_usage) return;
+    try {
+      const remote = typeof garage.api_usage === "string" ? JSON.parse(garage.api_usage) : garage.api_usage;
+      setUsageLocal(remote);
+      localStorage.setItem("iocar_usage", JSON.stringify(remote));
+    } catch(e) {}
+  }, [garage?.id]);
+
   const setUsage = (u) => {
     setUsageLocal(u);
     try { localStorage.setItem("iocar_usage", JSON.stringify(u)); } catch(e) {}
+    // Persister dans Supabase
+    if (!isDemo && garageId && token) {
+      fetch(`${SUPABASE_URL}/rest/v1/garages?id=eq.${garageId}`, {
+        method: "PATCH",
+        headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}`, "Content-Type": "application/json", "Prefer": "return=minimal" },
+        body: JSON.stringify({ api_usage: u })
+      }).catch(() => {});
+    }
   };
 
   // Écoute l'événement "goto register" depuis les modals démo
@@ -3827,7 +4068,7 @@ export default function App() {
 
   // Accès suspendu (Supabase uniquement)
   // Compte admin — bypass abonnement
-  const ADMIN_EMAILS = ["jownyjoowls@gmail.com"];
+  const ADMIN_EMAILS = ["johnyjoowls@gmail.com"];
   const isAdmin = ADMIN_EMAILS.includes(user?.email);
 
   if (!isDemo && !isAdmin && garage?.is_active === false) return <SuspendedScreen garage={garage} onLogout={handleLogout} />;
@@ -3852,6 +4093,7 @@ export default function App() {
     { id: "crm",         icon: "👥", label: "CRM" },
     { id: "livrepolice", icon: "📋", label: "Police" },
     { id: "settings",    icon: "⚙️", label: "Paramètres" },
+    ...(isAdmin ? [{ id: "admin", icon: "🛡", label: "Admin IO Car" }] : []),
   ];
 
   const bottomNavItems = [
@@ -3975,6 +4217,7 @@ export default function App() {
             </div>
           ) : <LivreDePolice vehicles={activeVehicles} livrePolice={activeLivrePolice} setLivrePolice={setLivrePoliceRaw} dealer={dealer} />)}
           {tab === "settings"    && <SettingsPage dealer={dealer} setDealer={setDealerRaw} usage={usage} />}
+          {tab === "admin"       && isAdmin && <AdminPage token={token} />}
         </main>
       </div>
 
