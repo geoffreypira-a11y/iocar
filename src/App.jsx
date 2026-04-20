@@ -3742,9 +3742,9 @@ function SuspendedScreen({ garage, onLogout }) {
 /* ═══════════════════════════════════════════════════════════════
    ADMIN PAGE — Dashboard garages IO Car
 ═══════════════════════════════════════════════════════════════ */
-function AdminPage({ token, garages: garagesProp, setGarages: setGaragesProp }) {
-  const [garages, setGarages] = useState(garagesProp || []);
-  const [loading, setLoading] = useState(!garagesProp);
+function AdminPage({ token }) {
+  const [garages, setGarages] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [search, setSearch]   = useState("");
   const [updating, setUpdating] = useState(null);
   const [exporting, setExporting] = useState(false);
@@ -3754,14 +3754,12 @@ function AdminPage({ token, garages: garagesProp, setGarages: setGaragesProp }) 
   const [garageData, setGarageData] = useState(null); // { vehicles, orders, clients, livre_police }
 
   useEffect(() => {
-    if (garagesProp && garagesProp.length > 0) { setGarages(garagesProp); setLoading(false); return; }
     fetch(`${SUPABASE_URL}/rest/v1/garages?order=created_at.desc`, {
       headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}`, "Content-Type": "application/json" }
     })
       .then(r => r.json())
       .then(data => { setGarages(Array.isArray(data) ? data : []); setLoading(false); })
       .catch(() => setLoading(false));
-
     checkBackup();
   }, [token]);
 
@@ -4511,7 +4509,7 @@ export default function App() {
             <button className="btn btn-ghost btn-sm" onClick={handleLogout}>🚪 Déconnexion</button>
           </div>
           {/* Contenu admin — dashboard OU accès aux données des garages */}
-          <AdminPage token={token} garages={garages} setGarages={setGarages} />
+          <AdminPage token={token} />
         </div>
 
       ) : (
