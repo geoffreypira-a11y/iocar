@@ -489,13 +489,15 @@ function mapCarburant(raw) {
 async function aiLookupPlate(plate, apiKey) {
   const key = apiKey || "9a05402107mshffd01f995575592p162c8djsn2cf79c109e41";
   const host = "api-de-plaque-d-immatriculation-france.p.rapidapi.com";
-  const url = `https://${host}/get_vehicule_info?immatriculation=${encodeURIComponent(plate)}`;
+  const url = `https://${host}/?plaque=${encodeURIComponent(plate)}`;
 
   const res = await fetch(url, {
     method: "GET",
     headers: {
       "X-RapidAPI-Key": key,
       "X-RapidAPI-Host": host,
+      "Content-Type": "application/json",
+      "plaque": plate,
     },
   });
 
