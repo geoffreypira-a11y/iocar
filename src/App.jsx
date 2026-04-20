@@ -897,7 +897,7 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
 /* ═══════════════════════════════════════════════════════════════
    VEHICLE FORM MODAL
 ═══════════════════════════════════════════════════════════════ */
-function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage }) {
+function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garageId, viewMode }) {
   const [form, setForm] = useState(vehicle ? {
     ...vehicle,
     options: Array.isArray(vehicle.options) ? vehicle.options.join(", ") : vehicle.options || "",
@@ -927,8 +927,8 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage }) {
   const handleAI = async () => {
     if (!form.plate) return;
 
-    // Confirmation si quota dépassé
-    if (!isFree) {
+    // Confirmation si quota dépassé (pas pour l'admin)
+    if (!isFree && viewMode !== "admin") {
       const ok = window.confirm(
         `⚠️ Quota mensuel atteint (${usedThisMonth} recherches ce mois)\n\n` +
         `Cette recherche est payante : ${COST_EXTRA.toFixed(2)} €\n\n` +
@@ -942,7 +942,17 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage }) {
       const data = await aiLookupPlate(form.plate.toUpperCase().replace(/\s/g, ""), apiKey);
       setForm(f => ({ ...f, ...data, options: Array.isArray(data.options) ? data.options.join(", ") : "" }));
       // Incrémenter le compteur mensuel
-      setUsage({ ...usage, [monthKey]: usedThisMonth + 1 });
+      const newUsage = { ...usage, [monthKey]: usedThisMonth + 1 };
+      setUsage(newUsage);
+
+      // Si quota dépassé → reporter à Stripe (metered billing)
+      if (!isFree && viewMode !== "admin" && garageId) {
+        fetch("/api/report-plate-usage", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ garageId, quantity: 1 })
+        }).catch(() => {}); // silencieux, ne bloque pas l'UX
+      }
     } catch (e) {
       alert(`Erreur de récupération : ${e.message}\n\nVérifiez votre clé API dans les Paramètres.`);
     } finally {
@@ -1181,7 +1191,7 @@ function VehicleFiche({ v, dealer, onClose }) {
 /* ═══════════════════════════════════════════════════════════════
    FLEET PAGE
 ═══════════════════════════════════════════════════════════════ */
-function FleetPage({ vehicles, setVehicles, apiKey, usage, setUsage, livrePolice, setLivrePolice, isDemo }) {
+function FleetPage({ vehicles, setVehicles, apiKey, usage, setUsage, livrePolice, setLivrePolice, viewMode, garageId }) {
   const [modal, setModal] = useState(null);
   const [fiche, setFiche] = useState(null);
   const [search, setSearch] = useState("");
@@ -1272,7 +1282,7 @@ function FleetPage({ vehicles, setVehicles, apiKey, usage, setUsage, livrePolice
 
   return (
     <div className="page">
-      {modal && <VehicleModal vehicle={modal === "add" ? null : modal} onSave={save} onClose={() => setModal(null)} apiKey={apiKey} usage={usage} setUsage={setUsage} />}
+      {modal && <VehicleModal vehicle={modal === "add" ? null : modal} onSave={save} onClose={() => setModal(null)} apiKey={apiKey} usage={usage} setUsage={setUsage} garageId={garageId} viewMode={viewMode} />}
       {fiche && <VehicleFiche v={fiche} dealer={dealer} onClose={() => setFiche(null)} />}
       {pendingDelete && (
         <ConfirmModal
@@ -1283,7 +1293,7 @@ function FleetPage({ vehicles, setVehicles, apiKey, usage, setUsage, livrePolice
           onCancel={() => setPendingDelete(null)}
         />
       )}
-      {showDemoLimit && <DemoLimitModal type="vehicles" onClose={() => setShowDemoLimit(false)} />}
+      {viewMode === "trial" && showDemoLimit && <DemoLimitModal type="vehicles" onClose={() => setShowDemoLimit(false)} />}
 
       <div className="page-header">
         <div>
@@ -1291,7 +1301,7 @@ function FleetPage({ vehicles, setVehicles, apiKey, usage, setUsage, livrePolice
           <div className="page-sub">{vehicles.length} véhicule{vehicles.length !== 1 ? "s" : ""} · {vehicles.filter(v => v.statut === "disponible").length} disponibles</div>
         </div>
         <button className="btn btn-primary" onClick={() => {
-          if (isDemo && vehicles.length >= DEMO_LIMITS.vehicles) { setShowDemoLimit(true); return; }
+          if (viewMode === "trial" && vehicles.length >= DEMO_LIMITS.vehicles) { setShowDemoLimit(true); return; }
           setModal("add");
         }}>+ Ajouter un véhicule</button>
       </div>
@@ -1857,7 +1867,7 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
 /* ═══════════════════════════════════════════════════════════════
    PRINT DOCUMENT
 ═══════════════════════════════════════════════════════════════ */
-function PrintDoc({ order, dealer, onClose, isDemo }) {
+function PrintDoc({ order, dealer, onClose, viewMode }) {
   const c = calcOrder(order);
   return (
     <div className="modal-bg no-print" onClick={e => e.target === e.currentTarget && onClose()}>
@@ -1867,13 +1877,13 @@ function PrintDoc({ order, dealer, onClose, isDemo }) {
         <div className="modal-hd no-print" style={{ flexShrink: 0 }}>
           <span className="modal-title">Aperçu — {order.ref}</span>
           <div style={{ display: "flex", gap: 8 }}>
-            {order.type === "facture" && !isDemo && (
+            {order.type === "facture" && viewMode !== "trial" && (
               <button className="btn btn-ghost btn-sm" onClick={() => exportFacturX(order, dealer, "en16931")}
                 title="Export Factur-X EN16931 — compatible Plateforme Agréée (PA/PDP)">
                 ⚡ Factur-X PA
               </button>
             )}
-            {order.type === "facture" && isDemo && (
+            {order.type === "facture" && viewMode === "trial" && (
               <button className="btn btn-ghost btn-sm" style={{ opacity: .5, cursor: "not-allowed" }}
                 title="Disponible avec un abonnement"
                 onClick={() => window.dispatchEvent(new CustomEvent("iocar_goto_register"))}>
@@ -2033,7 +2043,7 @@ function PrintDoc({ order, dealer, onClose, isDemo }) {
 /* ═══════════════════════════════════════════════════════════════
    ORDERS PAGE
 ═══════════════════════════════════════════════════════════════ */
-function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKey, usage, setUsage, clients, setClients, isDemo, isAdmin }) {
+function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKey, usage, setUsage, clients, setClients, viewMode }) {
   const [tab, setTabLocal] = useState("all");
   const [modal, setModal] = useState(null);
   const [print, setPrint] = useState(null);
@@ -2151,9 +2161,9 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
 
   return (
     <div className="page">
-      {modal && <OrderForm order={modal === "new" ? null : modal} vehicles={vehicles} onSave={save} onClose={() => setModal(null)} apiKey={apiKey} clients={clients} setClients={setClients} orders={orders} isDemo={isDemo} />}
-      {print && <PrintDoc order={print} dealer={dealer} onClose={() => setPrint(null)} isDemo={isDemo} />}
-      {showDemoLimit && <DemoLimitModal type="orders" onClose={() => setShowDemoLimit(false)} />}
+      {modal && <OrderForm order={modal === "new" ? null : modal} vehicles={vehicles} onSave={save} onClose={() => setModal(null)} apiKey={apiKey} clients={clients} setClients={setClients} orders={orders} viewMode={viewMode} />}
+      {print && <PrintDoc order={print} dealer={dealer} onClose={() => setPrint(null)} viewMode={viewMode} />}
+      {viewMode === "trial" && showDemoLimit && <DemoLimitModal type="orders" onClose={() => setShowDemoLimit(false)} />}
       {payment && <PaymentModal order={payment} onSave={o => { setOrders(orders.map(x => x.id === o.id ? o : x)); setPayment(null); }} onClose={() => setPayment(null)} />}
       {pendingDelete && (
         <ConfirmModal
@@ -2168,16 +2178,16 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
       <div className="page-header">
         <div>
           <div className="page-title">Commandes & Factures</div>
-          <div className="page-sub">{orders.length} document{orders.length !== 1 ? "s" : ""}{isDemo && <span style={{ marginLeft: 8, fontSize: 11, color: "var(--orange)" }}>· Mode démo ({orders.length}/{DEMO_LIMITS.orders})</span>}</div>
+          <div className="page-sub">{orders.length} document{orders.length !== 1 ? "s" : ""}{viewMode === "trial" && <span style={{ marginLeft: 8, fontSize: 11, color: "var(--orange)" }}>· Mode démo ({orders.length}/{DEMO_LIMITS.orders})</span>}</div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          {!isDemo && (
+          {viewMode !== "trial" && (
             <button className="btn btn-ghost btn-sm" onClick={() => exportComptableCSV(orders, dealer)} title="Export comptable CSV">
               📊 Export comptable
             </button>
           )}
           <button className="btn btn-primary" onClick={() => {
-            if (isDemo && orders.length >= DEMO_LIMITS.orders) { setShowDemoLimit(true); return; }
+            if (viewMode === "trial" && orders.length >= DEMO_LIMITS.orders) { setShowDemoLimit(true); return; }
             setModal("new");
           }}>+ Nouveau document</button>
         </div>
@@ -2236,29 +2246,26 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
                     <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
                       <button className="btn btn-ghost btn-xs" onClick={() => setPrint(o)} title="Imprimer">🖨</button>
                       {/* En mode démo : facture validée = lecture seule */}
-                      {(!isDemo || o.type === "bc") && o.type === "bc" && (
+                      {(viewMode !== "trial" || o.type === "bc") && o.type === "bc" && (
                         <button className="btn btn-ghost btn-xs" onClick={() => toFacture(o)} title="Convertir en facture">🧾</button>
                       )}
-                      {o.type === "facture" && !isDemo && <button className="btn btn-ghost btn-xs" title="Créer un avoir" onClick={() => setModal({
+                      {o.type === "facture" && viewMode !== "trial" && <button className="btn btn-ghost btn-xs" title="Créer un avoir" onClick={() => setModal({
                         ...o, id: null, type: "avoir",
                         ref: nextRef(orders, "avoir"),
                         date_creation: today(),
                         facture_origine: o.ref,
                         paiements: [],
                       })}>↩️</button>}
-                      {o.type === "facture" && c.reste > 0.01 && !isDemo && (
+                      {o.type === "facture" && c.reste > 0.01 && viewMode !== "trial" && (
                         <button className="btn btn-ghost btn-xs" style={{ color: "var(--green)" }} onClick={() => setPayment(o)}>💳</button>
                       )}
                       {/* Modifier : bloqué sur les factures sauf admin */}
-                      {(o.type !== "facture" || isAdmin) && (
+                      {(o.type !== "facture" || viewMode === "admin") && (
                         <button className="btn btn-ghost btn-xs" onClick={() => setModal(o)}>✏️</button>
                       )}
                       {/* Supprimer : bloqué sur les factures sauf admin */}
-                      {(o.type !== "facture" || isAdmin) && (
+                      {(o.type !== "facture" || viewMode === "admin") && (
                         <button className="btn btn-danger btn-xs" onClick={() => setPendingDelete({ id: o.id, label: o.ref })}>🗑</button>
-                      )}
-                      {o.type === "facture" && !isAdmin && !isDemo && (
-                        <span style={{ fontSize: 10, color: "var(--muted)", padding: "4px 6px" }} title="Facture non supprimable — obligation légale">🔒</span>
                       )}
                     </div>
                   </td>
@@ -2609,7 +2616,7 @@ function SettingsPage({ dealer, setDealer, usage }) {
    LIVRE DE POLICE
    Champs obligatoires art. R321-3 à R321-5 Code Pénal
 ═══════════════════════════════════════════════════════════════ */
-function LivreDePolice({ vehicles, livrePolice, setLivrePolice, dealer }) {
+function LivreDePolice({ vehicles, livrePolice, setLivrePolice, dealer, viewMode }) {
   const [modal, setModal] = useState(null);
   const [search, setSearch] = useState("");
   const [printMode, setPrintMode] = useState(false);
@@ -2730,7 +2737,9 @@ function LivreDePolice({ vehicles, livrePolice, setLivrePolice, dealer }) {
                 <td>
                   <div style={{ display: "flex", gap: 4 }}>
                     <button className="btn btn-ghost btn-xs" onClick={() => setModal(e)}>✏️</button>
-                    <button className="btn btn-danger btn-xs" onClick={() => setPendingDelete({ id: e.id, num: e.num_ordre, label: `${e.marque} ${e.modele} ${e.immat || ""}` })}>🗑</button>
+                    {viewMode === "admin" && (
+                      <button className="btn btn-danger btn-xs" onClick={() => setPendingDelete({ id: e.id, num: e.num_ordre, label: `${e.marque} ${e.modele} ${e.immat || ""}` })}>🗑</button>
+                    )}
                   </div>
                 </td>
               </tr>
@@ -3046,7 +3055,7 @@ const STATUTS_CLIENT = {
   inactif:     { label: "Inactif",        cls: "badge-muted",   icon: "💤" },
 };
 
-function CrmPage({ clients, setClients, orders, isDemo }) {
+function CrmPage({ clients, setClients, orders, viewMode }) {
   const [search, setSearch]         = useState("");
   const [filterStatut, setFilter]   = useState("all");
   const [modal, setModal]           = useState(null);
@@ -3088,15 +3097,15 @@ function CrmPage({ clients, setClients, orders, isDemo }) {
           onCancel={() => setPendingDelete(null)}
         />
       )}
-      {showDemoLimit && <DemoLimitModal type="clients" onClose={() => setShowDemoLimit(false)} />}
+      {viewMode === "trial" && showDemoLimit && <DemoLimitModal type="clients" onClose={() => setShowDemoLimit(false)} />}
 
       <div className="page-header">
         <div>
           <div className="page-title">👥 CRM Clients</div>
-          <div className="page-sub">{clients.length} contact{clients.length !== 1 ? "s" : ""} · {clients.filter(c => c.statut === "client").length} clients actifs{isDemo && <span style={{ marginLeft: 8, fontSize: 11, color: "var(--orange)" }}>· Mode démo ({clients.length}/{DEMO_LIMITS.clients})</span>}</div>
+          <div className="page-sub">{clients.length} contact{clients.length !== 1 ? "s" : ""} · {clients.filter(c => c.statut === "client").length} clients actifs{viewMode === "trial" && <span style={{ marginLeft: 8, fontSize: 11, color: "var(--orange)" }}>· Mode démo ({clients.length}/{DEMO_LIMITS.clients})</span>}</div>
         </div>
         <button className="btn btn-primary" onClick={() => {
-          if (isDemo && clients.length >= DEMO_LIMITS.clients) { setShowDemoLimit(true); return; }
+          if (viewMode === "trial" && clients.length >= DEMO_LIMITS.clients) { setShowDemoLimit(true); return; }
           setModal("add");
         }}>+ Nouveau contact</button>
       </div>
@@ -3731,20 +3740,89 @@ function AdminPage({ token }) {
   const [loading, setLoading] = useState(true);
   const [search, setSearch]   = useState("");
   const [updating, setUpdating] = useState(null);
+  const [exporting, setExporting] = useState(false);
+  const [backupInfo, setBackupInfo] = useState(null);
+  const [backupLoading, setBackupLoading] = useState(false);
 
   useEffect(() => {
-    // Charger tous les garages
     fetch(`${SUPABASE_URL}/rest/v1/garages?order=created_at.desc`, {
-      headers: {
-        "apikey": SUPABASE_KEY,
-        "Authorization": `Bearer ${token}`,
-        "Content-Type": "application/json"
-      }
+      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}`, "Content-Type": "application/json" }
     })
       .then(r => r.json())
       .then(data => { setGarages(Array.isArray(data) ? data : []); setLoading(false); })
       .catch(() => setLoading(false));
+
+    // Vérifier la dernière sauvegarde
+    checkBackup();
   }, [token]);
+
+  const checkBackup = async () => {
+    try {
+      const r = await fetch(`${SUPABASE_URL}/storage/v1/object/info/backups/backup_latest.json`, {
+        headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}` }
+      });
+      if (r.ok) {
+        const info = await r.json();
+        setBackupInfo(info);
+      }
+    } catch(e) {}
+  };
+
+  const downloadBackup = async () => {
+    setBackupLoading(true);
+    try {
+      const r = await fetch(`${SUPABASE_URL}/storage/v1/object/backups/backup_latest.json`, {
+        headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}` }
+      });
+      if (!r.ok) throw new Error("Backup introuvable");
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `iocar_backup_${new Date().toISOString().slice(0,10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch(e) {
+      alert("Erreur : " + e.message);
+    }
+    setBackupLoading(false);
+  };
+
+  // ── Export complet de toutes les données ──────────────────
+  const exportAllData = async () => {
+    setExporting(true);
+    try {
+      const tables = ["vehicles", "orders", "clients", "livre_police"];
+      const backup = {
+        exported_at: new Date().toISOString(),
+        garages: [],
+      };
+
+      for (const garage of garages) {
+        const garageData = { ...garage, data: {} };
+        for (const table of tables) {
+          const r = await fetch(
+            `${SUPABASE_URL}/rest/v1/${table}?garage_id=eq.${garage.id}&order=created_at.asc`,
+            { headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}` } }
+          );
+          garageData.data[table] = r.ok ? await r.json() : [];
+        }
+        backup.garages.push(garageData);
+      }
+
+      // Télécharger le JSON
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `iocar_backup_${new Date().toISOString().slice(0,10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch(e) {
+      alert("Erreur export : " + e.message);
+    }
+    setExporting(false);
+  };
 
   const toggleActive = async (g) => {
     setUpdating(g.id);
@@ -3771,21 +3849,36 @@ function AdminPage({ token }) {
     setUpdating(null);
   };
 
+  const ADMIN_LIST = ["johnyjoowls@gmail.com"];
+
   const filtered = garages.filter(g =>
     !search || `${g.name} ${g.email} ${g.siret}`.toLowerCase().includes(search.toLowerCase())
   );
 
+  // Exclure les comptes admin du MRR
+  const payingGarages = garages.filter(g => !ADMIN_LIST.includes(g.email));
+
+  // Calcul plaques supplémentaires ce mois (marge 0,10€ par plaque)
+  const monthKey = new Date().toISOString().slice(0, 7);
+  const totalPlaquesSupp = payingGarages.reduce((sum, g) => {
+    const u = typeof g.api_usage === "string" ? JSON.parse(g.api_usage || "{}") : (g.api_usage || {});
+    const used = u[monthKey] || 0;
+    return sum + Math.max(0, used - 10);
+  }, 0);
+
   const stats = {
-    total: garages.length,
-    actifs: garages.filter(g => g.is_active).length,
-    suspendus: garages.filter(g => !g.is_active).length,
-    pro: garages.filter(g => g.plan === "pro").length,
-    annual: garages.filter(g => g.plan === "annual").length,
-    monthly: garages.filter(g => g.plan === "monthly").length,
-    trial: garages.filter(g => g.plan === "trial").length,
+    total: garages.length - ADMIN_LIST.filter(a => garages.find(g => g.email === a)).length,
+    actifs: payingGarages.filter(g => g.is_active).length,
+    suspendus: payingGarages.filter(g => !g.is_active).length,
+    annual: payingGarages.filter(g => g.plan === "annual").length,
+    monthly: payingGarages.filter(g => g.plan === "monthly").length,
+    trial: payingGarages.filter(g => g.plan === "trial").length,
   };
 
-  const mrr = (stats.monthly * 24.99) + (stats.annual * (274.89 / 12)) + (stats.pro * 24.99);
+  // MRR = abonnements + marge plaques supplémentaires (0,10€/plaque)
+  const mrrAbos = (stats.monthly * 24.99) + (stats.annual * (274.89 / 12));
+  const mrrPlaques = totalPlaquesSupp * 0.10;
+  const mrr = mrrAbos + mrrPlaques;
 
   return (
     <div className="page">
@@ -3794,22 +3887,55 @@ function AdminPage({ token }) {
           <div className="page-title">🛡 Dashboard Admin</div>
           <div className="page-sub">IO Car — Vue globale des concessions</div>
         </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn btn-ghost btn-sm" onClick={exportAllData} disabled={exporting || loading}
+            title="Télécharger un backup JSON de toutes les données">
+            {exporting ? "⏳ Export en cours..." : "💾 Exporter toutes les données"}
+          </button>
+        </div>
+      </div>
+
+      {/* Statut sauvegarde automatique */}
+      <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 20, padding: "12px 16px", background: "var(--card)", border: "1px solid var(--border2)", borderRadius: 10 }}>
+        <div style={{ fontSize: 28 }}>🗄️</div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 700, fontSize: 13 }}>Sauvegarde automatique quotidienne</div>
+          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+            Exécutée chaque nuit à minuit — écrase la sauvegarde précédente
+          </div>
+          {backupInfo && (
+            <div style={{ fontSize: 11, color: "var(--green)", marginTop: 4 }}>
+              ✅ Dernière sauvegarde : {new Date(backupInfo.updated_at || backupInfo.created_at).toLocaleString("fr-FR")}
+              {backupInfo.size && ` · ${Math.round(backupInfo.size / 1024)} KB`}
+            </div>
+          )}
+          {!backupInfo && (
+            <div style={{ fontSize: 11, color: "var(--orange)", marginTop: 4 }}>
+              ⚠️ Aucune sauvegarde trouvée — la première sera créée cette nuit à minuit
+            </div>
+          )}
+        </div>
+        <button className="btn btn-ghost btn-sm" onClick={downloadBackup} disabled={backupLoading || !backupInfo}>
+          {backupLoading ? "⏳" : "⬇️ Télécharger J-1"}
+        </button>
       </div>
 
       {/* KPIs */}
       <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(160px,1fr))", marginBottom: 28 }}>
         {[
-          ["Garages total", stats.total, "var(--text)"],
+          ["Abonnés", stats.total, "var(--text)"],
           ["Actifs", stats.actifs, "var(--green)"],
           ["Suspendus", stats.suspendus, "var(--red)"],
-          ["MRR estimé", `${fmtDec(mrr)}`, "var(--gold)"],
+          ["MRR total", `${fmtDec(mrr)}`, "var(--gold)"],
+          ["dont abos", `${fmtDec(mrrAbos)}`, "var(--blue)"],
+          ["dont plaques", `${fmtDec(mrrPlaques)}`, "var(--green)"],
           ["Mensuel", stats.monthly, "var(--blue)"],
           ["Annuel", stats.annual, "var(--green)"],
           ["Essai", stats.trial, "var(--muted2)"],
         ].map(([label, val, color]) => (
           <div key={label} className="kpi">
             <div className="kpi-label">{label}</div>
-            <div className="kpi-val" style={{ fontSize: 24, color }}>{val}</div>
+            <div className="kpi-val" style={{ fontSize: 22, color }}>{val}</div>
           </div>
         ))}
       </div>
@@ -3846,7 +3972,12 @@ function AdminPage({ token }) {
               )}
               {filtered.map(g => (
                 <tr key={g.id}>
-                  <td style={{ fontWeight: 600 }}>{g.name || "—"}</td>
+                  <td style={{ fontWeight: 600 }}>
+                    {g.name || "—"}
+                    {ADMIN_LIST.includes(g.email) && (
+                      <span style={{ marginLeft: 6, fontSize: 9, background: "var(--gold)", color: "#0b0c10", borderRadius: 4, padding: "1px 5px", fontWeight: 700 }}>ADMIN</span>
+                    )}
+                  </td>
                   <td style={{ fontSize: 12, color: "var(--muted)" }}>{g.email || "—"}</td>
                   <td style={{ fontFamily: "DM Mono", fontSize: 11 }}>{g.siret || "—"}</td>
                   <td>
@@ -3897,12 +4028,11 @@ function AdminPage({ token }) {
                       style={{ padding: "3px 8px", fontSize: 11, width: "auto" }}
                       value={g.plan || "trial"}
                       onChange={e => setPlan(g, e.target.value)}
-                      disabled={updating === g.id}
+                      disabled={updating === g.id || ADMIN_LIST.includes(g.email)}
                     >
                       <option value="trial">Essai</option>
                       <option value="monthly">Mensuel</option>
                       <option value="annual">Annuel</option>
-                      <option value="pro">Pro</option>
                     </select>
                   </td>
                   <td>
@@ -3926,14 +4056,41 @@ function AdminPage({ token }) {
                     ) : <span style={{ color: "var(--muted)", fontSize: 11 }}>—</span>}
                   </td>
                   <td>
-                    <button
-                      className={`btn btn-sm ${g.is_active ? "btn-danger" : "btn-primary"}`}
-                      onClick={() => toggleActive(g)}
-                      disabled={updating === g.id}
-                      style={{ fontSize: 11 }}
-                    >
-                      {updating === g.id ? "..." : g.is_active ? "⛔ Suspendre" : "✅ Activer"}
-                    </button>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      <button
+                        className={`btn btn-sm ${g.is_active ? "btn-danger" : "btn-primary"}`}
+                        onClick={() => toggleActive(g)}
+                        disabled={updating === g.id}
+                        style={{ fontSize: 11 }}
+                      >
+                        {updating === g.id ? "..." : g.is_active ? "⛔ Suspendre" : "✅ Activer"}
+                      </button>
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        style={{ fontSize: 11 }}
+                        title={`Exporter les données de ${g.name || g.email}`}
+                        onClick={async () => {
+                          const tables = ["vehicles", "orders", "clients", "livre_police"];
+                          const garageData = { ...g, data: {} };
+                          for (const table of tables) {
+                            const r = await fetch(
+                              `${SUPABASE_URL}/rest/v1/${table}?garage_id=eq.${g.id}&order=created_at.asc`,
+                              { headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}` } }
+                            );
+                            garageData.data[table] = r.ok ? await r.json() : [];
+                          }
+                          const blob = new Blob([JSON.stringify({ exported_at: new Date().toISOString(), garage: garageData }, null, 2)], { type: "application/json" });
+                          const url = URL.createObjectURL(blob);
+                          const a = document.createElement("a");
+                          a.href = url;
+                          a.download = `iocar_backup_${(g.name || g.email || g.id).replace(/\s/g,"_")}_${new Date().toISOString().slice(0,10)}.json`;
+                          a.click();
+                          URL.revokeObjectURL(url);
+                        }}
+                      >
+                        💾
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -3954,7 +4111,7 @@ export default function App() {
   const [garageReady, setGarageReady] = useState(false);
   const [appLoading, setAppLoading] = useState(true);
 
-  const isDemo = token === "demo";
+  const isRealDemo = token === "demo";
 
   // ── Mode DÉMO : données locales via useStored ─────────────
   const [demoVehicles,    setDemoVehicles,    dvReady]   = useStored("autodeskFleet", []);
@@ -3967,8 +4124,7 @@ export default function App() {
   });
 
   // ── Mode SUPABASE : données distantes ─────────────────────
-  const userId = isDemo ? null : user?.id;
-  // garageId est mis à jour quand le garage est chargé
+  const userId = isRealDemo ? null : user?.id;
   const [garageId, setGarageId] = useState(null);
 
   const [vehicles,    setVehicles,    vReady]    = useSupabaseTable(token, garageId, "vehicles");
@@ -3978,17 +4134,17 @@ export default function App() {
 
   // Charger le profil garage (Supabase uniquement)
   useEffect(() => {
-    if (isDemo) { setGarage(null); setGarageReady(true); setAppLoading(false); return; }
+    if (isRealDemo) { setGarage(null); setGarageReady(true); setAppLoading(false); return; }
     if (!token || !userId) { setAppLoading(false); setGarageReady(true); return; }
     sb.getGarage(token, userId)
       .then(g => {
         setGarage(g);
-        setGarageId(g?.id || null); // ← met à jour garageId pour les tables
+        setGarageId(g?.id || null);
         setGarageReady(true);
       })
       .catch(() => setGarageReady(true))
       .finally(() => setAppLoading(false));
-  }, [token, userId, isDemo]);
+  }, [token, userId, isRealDemo]);
 
   const handleLogin = (tk, u) => {
     setToken(tk); setUser(u);
@@ -3996,13 +4152,13 @@ export default function App() {
   };
 
   const handleLogout = async () => {
-    if (token && !isDemo) await sb.signOut(token).catch(() => {});
+    if (token && !isRealDemo) await sb.signOut(token).catch(() => {});
     clearSession();
-    setToken(null); setUser(null); setGarage(null);
+    setToken(null); setUser(null); setGarage(null); setGarageId(null);
   };
 
   const saveDealer = async (data) => {
-    if (isDemo) { setDemoDealer({ ...demoDealer, ...data }); return; }
+    if (isRealDemo) { setDemoDealer({ ...demoDealer, ...data }); return; }
     const updated = { ...garage, ...data };
     setGarage(updated);
     if (token && garage?.id) await sb.update(token, "garages", garage.id, data).catch(() => {});
@@ -4016,7 +4172,7 @@ export default function App() {
 
   // Charger api_usage depuis Supabase au login
   useEffect(() => {
-    if (isDemo || !garage?.api_usage) return;
+    if (isRealDemo || !garage?.api_usage) return;
     try {
       const remote = typeof garage.api_usage === "string" ? JSON.parse(garage.api_usage) : garage.api_usage;
       setUsageLocal(remote);
@@ -4027,8 +4183,7 @@ export default function App() {
   const setUsage = (u) => {
     setUsageLocal(u);
     try { localStorage.setItem("iocar_usage", JSON.stringify(u)); } catch(e) {}
-    // Persister dans Supabase
-    if (!isDemo && garageId && token) {
+    if (!isRealDemo && garageId && token) {
       fetch(`${SUPABASE_URL}/rest/v1/garages?id=eq.${garageId}`, {
         method: "PATCH",
         headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}`, "Content-Type": "application/json", "Prefer": "return=minimal" },
@@ -4048,7 +4203,7 @@ export default function App() {
   if (!token || !user) return <LoginScreen onLogin={handleLogin} />;
 
   // Loading
-  const allReady = isDemo
+  const allReady = isRealDemo
     ? dvReady && doReady && dcReady && dlpReady && ddReady
     : !appLoading && garageReady && vReady && oReady && cReady && lpReady;
 
@@ -4066,24 +4221,40 @@ export default function App() {
     );
   }
 
-  // Accès suspendu (Supabase uniquement)
-  // Compte admin — bypass abonnement
+  // ── ADMIN & viewMode ──────────────────────────────────────
   const ADMIN_EMAILS = ["johnyjoowls@gmail.com"];
-  const isAdmin = ADMIN_EMAILS.includes(user?.email);
+  const isRealAdmin = ADMIN_EMAILS.includes(user?.email);
 
-  if (!isDemo && !isAdmin && garage?.is_active === false) return <SuspendedScreen garage={garage} onLogout={handleLogout} />;
+  // viewMode : "admin" | "subscriber" | "trial"
+  // - Pour un vrai démo (token=demo) : forcé à "trial"
+  // - Pour un admin : commence à "admin", peut switcher
+  // - Pour un abonné normal : forcé à "subscriber"
+  const [viewMode, setViewMode] = useState(
+    isRealDemo ? "trial" : isRealAdmin ? "admin" : "subscriber"
+  );
 
-  // Sources de données selon le mode
-  const activeVehicles    = isDemo ? demoVehicles    : vehicles;
-  const activeOrders      = isDemo ? demoOrders      : orders;
-  const activeClients     = isDemo ? demoClients      : clients;
-  const activeLivrePolice = isDemo ? demoLivrePolice : livrePolice;
-  const dealer            = isDemo ? demoDealer      : (garage || {});
+  // Sync viewMode si login change
+  useEffect(() => {
+    if (isRealDemo) setViewMode("trial");
+    else if (isRealAdmin) setViewMode("admin");
+    else setViewMode("subscriber");
+  }, [isRealDemo, isRealAdmin]);
 
-  const setVehiclesRaw    = isDemo ? setDemoVehicles    : setVehicles;
-  const setOrdersRaw      = isDemo ? setDemoOrders      : setOrders;
-  const setClientsRaw     = isDemo ? setDemoClients     : setClients;
-  const setLivrePoliceRaw = isDemo ? setDemoLivrePolice : setLivrePolice;
+  if (!isRealDemo && !isRealAdmin && garage?.is_active === false)
+    return <SuspendedScreen garage={garage} onLogout={handleLogout} />;
+
+  // Sources de données — trial utilise localStorage, les autres Supabase
+  const useTrial = viewMode === "trial";
+  const activeVehicles    = useTrial ? demoVehicles    : vehicles;
+  const activeOrders      = useTrial ? demoOrders      : orders;
+  const activeClients     = useTrial ? demoClients      : clients;
+  const activeLivrePolice = useTrial ? demoLivrePolice : livrePolice;
+  const dealer            = useTrial ? demoDealer      : (garage || {});
+
+  const setVehiclesRaw    = useTrial ? setDemoVehicles    : setVehicles;
+  const setOrdersRaw      = useTrial ? setDemoOrders      : setOrders;
+  const setClientsRaw     = useTrial ? setDemoClients     : setClients;
+  const setLivrePoliceRaw = useTrial ? setDemoLivrePolice : setLivrePolice;
   const setDealerRaw      = saveDealer;
 
   const navItems = [
@@ -4093,7 +4264,7 @@ export default function App() {
     { id: "crm",         icon: "👥", label: "CRM" },
     { id: "livrepolice", icon: "📋", label: "Police" },
     { id: "settings",    icon: "⚙️", label: "Paramètres" },
-    ...(isAdmin ? [{ id: "admin", icon: "🛡", label: "Admin IO Car" }] : []),
+    ...(isRealAdmin ? [{ id: "admin", icon: "🛡", label: "Admin IO Car" }] : []),
   ];
 
   const bottomNavItems = [
@@ -4125,28 +4296,45 @@ export default function App() {
         <span style={{ transform: sidebarOpen ? "rotate(-45deg) translate(5px,-5px)" : "none" }} />
       </div>
 
-      {/* ── Bannière mode démo ── */}
-      {isDemo && (
+      {/* ── Bannière mode démo ou preview ── */}
+      {viewMode === "trial" && (
         <div style={{
           position: "fixed", top: 0, left: 0, right: 0, zIndex: 500,
-          background: "linear-gradient(90deg, var(--gold), #f0c86a)",
-          color: "#0b0c10", padding: "8px 20px",
+          background: isRealAdmin
+            ? "linear-gradient(90deg, #3a3a3a, #555)"
+            : "linear-gradient(90deg, var(--gold), #f0c86a)",
+          color: isRealAdmin ? "#fff" : "#0b0c10",
+          padding: "8px 20px",
           display: "flex", alignItems: "center", justifyContent: "space-between",
           fontSize: 12, fontWeight: 700, gap: 12
         }}>
-          <span>🚀 Mode démo — Limité à {DEMO_LIMITS.vehicles} véhicules · {DEMO_LIMITS.orders} documents · {DEMO_LIMITS.clients} clients</span>
-          <button
-            style={{ background: "#0b0c10", color: "var(--gold)", border: "none", borderRadius: 6, padding: "4px 12px", cursor: "pointer", fontWeight: 700, fontSize: 11 }}
-            onClick={handleLogout}>
-            S'abonner — 24,99€/mois →
-          </button>
+          <span>{isRealAdmin ? "👁 Prévisualisation — Mode Essai" : `🚀 Mode démo — Limité à ${DEMO_LIMITS.vehicles} véhicules · ${DEMO_LIMITS.orders} documents · ${DEMO_LIMITS.clients} clients`}</span>
+          {!isRealAdmin && (
+            <button style={{ background: "#0b0c10", color: "var(--gold)", border: "none", borderRadius: 6, padding: "4px 12px", cursor: "pointer", fontWeight: 700, fontSize: 11 }}
+              onClick={handleLogout}>S'abonner — 24,99€/mois →</button>
+          )}
+          {isRealAdmin && (
+            <button className="btn btn-ghost btn-sm" onClick={() => setViewMode("admin")}>← Retour Admin</button>
+          )}
+        </div>
+      )}
+      {viewMode === "subscriber" && isRealAdmin && (
+        <div style={{
+          position: "fixed", top: 0, left: 0, right: 0, zIndex: 500,
+          background: "linear-gradient(90deg, var(--blue), #7ab4f0)",
+          color: "#fff", padding: "8px 20px",
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          fontSize: 12, fontWeight: 700, gap: 12
+        }}>
+          <span>👁 Prévisualisation — Mode Abonné</span>
+          <button className="btn btn-ghost btn-sm" onClick={() => setViewMode("admin")}>← Retour Admin</button>
         </div>
       )}
 
       {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}
 
       <div className="shell">
-        <aside className={`sidebar${sidebarOpen ? " open" : ""}${isDemo ? " demo-pushed" : ""}`}>
+        <aside className={`sidebar${sidebarOpen ? " open" : ""}${viewMode === "trial" ? " demo-pushed" : (viewMode === "subscriber" && isRealAdmin ? " demo-pushed" : "")}`}>
           <div className="sidebar-logo">
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <div style={{ width: 36, height: 36, borderRadius: 8, background: "var(--gold)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "Syne", fontWeight: 800, fontSize: 13, color: "#0b0c10", letterSpacing: 1, flexShrink: 0 }}>IO</div>
@@ -4156,6 +4344,29 @@ export default function App() {
               </div>
             </div>
           </div>
+
+          {/* ── Sélecteur de vue (admin uniquement) ── */}
+          {isRealAdmin && (
+            <div style={{ padding: "12px 12px 0" }}>
+              <div style={{ fontSize: 9, letterSpacing: 2, textTransform: "uppercase", color: "var(--muted)", padding: "0 8px", marginBottom: 8 }}>Vue prévisualisation</div>
+              <div style={{ display: "flex", gap: 4, background: "var(--card2)", borderRadius: 8, padding: 4 }}>
+                {[
+                  { mode: "admin",      label: "🛡 Admin",   color: "var(--gold)" },
+                  { mode: "subscriber", label: "✅ Abonné",  color: "var(--green)" },
+                  { mode: "trial",      label: "👁 Essai",   color: "var(--muted2)" },
+                ].map(({ mode, label, color }) => (
+                  <div key={mode} onClick={() => setViewMode(mode)} style={{
+                    flex: 1, textAlign: "center", padding: "5px 4px",
+                    borderRadius: 6, cursor: "pointer", fontSize: 10, fontWeight: 700,
+                    background: viewMode === mode ? "var(--card3)" : "transparent",
+                    color: viewMode === mode ? color : "var(--muted)",
+                    border: viewMode === mode ? `1px solid ${color}30` : "1px solid transparent",
+                    transition: "all .15s"
+                  }}>{label}</div>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="nav-section">
             <div className="nav-label">Navigation</div>
@@ -4174,8 +4385,12 @@ export default function App() {
                 const used = usage?.[new Date().toISOString().slice(0,7)] || 0;
                 return (
                   <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, paddingBottom: 8, borderBottom: "1px solid var(--border2)" }}>
-                    <span style={{ fontSize: 12, color: "var(--muted)" }}>🔍 Plaques restantes</span>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: used < 10 ? "var(--green)" : "var(--red)" }}>{Math.max(0, 10 - used)}/10</span>
+                    <span style={{ fontSize: 12, color: "var(--muted)" }}>🔍 {viewMode === "admin" ? "Plaques ce mois" : "Plaques restantes"}</span>
+                    {viewMode === "admin" ? (
+                      <span style={{ fontSize: 12, fontWeight: 700, color: "var(--gold)" }}>{used} <span style={{ fontSize: 10, color: "var(--muted)" }}>/ ∞</span></span>
+                    ) : (
+                      <span style={{ fontSize: 12, fontWeight: 700, color: used < 10 ? "var(--green)" : "var(--red)" }}>{Math.max(0, 10 - used)}/10</span>
+                    )}
                   </div>
                 );
               })()}
@@ -4203,21 +4418,21 @@ export default function App() {
           </div>
         </aside>
 
-        <main className={`content${isDemo ? " demo-offset" : ""}`}>
+        <main className={`content${(viewMode === "trial" || (viewMode === "subscriber" && isRealAdmin)) ? " demo-offset" : ""}`}>
           {tab === "dashboard"   && <Dashboard vehicles={activeVehicles} setVehicles={setVehiclesRaw} orders={activeOrders} setTab={setTab} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} />}
-          {tab === "fleet"       && <FleetPage vehicles={activeVehicles} setVehicles={setVehiclesRaw} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} livrePolice={activeLivrePolice} setLivrePolice={setLivrePoliceRaw} isDemo={isDemo} />}
-          {tab === "orders"      && <OrdersPage orders={activeOrders} setOrders={setOrdersRaw} vehicles={activeVehicles} setVehiclesRaw={setVehiclesRaw} dealer={dealer} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} clients={activeClients} setClients={setClientsRaw} isDemo={isDemo} isAdmin={isAdmin} />}
-          {tab === "crm"         && <CrmPage clients={activeClients} setClients={setClientsRaw} orders={activeOrders} isDemo={isDemo} />}
-          {tab === "livrepolice" && (isDemo ? (
+          {tab === "fleet"       && <FleetPage vehicles={activeVehicles} setVehicles={setVehiclesRaw} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} livrePolice={activeLivrePolice} setLivrePolice={setLivrePoliceRaw} viewMode={viewMode} garageId={garageId} />}
+          {tab === "orders"      && <OrdersPage orders={activeOrders} setOrders={setOrdersRaw} vehicles={activeVehicles} setVehiclesRaw={setVehiclesRaw} dealer={dealer} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} clients={activeClients} setClients={setClientsRaw} viewMode={viewMode} />}
+          {tab === "crm"         && <CrmPage clients={activeClients} setClients={setClientsRaw} orders={activeOrders} viewMode={viewMode} />}
+          {tab === "livrepolice" && (viewMode === "trial" ? (
             <div className="page" style={{ textAlign: "center", paddingTop: 80 }}>
               <div style={{ fontSize: 48, marginBottom: 16 }}>📋</div>
               <div style={{ fontFamily: "Syne", fontSize: 20, fontWeight: 700, marginBottom: 10 }}>Livre de Police</div>
               <div style={{ fontSize: 14, color: "var(--muted)", marginBottom: 24 }}>Disponible avec un abonnement IO Car.</div>
               <button className="btn btn-primary" onClick={handleLogout}>🚀 S'abonner — 24,99€/mois</button>
             </div>
-          ) : <LivreDePolice vehicles={activeVehicles} livrePolice={activeLivrePolice} setLivrePolice={setLivrePoliceRaw} dealer={dealer} />)}
+          ) : <LivreDePolice vehicles={activeVehicles} livrePolice={activeLivrePolice} setLivrePolice={setLivrePoliceRaw} dealer={dealer} viewMode={viewMode} />)}
           {tab === "settings"    && <SettingsPage dealer={dealer} setDealer={setDealerRaw} usage={usage} />}
-          {tab === "admin"       && isAdmin && <AdminPage token={token} />}
+          {tab === "admin"       && isRealAdmin && <AdminPage token={token} />}
         </main>
       </div>
 
