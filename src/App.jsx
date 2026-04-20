@@ -1,5 +1,5 @@
 // IO Car v2.1 — 2026-04-20T22:18:38
-import { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recharts";
 
 /* ═══════════════════════════════════════════════════════════════
@@ -4063,7 +4063,8 @@ function AdminPage({ token, garages: garagesProp, setGarages: setGaragesProp }) 
                 <tr><td colSpan={7} style={{ textAlign: "center", color: "var(--muted)", padding: 40 }}>Aucun garage trouvé</td></tr>
               )}
               {filtered.map(g => (
-                <tr key={g.id}>
+                <React.Fragment key={g.id}>
+                <tr>
                   <td style={{ fontWeight: 600 }}>
                     {g.name || "—"}
                     {ADMIN_LIST.includes(g.email) && (
@@ -4240,7 +4241,7 @@ function AdminPage({ token, garages: garagesProp, setGarages: setGaragesProp }) 
                     </div>
                   </td></tr>
                 )}
-                </tr>
+                </React.Fragment>
               ))}
             </tbody>
           </table>
