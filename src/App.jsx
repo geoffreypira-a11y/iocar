@@ -3870,6 +3870,8 @@ function AdminPage({ token }) {
     }
     setSavingBackup(false);
   };
+
+  const toggleActive = async (g) => {
     setUpdating(g.id);
     const newVal = !g.is_active;
     const updated_at = new Date().toISOString();
@@ -4379,8 +4381,159 @@ export default function App() {
 
       {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}
 
-      <div className="shell">
-        <aside className={`sidebar${sidebarOpen ? " open" : ""}${viewMode === "trial" ? " demo-pushed" : (viewMode === "subscriber" && isRealAdmin ? " demo-pushed" : "")}`}>
+      {/* ══ MODE ADMIN — Interface directe sans sidebar ══ */}
+      {viewMode === "admin" ? (
+        <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
+          {/* Header admin */}
+          <div style={{
+            position: "sticky", top: 0, zIndex: 100,
+            background: "var(--card)", borderBottom: "1px solid var(--border2)",
+            padding: "10px 24px", display: "flex", alignItems: "center", justifyContent: "space-between"
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{ width: 32, height: 32, borderRadius: 8, background: "var(--gold)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "Syne", fontWeight: 800, fontSize: 12, color: "#0b0c10" }}>IO</div>
+              <div style={{ fontFamily: "Syne", fontWeight: 800, fontSize: 15, letterSpacing: 1 }}>IO <span style={{ color: "var(--gold)" }}>Car</span> <span style={{ fontSize: 11, color: "var(--muted)", fontFamily: "DM Sans" }}>— Admin</span></div>
+            </div>
+            {/* Sélecteur de vue */}
+            <div style={{ display: "flex", gap: 4, background: "var(--card2)", borderRadius: 8, padding: 4 }}>
+              {[
+                { mode: "admin",      label: "🛡 Admin",   color: "var(--gold)" },
+                { mode: "subscriber", label: "✅ Abonné",  color: "var(--green)" },
+                { mode: "trial",      label: "👁 Essai",   color: "var(--muted2)" },
+              ].map(({ mode, label, color }) => (
+                <div key={mode} onClick={() => { setViewMode(mode); setTab("dashboard"); }} style={{
+                  padding: "5px 12px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontWeight: 700,
+                  background: viewMode === mode ? "var(--card3)" : "transparent",
+                  color: viewMode === mode ? color : "var(--muted)",
+                  border: viewMode === mode ? `1px solid ${color}30` : "1px solid transparent",
+                  transition: "all .15s"
+                }}>{label}</div>
+              ))}
+            </div>
+            <button className="btn btn-ghost btn-sm" onClick={handleLogout}>🚪 Déconnexion</button>
+          </div>
+          <AdminPage token={token} />
+        </div>
+
+      ) : (
+        /* ══ MODE ABONNÉ / ESSAI — Interface normale avec sidebar ══ */
+        <div className="shell">
+          <aside className={`sidebar${sidebarOpen ? " open" : ""}${(viewMode === "trial" || viewMode === "subscriber") ? " demo-pushed" : ""}`}>
+            <div className="sidebar-logo">
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ width: 36, height: 36, borderRadius: 8, background: "var(--gold)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "Syne", fontWeight: 800, fontSize: 13, color: "#0b0c10", letterSpacing: 1, flexShrink: 0 }}>IO</div>
+                <div>
+                  <div style={{ fontFamily: "Syne", fontWeight: 800, fontSize: 16, letterSpacing: 2, color: "var(--text)", lineHeight: 1 }}>IO <span style={{ color: "var(--gold)" }}>Car</span></div>
+                  <div style={{ fontSize: 8, letterSpacing: 2, color: "var(--muted)", textTransform: "uppercase", marginTop: 3 }}>by OWL'S INDUSTRY</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Sélecteur vue preview (admin uniquement) */}
+            {isRealAdmin && (
+              <div style={{ padding: "12px 12px 0" }}>
+                <div style={{ fontSize: 9, letterSpacing: 2, textTransform: "uppercase", color: "var(--muted)", padding: "0 8px", marginBottom: 8 }}>Vue prévisualisation</div>
+                <div style={{ display: "flex", gap: 4, background: "var(--card2)", borderRadius: 8, padding: 4 }}>
+                  {[
+                    { mode: "admin",      label: "🛡 Admin",   color: "var(--gold)" },
+                    { mode: "subscriber", label: "✅ Abonné",  color: "var(--green)" },
+                    { mode: "trial",      label: "👁 Essai",   color: "var(--muted2)" },
+                  ].map(({ mode, label, color }) => (
+                    <div key={mode} onClick={() => { setViewMode(mode); if (mode === "admin") setTab("dashboard"); }} style={{
+                      flex: 1, textAlign: "center", padding: "5px 4px",
+                      borderRadius: 6, cursor: "pointer", fontSize: 10, fontWeight: 700,
+                      background: viewMode === mode ? "var(--card3)" : "transparent",
+                      color: viewMode === mode ? color : "var(--muted)",
+                      border: viewMode === mode ? `1px solid ${color}30` : "1px solid transparent",
+                      transition: "all .15s"
+                    }}>{label}</div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="nav-section">
+              <div className="nav-label">Navigation</div>
+              {navItems.filter(n => n.id !== "admin").map(n => (
+                <div key={n.id} className={`nav-item${tab === n.id ? " active" : ""}`} onClick={() => navigate(n.id)}>
+                  <span className="nav-icon">{n.icon}</span>
+                  {n.label}
+                </div>
+              ))}
+            </div>
+
+            <div style={{ padding: "8px 12px" }}>
+              <div style={{ fontSize: 10, letterSpacing: 2, textTransform: "uppercase", color: "var(--muted)", padding: "0 8px", marginBottom: 8 }}>Stats rapides</div>
+              <div style={{ background: "var(--card2)", borderRadius: 8, padding: "12px 14px" }}>
+                {(() => {
+                  const used = usage?.[new Date().toISOString().slice(0,7)] || 0;
+                  return (
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, paddingBottom: 8, borderBottom: "1px solid var(--border2)" }}>
+                      <span style={{ fontSize: 12, color: "var(--muted)" }}>🔍 {viewMode === "admin" ? "Plaques ce mois" : "Plaques restantes"}</span>
+                      {viewMode === "admin" ? (
+                        <span style={{ fontSize: 12, fontWeight: 700, color: "var(--gold)" }}>{used} <span style={{ fontSize: 10, color: "var(--muted)" }}>/ ∞</span></span>
+                      ) : (
+                        <span style={{ fontSize: 12, fontWeight: 700, color: used < 10 ? "var(--green)" : "var(--red)" }}>{Math.max(0, 10 - used)}/10</span>
+                      )}
+                    </div>
+                  );
+                })()}
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ fontSize: 12, color: "var(--muted)" }}>🚗 En stock</span>
+                  <span style={{ fontSize: 12, fontWeight: 700 }}>{activeVehicles.filter(v => v.statut === "disponible").length}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="sidebar-footer">
+              {dealer.logo && (
+                <div style={{ marginBottom: 10, textAlign: "center" }}>
+                  <img src={dealer.logo} alt="Logo" style={{ maxHeight: 56, maxWidth: "100%", objectFit: "contain", mixBlendMode: dealer.logoBlend || "normal", filter: dealer.logoInvert ? "invert(1)" : "none" }} />
+                </div>
+              )}
+              <div className="dealer-info">
+                <div style={{ fontWeight: 700, color: "var(--text)", fontSize: 12, marginBottom: 3 }}>{dealer.name || "Ma Concession"}</div>
+                <div>{dealer.address?.split("\n")[0]}</div>
+                <div style={{ marginTop: 4 }}><span className={`plan-badge ${planCls}`}>{planLabel}</span></div>
+              </div>
+              <button className="btn btn-ghost btn-sm" style={{ width: "100%", justifyContent: "center", marginTop: 10 }} onClick={handleLogout}>
+                🚪 Déconnexion
+              </button>
+            </div>
+          </aside>
+
+          <main className={`content${(viewMode === "trial" || viewMode === "subscriber") ? " demo-offset" : ""}`}>
+            {tab === "dashboard"   && <Dashboard vehicles={activeVehicles} setVehicles={setVehiclesRaw} orders={activeOrders} setTab={setTab} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} />}
+            {tab === "fleet"       && <FleetPage vehicles={activeVehicles} setVehicles={setVehiclesRaw} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} livrePolice={activeLivrePolice} setLivrePolice={setLivrePoliceRaw} viewMode={viewMode} garageId={garageId} />}
+            {tab === "orders"      && <OrdersPage orders={activeOrders} setOrders={setOrdersRaw} vehicles={activeVehicles} setVehiclesRaw={setVehiclesRaw} dealer={dealer} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} clients={activeClients} setClients={setClientsRaw} viewMode={viewMode} />}
+            {tab === "crm"         && <CrmPage clients={activeClients} setClients={setClientsRaw} orders={activeOrders} viewMode={viewMode} />}
+            {tab === "livrepolice" && (viewMode === "trial" ? (
+              <div className="page" style={{ textAlign: "center", paddingTop: 80 }}>
+                <div style={{ fontSize: 48, marginBottom: 16 }}>📋</div>
+                <div style={{ fontFamily: "Syne", fontSize: 20, fontWeight: 700, marginBottom: 10 }}>Livre de Police</div>
+                <div style={{ fontSize: 14, color: "var(--muted)", marginBottom: 24 }}>Disponible avec un abonnement IO Car.</div>
+                <button className="btn btn-primary" onClick={handleLogout}>🚀 S'abonner — 24,99€/mois</button>
+              </div>
+            ) : <LivreDePolice vehicles={activeVehicles} livrePolice={activeLivrePolice} setLivrePolice={setLivrePoliceRaw} dealer={dealer} viewMode={viewMode} />)}
+            {tab === "settings"    && <SettingsPage dealer={dealer} setDealer={setDealerRaw} usage={usage} />}
+          </main>
+        </div>
+      )}
+
+      {/* Bottom nav mobile — uniquement en mode preview */}
+      {viewMode !== "admin" && (
+        <nav className="bottom-nav">
+          {bottomNavItems.map(n => (
+            <div key={n.id} className={`bottom-nav-item${tab === n.id ? " active" : ""}`} onClick={() => navigate(n.id)}>
+              <span className="bn-icon">{n.icon}</span>
+              <span>{n.label}</span>
+            </div>
+          ))}
+        </nav>
+      )}
+    </>
+  );
+}
           <div className="sidebar-logo">
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <div style={{ width: 36, height: 36, borderRadius: 8, background: "var(--gold)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "Syne", fontWeight: 800, fontSize: 13, color: "#0b0c10", letterSpacing: 1, flexShrink: 0 }}>IO</div>
@@ -4478,19 +4631,9 @@ export default function App() {
             </div>
           ) : <LivreDePolice vehicles={activeVehicles} livrePolice={activeLivrePolice} setLivrePolice={setLivrePoliceRaw} dealer={dealer} viewMode={viewMode} />)}
           {tab === "settings"    && <SettingsPage dealer={dealer} setDealer={setDealerRaw} usage={usage} />}
-          {tab === "admin"       && isRealAdmin && <AdminPage token={token} />}
         </main>
       </div>
-
-      {/* Bottom nav mobile */}
-      <nav className="bottom-nav">
-        {bottomNavItems.map(n => (
-          <div key={n.id} className={`bottom-nav-item${tab === n.id ? " active" : ""}`} onClick={() => navigate(n.id)}>
-            <span className="bn-icon">{n.icon}</span>
-            <span>{n.label}</span>
-          </div>
-        ))}
-      </nav>
+      )}
     </>
   );
 }
