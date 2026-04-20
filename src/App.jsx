@@ -3825,7 +3825,51 @@ function AdminPage({ token }) {
     setExporting(false);
   };
 
-  const toggleActive = async (g) => {
+  const [savingBackup, setSavingBackup] = useState(false);
+
+  const runBackup = async () => {
+    setSavingBackup(true);
+    try {
+      const tables = ["vehicles", "orders", "clients", "livre_police"];
+      const headers = { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}` };
+      const backup = {
+        version: "1.0",
+        backup_date: new Date().toISOString(),
+        backup_type: "manual",
+        total_garages: garages.length,
+        garages: []
+      };
+
+      for (const garage of garages) {
+        const garageData = {
+          id: garage.id, name: garage.name, email: garage.email,
+          siret: garage.siret, plan: garage.plan, is_active: garage.is_active,
+          created_at: garage.created_at, data: {}
+        };
+        for (const table of tables) {
+          const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}?garage_id=eq.${garage.id}&order=created_at.asc`, { headers });
+          garageData.data[table] = r.ok ? await r.json() : [];
+        }
+        backup.garages.push(garageData);
+      }
+
+      const backupJson = JSON.stringify(backup);
+
+      // Upload dans Supabase Storage — écrase backup_latest.json
+      await fetch(`${SUPABASE_URL}/storage/v1/object/backups/backup_latest.json`, {
+        method: "POST",
+        headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}`, "Content-Type": "application/json", "x-upsert": "true" },
+        body: backupJson
+      });
+
+      // Rafraîchir l'info backup
+      await checkBackup();
+      alert(`✅ Sauvegarde créée — ${garages.length} garages — ${Math.round(backupJson.length / 1024)} KB`);
+    } catch(e) {
+      alert("Erreur sauvegarde : " + e.message);
+    }
+    setSavingBackup(false);
+  };
     setUpdating(g.id);
     const newVal = !g.is_active;
     const updated_at = new Date().toISOString();
@@ -3896,29 +3940,33 @@ function AdminPage({ token }) {
         </div>
       </div>
 
-      {/* Statut sauvegarde automatique */}
+      {/* Sauvegarde manuelle */}
       <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 20, padding: "12px 16px", background: "var(--card)", border: "1px solid var(--border2)", borderRadius: 10 }}>
         <div style={{ fontSize: 28 }}>🗄️</div>
         <div style={{ flex: 1 }}>
-          <div style={{ fontWeight: 700, fontSize: 13 }}>Sauvegarde automatique quotidienne</div>
+          <div style={{ fontWeight: 700, fontSize: 13 }}>Sauvegarde des données</div>
           <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
-            Exécutée chaque nuit à minuit — écrase la sauvegarde précédente
+            Écrase la sauvegarde précédente — à faire régulièrement
           </div>
-          {backupInfo && (
+          {backupInfo ? (
             <div style={{ fontSize: 11, color: "var(--green)", marginTop: 4 }}>
               ✅ Dernière sauvegarde : {new Date(backupInfo.updated_at || backupInfo.created_at).toLocaleString("fr-FR")}
               {backupInfo.size && ` · ${Math.round(backupInfo.size / 1024)} KB`}
             </div>
-          )}
-          {!backupInfo && (
+          ) : (
             <div style={{ fontSize: 11, color: "var(--orange)", marginTop: 4 }}>
-              ⚠️ Aucune sauvegarde trouvée — la première sera créée cette nuit à minuit
+              ⚠️ Aucune sauvegarde — cliquez sur "Sauvegarder maintenant"
             </div>
           )}
         </div>
-        <button className="btn btn-ghost btn-sm" onClick={downloadBackup} disabled={backupLoading || !backupInfo}>
-          {backupLoading ? "⏳" : "⬇️ Télécharger J-1"}
-        </button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn btn-primary btn-sm" onClick={runBackup} disabled={savingBackup || loading}>
+            {savingBackup ? "⏳ En cours..." : "💾 Sauvegarder"}
+          </button>
+          <button className="btn btn-ghost btn-sm" onClick={downloadBackup} disabled={backupLoading || !backupInfo}>
+            {backupLoading ? "⏳" : "⬇️ Télécharger"}
+          </button>
+        </div>
       </div>
 
       {/* KPIs */}
