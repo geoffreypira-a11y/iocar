@@ -3806,7 +3806,11 @@ export default function App() {
   }
 
   // Accès suspendu (Supabase uniquement)
-  if (!isDemo && garage?.is_active === false) return <SuspendedScreen garage={garage} onLogout={handleLogout} />;
+  // Compte admin — bypass abonnement
+  const ADMIN_EMAILS = ["jownyjoowls@gmail.com"];
+  const isAdmin = ADMIN_EMAILS.includes(user?.email);
+
+  if (!isDemo && !isAdmin && garage?.is_active === false) return <SuspendedScreen garage={garage} onLogout={handleLogout} />;
 
   // Sources de données selon le mode
   const activeVehicles    = isDemo ? demoVehicles    : vehicles;
