@@ -1210,18 +1210,23 @@ function FleetPage({ vehicles, setVehicles, apiKey, usage, setUsage, livrePolice
   const save = (v) => {
     const exists = vehicles.find(x => x.id === v.id);
 
-    // Véhicule passé "vendu" → mettre à jour date sortie LP mais GARDER dans la flotte
-    if (v.statut === "vendu" || v.statut === "livré") {
+    // Véhicule passé "livré" → retirer de la flotte + date sortie LP
+    if (v.statut === "livré") {
       if (setLivrePolice && livrePolice) {
         const lpEntry = livrePolice.find(e => e.vehicle_id === v.id || e.immat === v.plate);
         if (lpEntry && !lpEntry.date_sortie) {
           setLivrePolice(livrePolice.map(e =>
-            e.id === lpEntry.id ? { ...e, date_sortie: today() } : e
+            e.id === lpEntry.id ? { ...e, date_sortie: today(), acheteur_nom: v._acheteur_nom || "" } : e
           ));
         }
       }
+      // Supprimer de la flotte — le véhicule est parti
+      setVehicles(vehicles.filter(x => x.id !== v.id));
+      setModal(null);
+      return;
     }
 
+    // Véhicule passé "vendu" → reste dans la flotte, pas de date sortie LP (pas encore livré)
     const next = exists ? vehicles.map(x => x.id === v.id ? v : x) : [v, ...vehicles];
     setVehicles(next);
 
@@ -3811,7 +3816,7 @@ function AdminPage({ token }) {
   const downloadBackup = async () => {
     setBackupLoading(true);
     try {
-      const r = await fetch(`${SUPABASE_URL}/storage/v1/object/backups/backup_latest.json`, {
+      const r = await fetch(`${SUPABASE_URL}/storage/v1/object/authenticated/backups/backup_latest.json`, {
         headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}` }
       });
       if (!r.ok) throw new Error("Backup introuvable");
@@ -3947,18 +3952,18 @@ function AdminPage({ token }) {
   // Calcul plaques supplémentaires ce mois (marge 0,10€ par plaque)
   const monthKey = new Date().toISOString().slice(0, 7);
   const totalPlaquesSupp = payingGarages.reduce((sum, g) => {
-    const u = typeof g.api_usage === "string" ? JSON.parse(g.api_usage || "{}") : (g.api_usage || {});
+    const u = typeof g.api_usage === "string" ? (() => { try { return JSON.parse(g.api_usage); } catch(e) { return {}; } })() : (g.api_usage || {});
     const used = u[monthKey] || 0;
     return sum + Math.max(0, used - 10);
   }, 0);
 
   const stats = {
-    total: garages.length - ADMIN_LIST.filter(a => garages.find(g => g.email === a)).length,
+    total: payingGarages.length,
     actifs: payingGarages.filter(g => g.is_active).length,
     suspendus: payingGarages.filter(g => !g.is_active).length,
     annual: payingGarages.filter(g => g.plan === "annual").length,
     monthly: payingGarages.filter(g => g.plan === "monthly").length,
-    trial: payingGarages.filter(g => g.plan === "trial").length,
+    trial: payingGarages.filter(g => !g.plan || g.plan === "trial").length,
   };
 
   // MRR = abonnements + marge plaques supplémentaires (0,10€/plaque)
