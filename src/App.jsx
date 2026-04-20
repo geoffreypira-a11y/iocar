@@ -1,3 +1,4 @@
+// IO Car v2.1 — 2026-04-20T22:18:38
 import { useState, useEffect, useRef, useCallback } from "react";
 import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recharts";
 
@@ -4208,6 +4209,13 @@ export default function App() {
     return () => window.removeEventListener("iocar_goto_register", handler);
   }, []);
 
+  // Sync viewMode si login change — DOIT être avant tout return conditionnel
+  useEffect(() => {
+    if (isRealDemo) setViewMode("trial");
+    else if (isRealAdmin) setViewMode("admin");
+    else setViewMode("subscriber");
+  }, [isRealDemo, isRealAdmin]);
+
   // ── Écrans d'auth ─────────────────────────────────────────
   if (!token || !user) return <LoginScreen onLogin={handleLogin} />;
 
@@ -4229,13 +4237,6 @@ export default function App() {
       </>
     );
   }
-
-  // Sync viewMode si login change
-  useEffect(() => {
-    if (isRealDemo) setViewMode("trial");
-    else if (isRealAdmin) setViewMode("admin");
-    else setViewMode("subscriber");
-  }, [isRealDemo, isRealAdmin]);
 
   if (!isRealDemo && !isRealAdmin && garage?.is_active === false)
     return <SuspendedScreen garage={garage} onLogout={handleLogout} />;
