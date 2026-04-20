@@ -503,30 +503,31 @@ async function aiLookupPlate(plate, apiKey) {
 
   if (!res.ok) throw new Error(`API error ${res.status}`);
   const d = await res.json();
+  const v = d.data || d; // les données sont dans d.data
 
   // Mapping des champs API → format interne IO Car
-  const anneeRaw = d.date_mise_en_circulation || d.annee_modele || "";
-  const annee = anneeRaw ? parseInt(anneeRaw.slice(0, 4)) : null;
+  const anneeRaw = v.AWN_annee_de_debut_modele || v.AWN_annee_de_fin_modele || "";
+  const annee = anneeRaw ? parseInt(anneeRaw) : null;
 
   return {
-    marque:                 d.marque            || "",
-    modele:                 d.modele            || d.denomination_commerciale || "",
-    finition:               d.version           || d.finition || "",
-    annee:                  annee               || "",
-    motorisation:           d.type_moteur       || d.motorisation || "",
-    carburant:              mapCarburant(d.energie || d.carburant),
-    puissance_cv:           d.puissance_din     || d.puissance_fiscale || "",
-    boite:                  d.boite_vitesses    || "",
-    transmission:           d.transmission      || "",
-    couleur:                d.couleur           || "",
-    couleur_int:            d.couleur_interieur || "",
-    nb_portes:              d.nombre_de_portes  || "",
-    nb_places:              d.nombre_de_places  || "",
-    kilometrage:            "",                    // non fourni par l'API
-    vin:                    d.vin               || d.numero_de_serie || "",
-    date_mise_en_circulation: anneeRaw          || "",
-    co2:                    d.co2               || "",
-    options:                [],
+    marque:                   v.AWN_marque              || v.AWN_brand || "",
+    modele:                   v.AWN_modele              || v.AWN_model || "",
+    finition:                 v.AWN_version             || "",
+    annee:                    annee                     || "",
+    motorisation:             v.AWN_code_moteur         || "",
+    carburant:                mapCarburant(v.AWN_energie || v.AWN_carburant || ""),
+    puissance_cv:             v.AWN_PV                  || v.AWN_puissance_din || "",
+    boite:                    v.AWN_code_boite_de_vitesses?.[0] || v.AWN_code_de_boite_de_vitesses || "",
+    transmission:             v.AWN_transmission        || "",
+    couleur:                  v.AWN_couleur             || "",
+    couleur_int:              v.AWN_couleur_interieur   || "",
+    nb_portes:                v.AWN_nombre_de_portes    || "",
+    nb_places:                v.AWN_nombre_de_places    || "",
+    kilometrage:              "",
+    vin:                      v.AWN_VIN                 || "",
+    date_mise_en_circulation: v.AWN_annee_de_debut_modele || "",
+    co2:                      v.AWN_co2                 || "",
+    options:                  [],
   };
 }
 
