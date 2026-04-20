@@ -4113,6 +4113,15 @@ export default function App() {
 
   const isRealDemo = token === "demo";
 
+  // ADMIN_EMAILS doit être défini avant les hooks
+  const ADMIN_EMAILS = ["johnyjoowls@gmail.com"];
+  const isRealAdmin = ADMIN_EMAILS.includes(user?.email);
+
+  // viewMode DOIT être déclaré ici avant tout return conditionnel
+  const [viewMode, setViewMode] = useState(
+    token === "demo" ? "trial" : ADMIN_EMAILS.includes(loadSession().user?.email) ? "admin" : "subscriber"
+  );
+
   // ── Mode DÉMO : données locales via useStored ─────────────
   const [demoVehicles,    setDemoVehicles,    dvReady]   = useStored("autodeskFleet", []);
   const [demoOrders,      setDemoOrders,      doReady]   = useStored("autodeskOrders", []);
@@ -4220,18 +4229,6 @@ export default function App() {
       </>
     );
   }
-
-  // ── ADMIN & viewMode ──────────────────────────────────────
-  const ADMIN_EMAILS = ["johnyjoowls@gmail.com"];
-  const isRealAdmin = ADMIN_EMAILS.includes(user?.email);
-
-  // viewMode : "admin" | "subscriber" | "trial"
-  // - Pour un vrai démo (token=demo) : forcé à "trial"
-  // - Pour un admin : commence à "admin", peut switcher
-  // - Pour un abonné normal : forcé à "subscriber"
-  const [viewMode, setViewMode] = useState(
-    isRealDemo ? "trial" : isRealAdmin ? "admin" : "subscriber"
-  );
 
   // Sync viewMode si login change
   useEffect(() => {
