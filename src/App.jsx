@@ -3472,46 +3472,46 @@ function exportComptableCSV(orders, dealer) {
 function useSupabaseTable(token, garageId, table) {
   const [data, setData] = useState([]);
   const [ready, setReady] = useState(false);
+  const prevRef = useRef([]);
 
   useEffect(() => {
     if (!token || !garageId) { setReady(true); return; }
     setReady(false);
     sb.select(token, table, `garage_id=eq.${garageId}`)
-      .then(rows => {
-        // Aplatir : {id, garage_id, data:{marque...}} → {id, garage_id, marque...}
-        const flat = (rows || []).map(r => r.data ? { ...r.data, id: r.id, garage_id: r.garage_id, _supabase_id: r.id } : r);
-        setData(flat);
-      })
+      .then(rows => { const r = rows || []; setData(r); prevRef.current = r; })
       .catch(() => setData([]))
       .finally(() => setReady(true));
   }, [token, garageId]);
 
-  const save = useCallback(async (rows) => {
-    setData(rows);
-    if (!token || !garageId) return;
-    for (const row of rows) {
-      const { garage_id: _g, _supabase_id, ...rest } = row;
-      await sb.upsert(token, table, { id: row.id, garage_id: garageId, data: rest }).catch(() => {});
-    }
-  }, [token, garageId]);
-
-  const saveOne = useCallback(async (row) => {
+  // setData wrapper : met à jour le state ET persiste les changements dans Supabase
+  const setDataAndSync = useCallback((newDataOrFn) => {
     setData(prev => {
-      const exists = prev.find(x => x.id === row.id);
-      return exists ? prev.map(x => x.id === row.id ? row : x) : [row, ...prev];
+      const next = typeof newDataOrFn === "function" ? newDataOrFn(prev) : newDataOrFn;
+      if (!token || !garageId || token === "demo") return next;
+      
+      const prevIds = new Set(prev.map(r => r.id));
+      const nextIds = new Set(next.map(r => r.id));
+      
+      // Upsert : éléments nouveaux ou modifiés
+      for (const row of next) {
+        const old = prev.find(r => r.id === row.id);
+        if (!old || JSON.stringify(old) !== JSON.stringify(row)) {
+          sb.upsert(token, table, { ...row, garage_id: garageId }).catch(() => {});
+        }
+      }
+      
+      // Delete : éléments supprimés
+      for (const id of prevIds) {
+        if (!nextIds.has(id)) {
+          sb.delete(token, table, id).catch(() => {});
+        }
+      }
+      
+      return next;
     });
-    if (!token || !garageId) return;
-    const { garage_id: _g, _supabase_id, ...rest } = row;
-    await sb.upsert(token, table, { id: row.id, garage_id: garageId, data: rest }).catch(() => {});
-  }, [token, garageId]);
+  }, [token, garageId, table]);
 
-  const deleteOne = useCallback(async (id) => {
-    setData(prev => prev.filter(x => x.id !== id));
-    if (!token || !garageId) return;
-    await sb.delete(token, table, id).catch(() => {});
-  }, [token, garageId]);
-
-  return [data, setData, ready, saveOne, deleteOne];
+  return [data, setDataAndSync, ready];
 }
 
 /* ═══════════════════════════════════════════════════════════════
