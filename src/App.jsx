@@ -363,13 +363,20 @@ textarea.form-input{resize:vertical;min-height:72px}
   .btn-sm{padding:5px 10px;font-size:11px}
 }
 @media print{
-  body,html{background:#fff!important}
-  .sidebar,.hamburger,.bottom-nav,.no-print,.modal-hd,.kpi-grid,.page-header,.page,.nav-section,.sidebar-footer{display:none!important}
-  .print-container{position:fixed!important;top:0;left:0;right:0;bottom:0;background:#fff!important;z-index:9999;overflow:visible!important;display:block!important}
-  .print-container .modal{position:static!important;max-height:none!important;box-shadow:none!important;border:none!important;background:#fff!important;width:100%!important;max-width:100%!important;overflow:visible!important;border-radius:0!important}
-  .print-doc{display:block!important;padding:20px!important;background:#fff!important;color:#111!important}
-  .shell,.content{display:none!important}
-  @page{margin:10mm}
+  /* Cacher tout */
+  body>*{display:none!important}
+  #root{display:block!important}
+  #root>*{display:none!important}
+  
+  /* Afficher uniquement la modal d'impression */
+  .print-modal{display:block!important;position:static!important;background:#fff!important;overflow:visible!important}
+  .print-modal-inner{display:block!important;position:static!important;max-height:none!important;box-shadow:none!important;border:none!important;background:#fff!important;width:100%!important;max-width:100%!important;overflow:visible!important;border-radius:0!important;margin:0!important;padding:0!important}
+  .print-modal .modal-hd{display:none!important}
+  .print-doc{display:block!important;background:#fff!important;color:#111!important}
+  
+  .no-print,.sidebar,.hamburger,.bottom-nav,.shell,.btn{display:none!important}
+  body{background:#fff!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  @page{size:portrait;margin:10mm}
 }
 
 /* PRINT DOC */
@@ -1878,8 +1885,8 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
 function PrintDoc({ order, dealer, onClose, viewMode }) {
   const c = calcOrder(order);
   return (
-    <div className="modal-bg print-container" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal modal-lg" style={{ display: "flex", flexDirection: "column", maxHeight: "92vh" }}>
+    <div className="modal-bg print-modal" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal modal-lg print-modal-inner" style={{ display: "flex", flexDirection: "column", maxHeight: "92vh" }}>
 
         {/* Barre fixe */}
         <div className="modal-hd no-print" style={{ flexShrink: 0 }}>
@@ -1898,48 +1905,7 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
                 ⚡ Factur-X PA 🔒
               </button>
             )}
-            <button className="btn btn-primary btn-sm" onClick={() => {
-              const printContent = document.querySelector('.print-doc');
-              if (!printContent) return;
-              const win = window.open('', '_blank', 'width=800,height=1000');
-              win.document.write(`<!DOCTYPE html><html><head><title>${order.ref}</title>
-                <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Syne:wght@700;800&display=swap" rel="stylesheet">
-                <style>
-                  *{margin:0;padding:0;box-sizing:border-box}
-                  body{font-family:'DM Sans',sans-serif;background:#fff;color:#111;padding:20px}
-                  .print-doc{font-family:'DM Sans',sans-serif;background:#fff;color:#111;padding:36px}
-                  .print-doc-bar{height:5px;background:linear-gradient(90deg,#d4a843,#f0c86a,#d4a843);margin:-36px -36px 32px;border-radius:8px 8px 0 0}
-                  .pdoc-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:32px}
-                  .pdoc-logo{font-family:'Syne',sans-serif;font-size:26px;font-weight:800;letter-spacing:3px;color:#111}
-                  .pdoc-type{font-family:'Syne',sans-serif;font-size:20px;font-weight:800;color:#d4a843;text-align:right}
-                  .pdoc-ref{font-size:11px;color:#888;text-align:right;margin-top:4px}
-                  .pdoc-divider{border:none;border-top:1px solid #e8e8e8;margin:20px 0}
-                  .pdoc-parties{display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-bottom:28px}
-                  .pdoc-plabel{font-size:9px;letter-spacing:2px;text-transform:uppercase;color:#aaa;margin-bottom:6px}
-                  .pdoc-pname{font-size:15px;font-weight:700}
-                  .pdoc-pinfo{font-size:12px;color:#555;line-height:1.8;margin-top:4px}
-                  .pdoc-table{width:100%;border-collapse:collapse;margin-bottom:24px}
-                  .pdoc-table th{background:#f8f6f0;padding:9px 14px;text-align:left;font-size:9px;letter-spacing:2px;text-transform:uppercase;color:#888;font-weight:600}
-                  .pdoc-table td{padding:12px 14px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#333}
-                  .pdoc-totals{display:flex;justify-content:flex-end;margin-bottom:28px}
-                  .pdoc-totals-box{width:260px}
-                  .pdoc-trow{display:flex;justify-content:space-between;padding:7px 0;font-size:12px;color:#666;border-bottom:1px solid #f0f0f0}
-                  .pdoc-trow.big{font-size:15px;font-weight:700;color:#111;border-bottom:2px solid #111;padding:10px 0}
-                  .pdoc-footer{display:flex;justify-content:space-between;align-items:flex-end;margin-top:36px;padding-top:20px;border-top:1px solid #e8e8e8}
-                  .pdoc-sig{border-bottom:1px solid #ccc;width:180px;height:55px;display:flex;align-items:flex-end;padding-bottom:6px;font-size:10px;color:#bbb;letter-spacing:1px}
-                  .pdoc-legal{font-size:9px;color:#bbb;max-width:260px;line-height:1.7}
-                  .pdoc-paiements{margin-top:20px;padding:14px 16px;background:#f9f8f5;border-radius:6px}
-                  .pdoc-paiements-title{font-size:9px;letter-spacing:2px;text-transform:uppercase;color:#aaa;margin-bottom:10px}
-                  .pdoc-mentions{margin-top:24px;padding:16px;background:#fafaf8;border-radius:6px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px}
-                  .pdoc-mentions>div{font-size:8px;color:#999;line-height:1.6}
-                  .pdoc-mentions strong{display:block;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:#777;margin-bottom:4px}
-                  .pdoc-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:4px;font-size:9px;font-weight:600}
-                  @page{margin:10mm}
-                </style>
-              </head><body>${printContent.outerHTML}</body></html>`);
-              win.document.close();
-              setTimeout(() => { win.print(); win.close(); }, 500);
-            }}>🖨 Imprimer / PDF</button>
+            <button className="btn btn-primary btn-sm" onClick={() => window.print()}>🖨 Imprimer / PDF</button>
             <button className="close-btn" onClick={onClose}>×</button>
           </div>
         </div>
