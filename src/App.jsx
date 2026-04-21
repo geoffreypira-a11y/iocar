@@ -511,29 +511,35 @@ async function aiLookupPlate(plate, apiKey) {
   const d = await res.json();
   const v = d.data || d; // les données sont dans d.data
 
+  // Debug : log les champs clés de la réponse API
+  console.log("IO Car API →", { puissance: v.AWN_puissance_chevaux, fiscale: v.AWN_puissance_fiscale, co2: v.AWN_emission_co_2, kw: v.AWN_puissance_KW });
+
   // Mapping des champs API → format interne IO Car
   const anneeRaw = v.AWN_annee_de_debut_modele || v.AWN_annee_de_fin_modele || "";
   const annee = anneeRaw ? parseInt(anneeRaw) : null;
 
   return {
-    marque:                   v.AWN_marque              || v.AWN_brand || "",
-    modele:                   v.AWN_modele              || v.AWN_model || "",
-    finition:                 v.AWN_version             || "",
+    marque:                   v.AWN_marque              || "",
+    modele:                   v.AWN_modele              || v.AWN_modele_prf || "",
+    finition:                 v.AWN_label_moteur        || v.AWN_version || "",
     annee:                    annee                     || "",
     motorisation:             v.AWN_code_moteur         || "",
-    carburant:                mapCarburant(v.AWN_energie || v.AWN_carburant || ""),
-    puissance_cv:             v.AWN_PV                  || v.AWN_puissance_din || v.AWN_puissance_fiscale || v.AWN_puissance || "",
-    boite:                    v.AWN_code_boite_de_vitesses?.[0] || v.AWN_code_de_boite_de_vitesses || "",
-    transmission:             v.AWN_transmission        || "",
+    carburant:                mapCarburant(v.AWN_energie || ""),
+    puissance_cv:             v.AWN_puissance_chevaux   || "",
+    puissance_fiscale:        v.AWN_puissance_fiscale   || "",
+    puissance_kw:             v.AWN_puissance_KW        || "",
+    co2:                      v.AWN_emission_co_2       || "",
+    boite:                    v.AWN_type_boite_vites    || "",
+    transmission:             v.AWN_propulsion          || "",
     couleur:                  v.AWN_couleur             || "",
-    couleur_int:              v.AWN_couleur_interieur   || "",
-    nb_portes:                v.AWN_nombre_de_portes    || "",
-    nb_places:                v.AWN_nombre_de_places    || "",
+    couleur_int:              "",
+    nb_portes:                v.AWN_nbr_portes          || "",
+    nb_places:                v.AWN_nbr_de_places       || "",
     kilometrage:              "",
     vin:                      v.AWN_VIN                 || "",
-    date_mise_en_circulation: v.AWN_annee_de_debut_modele || "",
-    co2:                      v.AWN_co2                 || v.AWN_emission_de_co2 || v.AWN_emission_co2 || v.AWN_CO2 || v.AWN_taux_co2 || "",
-    puissance_fiscale:        v.AWN_puissance_fiscale   || v.AWN_PF || "",
+    genre:                    v.AWN_genre               || "VP",
+    carrosserie:              v.AWN_carrosserie         || "",
+    date_mise_en_circulation: v.AWN_date_mise_en_circulation || "",
     options:                  [],
   };
 }
@@ -649,18 +655,20 @@ function calcCarteGrise({ cv, energie, co2, region }) {
 
 function CarteGriseCalc({ vehicleData, clientAddress, onApply }) {
   // Pré-remplir depuis le véhicule sélectionné si disponible
-  const [cv, setCv] = useState(parseInt(vehicleData?.puissance_cv) || 5);
+  // La carte grise utilise la puissance FISCALE, pas la puissance DIN
+  const [cv, setCv] = useState(parseInt(vehicleData?.puissance_fiscale) || parseInt(vehicleData?.puissance_cv) || 5);
   const detectedRegion = getRegionFromPostal(clientAddress);
   const [region, setRegion] = useState(detectedRegion || "Provence-Alpes-Côte d'Azur");
-  const [co2, setCo2] = useState(parseInt(vehicleData?.co2) || 120);
+  const [co2, setCo2] = useState(parseInt(vehicleData?.co2) || 0);
   const [energie, setEnergie] = useState(vehicleData?.carburant?.toLowerCase() || "essence");
 
   // Mettre à jour quand le véhicule ou client change
   React.useEffect(() => {
-    if (vehicleData?.puissance_cv) setCv(parseInt(vehicleData.puissance_cv) || 5);
+    if (vehicleData?.puissance_fiscale) setCv(parseInt(vehicleData.puissance_fiscale) || 5);
+    else if (vehicleData?.puissance_cv) setCv(parseInt(vehicleData.puissance_cv) || 5);
     if (vehicleData?.carburant) setEnergie(vehicleData.carburant.toLowerCase());
-    if (vehicleData?.co2) setCo2(parseInt(vehicleData.co2) || 120);
-  }, [vehicleData?.puissance_cv, vehicleData?.carburant, vehicleData?.co2]);
+    if (vehicleData?.co2) setCo2(parseInt(vehicleData.co2) || 0);
+  }, [vehicleData?.puissance_fiscale, vehicleData?.puissance_cv, vehicleData?.carburant, vehicleData?.co2]);
 
   React.useEffect(() => {
     const r = getRegionFromPostal(clientAddress);
@@ -1484,10 +1492,14 @@ function FleetPage({ vehicles, setVehicles, apiKey, usage, setUsage, livrePolice
     setVehicles(next);
 
     // Création automatique dans le livre de police pour tout NOUVEAU véhicule
-    if (!exists && setLivrePolice && livrePolice) {
-      const alreadyInLP = livrePolice.find(e => e.immat === v.plate || e.vehicle_id === v.id);
-      if (!alreadyInLP) {
-        const nums = livrePolice.map(e => parseInt(e.num_ordre) || 0);
+    if (!exists && setLivrePolice) {
+      // Utiliser la forme fonctionnelle pour avoir le state le plus récent
+      setLivrePolice(currentLP => {
+        const lp = currentLP || [];
+        const alreadyInLP = lp.find(e => e.immat === v.plate || e.vehicle_id === v.id);
+        if (alreadyInLP) return lp;
+
+        const nums = lp.map(e => parseInt(e.num_ordre) || 0);
         const nextNum = nums.length > 0 ? Math.max(0, ...nums) + 1 : 1;
 
         const newEntry = {
@@ -1512,8 +1524,6 @@ function FleetPage({ vehicles, setVehicles, apiKey, usage, setUsage, livrePolice
           notes: "Entrée créée automatiquement depuis la flotte — à compléter",
           _incomplete: true,
         };
-        const updatedLP = [...livrePolice, newEntry];
-        setLivrePolice(updatedLP);
 
         const missing = [];
         if (!v.plate) missing.push("plaque d'immatriculation");
@@ -1527,7 +1537,9 @@ function FleetPage({ vehicles, setVehicles, apiKey, usage, setUsage, livrePolice
             `→ Allez dans Livre de Police pour compléter l'entrée.`
           ), 100);
         }
-      }
+
+        return [...lp, newEntry];
+      });
     }
 
     setModal(null);
@@ -1846,8 +1858,10 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
       vehicle_data: {
         plate: v.plate, marque: v.marque, modele: v.modele, finition: v.finition,
         annee: v.annee, vin: v.vin, carburant: v.carburant, puissance_cv: v.puissance_cv,
-        co2: v.co2, kilometrage: v.kilometrage, couleur: v.couleur, motorisation: v.motorisation,
-        boite: v.boite, date_entree: v.date_entree, options: v.options,
+        puissance_fiscale: v.puissance_fiscale, co2: v.co2, genre: v.genre || "VP",
+        kilometrage: v.kilometrage, couleur: v.couleur, motorisation: v.motorisation,
+        boite: v.boite, date_entree: v.date_entree,
+        date_mise_en_circulation: v.date_mise_en_circulation, options: v.options,
       },
       prix_ht: f.prix_ht || v.prix_vente || "",
     }));
@@ -2464,6 +2478,14 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
     const next = exists ? orders.map(x => x.id === o.id ? o : x) : [o, ...orders];
     setOrders(next);
 
+    // BC créé → véhicule passe en "réservé"
+    if (o.type === "bc" && o.vehicle_id && vehicles && !exists) {
+      const veh = vehicles.find(v => v.id === o.vehicle_id);
+      if (veh && veh.statut === "disponible") {
+        setVehiclesRaw(vehicles.map(v => v.id === o.vehicle_id ? { ...v, statut: "réservé" } : v));
+      }
+    }
+
     // Créer automatiquement la fiche client CRM si elle n'existe pas encore
     if (o.client?.name && setClients && clients) {
       const nomClient = o.client.name.trim().toLowerCase();
@@ -2508,7 +2530,15 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
   };
 
   const del = (id) => {
-    setOrders(orders.filter(o => o.id !== id));
+    const o = orders.find(x => x.id === id);
+    // Si c'est un BC et qu'un véhicule est lié → repasser en "disponible"
+    if (o && o.type === "bc" && o.vehicle_id && vehicles) {
+      const veh = vehicles.find(v => v.id === o.vehicle_id);
+      if (veh && veh.statut === "réservé") {
+        setVehiclesRaw(vehicles.map(v => v.id === o.vehicle_id ? { ...v, statut: "disponible" } : v));
+      }
+    }
+    setOrders(orders.filter(x => x.id !== id));
     setPendingDelete(null);
   };
 
