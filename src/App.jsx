@@ -363,9 +363,12 @@ textarea.form-input{resize:vertical;min-height:72px}
   .btn-sm{padding:5px 10px;font-size:11px}
 }
 @media print{
-  .sidebar,.no-print{display:none!important}
-  .content{overflow:visible}
-  .print-doc{display:block!important}
+  body *{visibility:hidden}
+  .print-doc,.print-doc *,.fiche-print,.fiche-print *{visibility:visible}
+  .print-doc{position:absolute;left:0;top:0;width:100%;display:block!important}
+  .fiche-print{position:absolute;left:0;top:0;width:100%}
+  .sidebar,.no-print,.hamburger,.bottom-nav,.btn{display:none!important}
+  .content{overflow:visible;margin:0;padding:0}
   body{background:#fff;color:#000}
   @page{margin:15mm}
 }
