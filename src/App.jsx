@@ -363,20 +363,11 @@ textarea.form-input{resize:vertical;min-height:72px}
   .btn-sm{padding:5px 10px;font-size:11px}
 }
 @media print{
-  /* Cacher tout */
-  body>*{display:none!important}
-  #root{display:block!important}
-  #root>*{display:none!important}
-  
-  /* Afficher uniquement la modal d'impression */
-  .print-modal{display:block!important;position:static!important;background:#fff!important;overflow:visible!important}
-  .print-modal-inner{display:block!important;position:static!important;max-height:none!important;box-shadow:none!important;border:none!important;background:#fff!important;width:100%!important;max-width:100%!important;overflow:visible!important;border-radius:0!important;margin:0!important;padding:0!important}
-  .print-modal .modal-hd{display:none!important}
-  .print-doc{display:block!important;background:#fff!important;color:#111!important}
-  
-  .no-print,.sidebar,.hamburger,.bottom-nav,.shell,.btn{display:none!important}
-  body{background:#fff!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-  @page{size:portrait;margin:10mm}
+  body.printing-doc *{visibility:hidden!important;position:static!important;overflow:visible!important}
+  body.printing-doc .print-doc,body.printing-doc .print-doc *{visibility:visible!important}
+  body.printing-doc .print-doc{position:fixed!important;left:0;top:0;width:100%;background:#fff!important;color:#111!important;z-index:99999;padding:30px!important}
+  body.printing-doc .print-doc .print-doc-bar{margin:-30px -30px 24px!important}
+  @page{size:A4 portrait;margin:10mm}
 }
 
 /* PRINT DOC */
@@ -1905,7 +1896,10 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
                 ⚡ Factur-X PA 🔒
               </button>
             )}
-            <button className="btn btn-primary btn-sm" onClick={() => window.print()}>🖨 Imprimer / PDF</button>
+            <button className="btn btn-primary btn-sm" onClick={() => {
+              document.body.classList.add("printing-doc");
+              setTimeout(() => { window.print(); document.body.classList.remove("printing-doc"); }, 100);
+            }}>🖨 Imprimer / PDF</button>
             <button className="close-btn" onClick={onClose}>×</button>
           </div>
         </div>
