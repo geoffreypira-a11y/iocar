@@ -363,11 +363,8 @@ textarea.form-input{resize:vertical;min-height:72px}
   .btn-sm{padding:5px 10px;font-size:11px}
 }
 @media print{
-  body.printing-doc *{visibility:hidden!important;position:static!important;overflow:visible!important}
-  body.printing-doc .print-doc,body.printing-doc .print-doc *{visibility:visible!important}
-  body.printing-doc .print-doc{position:fixed!important;left:0;top:0;width:100%;background:#fff!important;color:#111!important;z-index:99999;padding:30px!important}
-  body.printing-doc .print-doc .print-doc-bar{margin:-30px -30px 24px!important}
-  @page{size:A4 portrait;margin:10mm}
+  .no-print,.sidebar,.hamburger,.bottom-nav{display:none!important}
+  @page{size:A4 portrait;margin:12mm}
 }
 
 /* PRINT DOC */
@@ -1897,8 +1894,26 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
               </button>
             )}
             <button className="btn btn-primary btn-sm" onClick={() => {
-              document.body.classList.add("printing-doc");
-              setTimeout(() => { window.print(); document.body.classList.remove("printing-doc"); }, 100);
+              const el = document.querySelector('.print-doc');
+              if (!el) return;
+              const win = window.open('', '_blank');
+              if (!win) return;
+              win.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"/>');
+              win.document.write('<title>' + (order.ref || 'Document') + '</title>');
+              win.document.write('<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Syne:wght@700;800&display=swap" rel="stylesheet">');
+              win.document.write('<style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:"DM Sans",sans-serif;background:#fff;color:#111}');
+              const styles = document.querySelectorAll('style');
+              styles.forEach(s => {
+                const rules = s.textContent.match(/\.(print-doc|pdoc-|plate)[^}]+\}/g);
+                if (rules) win.document.write(rules.join('\n'));
+              });
+              win.document.write('@page{size:A4 portrait;margin:10mm}@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact;}}</style>');
+              win.document.write('</head><body>');
+              win.document.write(el.outerHTML);
+              win.document.write('</body></html>');
+              win.document.close();
+              win.focus();
+              setTimeout(() => { win.print(); }, 600);
             }}>🖨 Imprimer / PDF</button>
             <button className="close-btn" onClick={onClose}>×</button>
           </div>
