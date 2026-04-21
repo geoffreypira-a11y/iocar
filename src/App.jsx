@@ -457,13 +457,16 @@ function calcOrder(o) {
   const ht = parseFloat(o.prix_ht) || 0;
   const remAmt = ht * ((parseFloat(o.remise_pct) || 0) / 100);
   const base = ht - remAmt;
+  const fraisMiseDispoHT = parseFloat(o.frais_mise_dispo) || 0;
+  const carteGrise = parseFloat(o.carte_grise) || 0;
+  const baseTotal = base + fraisMiseDispoHT;
   // Si sans TVA : prix saisi = TTC, TVA = 0
   const avecTva = o.avec_tva !== false;
-  const tvaAmt = avecTva ? base * ((parseFloat(o.tva_pct) || 20) / 100) : 0;
-  const ttc = avecTva ? base + tvaAmt : base;
+  const tvaAmt = avecTva ? baseTotal * ((parseFloat(o.tva_pct) || 20) / 100) : 0;
+  const ttc = (avecTva ? baseTotal + tvaAmt : baseTotal) + carteGrise;
   const encaisse = (o.paiements || []).reduce((s, p) => s + (parseFloat(p.montant) || 0), 0);
   const reste = ttc - encaisse;
-  return { ht, remAmt, base, tvaAmt, ttc, encaisse, reste, avecTva };
+  return { ht, remAmt, base, fraisMiseDispoHT, carteGrise, baseTotal, tvaAmt, ttc, encaisse, reste, avecTva };
 }
 
 // ─── NUMÉROTATION SÉQUENTIELLE ──────────────────────────────
@@ -581,6 +584,149 @@ function PlateBadge({ plate }) {
     <div className="plate">
       <div className="plate-eu"><span>🇫🇷</span><br />F</div>
       <span className="plate-num">{plate}</span>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   DASHBOARD
+═══════════════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════════════
+   CALCULATEUR CARTE GRISE (ESTIMATION 2026)
+═══════════════════════════════════════════════════════════════ */
+const TARIFS_REGIONS_2026 = {
+  "Île-de-France": 54.95, "Auvergne-Rhône-Alpes": 43.00, "Bourgogne-Franche-Comté": 51.00,
+  "Bretagne": 55.00, "Centre-Val de Loire": 55.00, "Corse": 43.00,
+  "Grand Est": 48.00, "Hauts-de-France": 36.20, "Normandie": 46.15,
+  "Nouvelle-Aquitaine": 45.00, "Occitanie": 47.00, "Pays de la Loire": 48.00,
+  "Provence-Alpes-Côte d'Azur": 51.20,
+};
+
+// Mapping code postal (2 premiers chiffres) → région
+const DEPT_TO_REGION = {
+  "75":"Île-de-France","77":"Île-de-France","78":"Île-de-France","91":"Île-de-France","92":"Île-de-France","93":"Île-de-France","94":"Île-de-France","95":"Île-de-France",
+  "01":"Auvergne-Rhône-Alpes","03":"Auvergne-Rhône-Alpes","07":"Auvergne-Rhône-Alpes","15":"Auvergne-Rhône-Alpes","26":"Auvergne-Rhône-Alpes","38":"Auvergne-Rhône-Alpes","42":"Auvergne-Rhône-Alpes","43":"Auvergne-Rhône-Alpes","63":"Auvergne-Rhône-Alpes","69":"Auvergne-Rhône-Alpes","73":"Auvergne-Rhône-Alpes","74":"Auvergne-Rhône-Alpes",
+  "21":"Bourgogne-Franche-Comté","25":"Bourgogne-Franche-Comté","39":"Bourgogne-Franche-Comté","58":"Bourgogne-Franche-Comté","70":"Bourgogne-Franche-Comté","71":"Bourgogne-Franche-Comté","89":"Bourgogne-Franche-Comté","90":"Bourgogne-Franche-Comté",
+  "22":"Bretagne","29":"Bretagne","35":"Bretagne","56":"Bretagne",
+  "18":"Centre-Val de Loire","28":"Centre-Val de Loire","36":"Centre-Val de Loire","37":"Centre-Val de Loire","41":"Centre-Val de Loire","45":"Centre-Val de Loire",
+  "2A":"Corse","2B":"Corse","20":"Corse",
+  "08":"Grand Est","10":"Grand Est","51":"Grand Est","52":"Grand Est","54":"Grand Est","55":"Grand Est","57":"Grand Est","67":"Grand Est","68":"Grand Est","88":"Grand Est",
+  "02":"Hauts-de-France","59":"Hauts-de-France","60":"Hauts-de-France","62":"Hauts-de-France","80":"Hauts-de-France",
+  "14":"Normandie","27":"Normandie","50":"Normandie","61":"Normandie","76":"Normandie",
+  "16":"Nouvelle-Aquitaine","17":"Nouvelle-Aquitaine","19":"Nouvelle-Aquitaine","23":"Nouvelle-Aquitaine","24":"Nouvelle-Aquitaine","33":"Nouvelle-Aquitaine","40":"Nouvelle-Aquitaine","47":"Nouvelle-Aquitaine","64":"Nouvelle-Aquitaine","79":"Nouvelle-Aquitaine","86":"Nouvelle-Aquitaine","87":"Nouvelle-Aquitaine",
+  "09":"Occitanie","11":"Occitanie","12":"Occitanie","30":"Occitanie","31":"Occitanie","32":"Occitanie","34":"Occitanie","46":"Occitanie","48":"Occitanie","65":"Occitanie","66":"Occitanie","81":"Occitanie","82":"Occitanie",
+  "44":"Pays de la Loire","49":"Pays de la Loire","53":"Pays de la Loire","72":"Pays de la Loire","85":"Pays de la Loire",
+  "04":"Provence-Alpes-Côte d'Azur","05":"Provence-Alpes-Côte d'Azur","06":"Provence-Alpes-Côte d'Azur","13":"Provence-Alpes-Côte d'Azur","83":"Provence-Alpes-Côte d'Azur","84":"Provence-Alpes-Côte d'Azur",
+};
+
+function getRegionFromPostal(address) {
+  if (!address) return null;
+  const match = address.match(/\b(\d{5})\b/);
+  if (!match) return null;
+  const dept = match[1].substring(0, 2);
+  return DEPT_TO_REGION[dept] || null;
+}
+
+function calcCarteGrise({ cv, energie, co2, region }) {
+  const tarifCV = TARIFS_REGIONS_2026[region] || 46;
+  const isElec = energie?.toLowerCase() === "electrique" || energie?.toLowerCase() === "électrique";
+  // Y1 : taxe régionale (exonération 100% électrique dans la plupart des régions)
+  const y1 = isElec ? 0 : (cv || 0) * tarifCV;
+  // Y3 : malus CO2 simplifié 2026
+  let y3 = 0;
+  if (!isElec && co2 > 0) {
+    if (co2 > 117) y3 = (co2 - 117) * 50;
+    if (co2 > 150) y3 = Math.max(y3, (150 - 117) * 50 + (co2 - 150) * 170);
+    if (co2 > 200) y3 = Math.min(y3, 60000);
+  }
+  // Y4 + Y5 fixes
+  const y4 = 11;
+  const y5 = 2.76;
+  const total = y1 + y3 + y4 + y5;
+  return { y1, y3, y4, y5, total, tarifCV, isElec };
+}
+
+function CarteGriseCalc({ vehicleData, clientAddress, onApply }) {
+  // Pré-remplir depuis le véhicule sélectionné si disponible
+  const [cv, setCv] = useState(parseInt(vehicleData?.puissance_cv) || 5);
+  const detectedRegion = getRegionFromPostal(clientAddress);
+  const [region, setRegion] = useState(detectedRegion || "Provence-Alpes-Côte d'Azur");
+  const [co2, setCo2] = useState(parseInt(vehicleData?.co2) || 120);
+  const [energie, setEnergie] = useState(vehicleData?.carburant?.toLowerCase() || "essence");
+
+  // Mettre à jour quand le véhicule ou client change
+  React.useEffect(() => {
+    if (vehicleData?.puissance_cv) setCv(parseInt(vehicleData.puissance_cv) || 5);
+    if (vehicleData?.carburant) setEnergie(vehicleData.carburant.toLowerCase());
+    if (vehicleData?.co2) setCo2(parseInt(vehicleData.co2) || 120);
+  }, [vehicleData?.puissance_cv, vehicleData?.carburant, vehicleData?.co2]);
+
+  React.useEffect(() => {
+    const r = getRegionFromPostal(clientAddress);
+    if (r) setRegion(r);
+  }, [clientAddress]);
+
+  const cg = calcCarteGrise({ cv, energie, co2, region });
+
+  return (
+    <div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 14 }}>
+        <div className="form-group">
+          <label className="form-label">Région {detectedRegion && <span style={{ fontSize: 9, color: "var(--green)" }}>✓ auto</span>}</label>
+          <select className="form-input" value={region} onChange={e => setRegion(e.target.value)} style={{ fontSize: 11 }}>
+            {Object.keys(TARIFS_REGIONS_2026).sort().map(r => <option key={r} value={r}>{r}</option>)}
+          </select>
+        </div>
+        <div className="form-group">
+          <label className="form-label">Puissance (CV)</label>
+          <input className="form-input" type="number" min={1} max={100} value={cv} onChange={e => setCv(parseInt(e.target.value) || 1)} />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Énergie</label>
+          <select className="form-input" value={energie} onChange={e => setEnergie(e.target.value)} style={{ fontSize: 11 }}>
+            <option value="essence">Essence</option>
+            <option value="diesel">Diesel</option>
+            <option value="hybride">Hybride</option>
+            <option value="electrique">Électrique</option>
+          </select>
+        </div>
+        <div className="form-group">
+          <label className="form-label">CO₂ (g/km)</label>
+          <input className="form-input" type="number" min={0} max={400} value={co2} onChange={e => setCo2(parseInt(e.target.value) || 0)} />
+        </div>
+      </div>
+
+      <div style={{ background: "var(--card2)", borderRadius: 8, padding: "12px 16px", border: "1px solid var(--border2)" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, padding: "3px 0" }}>
+            <span style={{ color: "var(--muted)" }}>Y.1 Taxe régionale ({cv} CV × {cg.tarifCV.toFixed(2)}€)</span>
+            <span style={{ fontWeight: 600 }}>{fmt(cg.y1)}</span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, padding: "3px 0" }}>
+            <span style={{ color: "var(--muted)" }}>Y.3 Malus CO₂</span>
+            <span style={{ fontWeight: 600, color: cg.y3 > 0 ? "var(--red)" : "var(--green)" }}>{cg.y3 > 0 ? fmt(cg.y3) : "0,00 €"}</span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, padding: "3px 0" }}>
+            <span style={{ color: "var(--muted)" }}>Y.4 Gestion</span>
+            <span style={{ fontWeight: 600 }}>{fmt(cg.y4)}</span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, padding: "3px 0" }}>
+            <span style={{ color: "var(--muted)" }}>Y.5 Acheminement</span>
+            <span style={{ fontWeight: 600 }}>{fmt(cg.y5)}</span>
+          </div>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8, padding: "8px 0", borderTop: "2px solid var(--gold)" }}>
+          <span style={{ fontSize: 14, fontWeight: 800 }}>TOTAL</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <span style={{ fontSize: 16, fontWeight: 800, color: "var(--gold)" }}>{fmt(cg.total)}</span>
+            {onApply && <button className="btn btn-primary btn-sm" onClick={() => onApply(Math.round(cg.total * 100) / 100)}>
+              ✅ Appliquer
+            </button>}
+          </div>
+        </div>
+        {cg.isElec && <div style={{ fontSize: 10, color: "var(--green)", marginTop: 4 }}>🔋 Véhicule électrique : exonération taxe régionale</div>}
+        <div style={{ fontSize: 9, color: "var(--muted)", marginTop: 4 }}>⚠️ Estimation indicative — tarifs susceptibles de varier</div>
+      </div>
     </div>
   );
 }
@@ -892,6 +1038,15 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
           </div>
         )}
       </div>
+      {/* CALCULATEUR CARTE GRISE */}
+      <div className="card" style={{ marginTop: 20 }}>
+        <div className="card-pad" style={{ borderBottom: "1px solid var(--border2)" }}>
+          <div style={{ fontWeight: 700, fontSize: 14 }}>🪪 Calculateur Carte Grise (estimation)</div>
+        </div>
+        <div className="card-pad">
+          <CarteGriseCalc vehicleData={null} clientAddress={null} onApply={null} />
+        </div>
+      </div>
     </div>
   );
 }
@@ -1110,6 +1265,76 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
               <input className="form-input" value={Array.isArray(form.options) ? form.options.join(", ") : form.options || ""}
                 onChange={e => set("options", e.target.value)} placeholder="GPS, Toit pano, Caméra recul..." />
             </div>
+
+            {/* ── Documents rattachés (CT, entretien, pneus…) ── */}
+            <div className="form-group full">
+              <label className="form-label" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                📎 Documents & Entretiens
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => {
+                  const docs = form.documents || [];
+                  set("documents", [...docs, {
+                    id: uid(), type: "entretien", date: today(),
+                    description: "", montant: "", prestataire: "", notes: ""
+                  }]);
+                }}>+ Ajouter</button>
+              </label>
+              {(form.documents || []).length === 0 ? (
+                <div style={{ padding: "16px", textAlign: "center", color: "var(--muted)", fontSize: 12, background: "var(--card2)", borderRadius: 8 }}>
+                  Aucun document rattaché — Ajoutez des factures CT, entretiens, pneus…
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {(form.documents || []).map((doc, idx) => (
+                    <div key={doc.id} style={{ background: "var(--card2)", borderRadius: 8, padding: "10px 14px", border: "1px solid var(--border2)" }}>
+                      <div style={{ display: "flex", gap: 8, marginBottom: 6, flexWrap: "wrap", alignItems: "center" }}>
+                        <select className="form-input" value={doc.type} style={{ width: 140, padding: "5px 8px", fontSize: 11 }}
+                          onChange={e => {
+                            const docs = [...(form.documents || [])];
+                            docs[idx] = { ...docs[idx], type: e.target.value };
+                            set("documents", docs);
+                          }}>
+                          <option value="ct">🔧 Contrôle Technique</option>
+                          <option value="entretien">🛠 Entretien / Révision</option>
+                          <option value="pneus">🔄 Pneumatiques</option>
+                          <option value="carrosserie">🚗 Carrosserie</option>
+                          <option value="mecanique">⚙️ Mécanique</option>
+                          <option value="assurance">🛡 Assurance</option>
+                          <option value="autre">📄 Autre</option>
+                        </select>
+                        <input type="date" className="form-input" value={doc.date} style={{ width: 140, padding: "5px 8px", fontSize: 11 }}
+                          onChange={e => {
+                            const docs = [...(form.documents || [])];
+                            docs[idx] = { ...docs[idx], date: e.target.value };
+                            set("documents", docs);
+                          }} />
+                        <input className="form-input" placeholder="Montant TTC" value={doc.montant} style={{ width: 100, padding: "5px 8px", fontSize: 11 }}
+                          onChange={e => {
+                            const docs = [...(form.documents || [])];
+                            docs[idx] = { ...docs[idx], montant: e.target.value };
+                            set("documents", docs);
+                          }} />
+                        <input className="form-input" placeholder="Prestataire" value={doc.prestataire} style={{ flex: 1, padding: "5px 8px", fontSize: 11, minWidth: 120 }}
+                          onChange={e => {
+                            const docs = [...(form.documents || [])];
+                            docs[idx] = { ...docs[idx], prestataire: e.target.value };
+                            set("documents", docs);
+                          }} />
+                        <button className="btn btn-danger btn-sm" style={{ padding: "4px 8px", fontSize: 11 }}
+                          onClick={() => set("documents", (form.documents || []).filter(d => d.id !== doc.id))}>🗑</button>
+                      </div>
+                      <input className="form-input" placeholder="Description (ex: Vidange + filtres, CT favorable...)" value={doc.description}
+                        style={{ width: "100%", padding: "5px 8px", fontSize: 11 }}
+                        onChange={e => {
+                          const docs = [...(form.documents || [])];
+                          docs[idx] = { ...docs[idx], description: e.target.value };
+                          set("documents", docs);
+                        }} />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
             <div className="form-group full">
               <label className="form-label">Notes internes</label>
               <textarea className="form-input" rows={2} value={form.notes || ""} onChange={e => set("notes", e.target.value)} />
@@ -1521,7 +1746,11 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
     type: "bc", ref: "", date_creation: today(), date_echeance: "",
     client: { name: "", address: "", phone: "", email: "", siren: "" },
     vehicle_id: "", vehicle_plate: "", vehicle_label: "",
+    vehicle_data: null, // données complètes du véhicule pour la désignation
     prix_ht: "", remise_pct: 0, tva_pct: 20, avec_tva: true,
+    frais_mise_dispo: 180, // frais de mise à disposition (par défaut 180€)
+    garantie_mois: 3, // durée garantie : 3, 6 ou 12 mois
+    carte_grise: 0, // frais carte grise
     categorie_operation: "livraison_biens",
     tva_sur_debits: false,
     paiements: [], notes: ""
@@ -1576,10 +1805,19 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
   const selectVehicle = (id) => {
     const v = vehicles.find(x => x.id === id);
     if (!v) return set("vehicle_id", "");
-    set("vehicle_id", id);
-    set("vehicle_plate", v.plate);
-    set("vehicle_label", `${v.marque} ${v.modele} ${v.finition} (${v.annee})`);
-    if (!form.prix_ht && v.prix_vente) set("prix_ht", v.prix_vente);
+    setForm(f => ({
+      ...f,
+      vehicle_id: id,
+      vehicle_plate: v.plate,
+      vehicle_label: `${v.marque} ${v.modele} ${v.finition || ""} (${v.annee})`.trim(),
+      vehicle_data: {
+        plate: v.plate, marque: v.marque, modele: v.modele, finition: v.finition,
+        annee: v.annee, vin: v.vin, carburant: v.carburant, puissance_cv: v.puissance_cv,
+        kilometrage: v.kilometrage, couleur: v.couleur, motorisation: v.motorisation,
+        boite: v.boite, date_entree: v.date_entree, options: v.options,
+      },
+      prix_ht: f.prix_ht || v.prix_vente || "",
+    }));
   };
 
   const c = calcOrder(form);
@@ -1761,6 +1999,44 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
             </div>
           </div>
 
+          {/* Frais & Garantie */}
+          <div className="form-grid" style={{ marginBottom: 12 }}>
+            <div className="form-group">
+              <label className="form-label">Frais de mise à disposition (€)</label>
+              <input className="form-input" type="number" value={form.frais_mise_dispo ?? 180} onChange={e => set("frais_mise_dispo", parseFloat(e.target.value) || 0)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Frais carte grise (€)</label>
+              <input className="form-input" type="number" value={form.carte_grise ?? 0} onChange={e => set("carte_grise", parseFloat(e.target.value) || 0)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Garantie véhicule</label>
+              <select className="form-input" value={form.garantie_mois ?? 3} onChange={e => set("garantie_mois", parseInt(e.target.value))}>
+                <option value={3}>3 mois</option>
+                <option value={6}>6 mois</option>
+                <option value={12}>12 mois</option>
+                <option value={0}>Sans garantie</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Calculateur carte grise intégré */}
+          <details style={{ marginBottom: 20, background: "var(--card2)", borderRadius: 10, border: "1px solid var(--border2)", padding: "0" }}>
+            <summary style={{ padding: "10px 14px", cursor: "pointer", fontSize: 12, fontWeight: 600, color: "var(--gold)", listStyle: "none", display: "flex", alignItems: "center", gap: 8 }}>
+              🪪 Calculer la carte grise automatiquement
+              {getRegionFromPostal(form.client?.address) && <span style={{ fontSize: 10, color: "var(--green)", fontWeight: 400 }}>
+                (région détectée : {getRegionFromPostal(form.client?.address)})
+              </span>}
+            </summary>
+            <div style={{ padding: "12px 14px", borderTop: "1px solid var(--border2)" }}>
+              <CarteGriseCalc
+                vehicleData={form.vehicle_data}
+                clientAddress={form.client?.address}
+                onApply={(total) => set("carte_grise", total)}
+              />
+            </div>
+          </details>
+
           <div style={{ fontFamily: "Syne", fontSize: 13, fontWeight: 700, letterSpacing: 1, color: "var(--gold)", marginBottom: 10, textTransform: "uppercase" }}>TARIFICATION</div>
 
           {/* Toggle TVA */}
@@ -1809,7 +2085,7 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
 
           <div style={{ background: "var(--card2)", borderRadius: 8, padding: "14px 16px", marginBottom: 16, display: "flex", gap: 24, flexWrap: "wrap" }}>
             {(c.avecTva
-              ? [["Base HT", fmtDec(c.base)], ["TVA", fmtDec(c.tvaAmt)], ["Total TTC", fmtDec(c.ttc)]]
+              ? [["Base HT", fmtDec(c.baseTotal)], ["TVA", fmtDec(c.tvaAmt)], c.carteGrise > 0 ? ["Carte grise", fmtDec(c.carteGrise)] : null, ["Total TTC", fmtDec(c.ttc)]].filter(Boolean)
               : [["Prix TTC", fmtDec(c.ttc)], ["TVA", "Non applicable"], ["Régime", "Art. 297A CGI"]]
             ).map(([l, v]) => (
               <div key={l}>
@@ -1975,31 +2251,72 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
                 <tr><th>Description véhicule</th><th>Plaque</th><th>VIN / Réf.</th><th style={{ textAlign: "right" }}>{c.avecTva ? "Prix HT" : "Prix TTC"}</th></tr>
               </thead>
               <tbody>
-                <tr>
-                  <td style={{ fontWeight: 700 }}>{order.vehicle_label || "Véhicule"}<br />
-                    <span style={{ fontWeight: 400, color: "#888", fontSize: 11 }}>{order.vehicle_plate && `Plaque : ${order.vehicle_plate}`}</span>
-                  </td>
-                  <td><PlateBadge plate={order.vehicle_plate} /></td>
-                  <td style={{ fontFamily: "monospace", fontSize: 11 }}>—</td>
-                  <td style={{ textAlign: "right", fontWeight: 700 }}>{fmtDec(c.ht)}</td>
-                </tr>
+                {/* Désignation détaillée du véhicule */}
+                {order.vehicle_data ? (
+                  <>
+                    {[
+                      ["Immatriculation", order.vehicle_data.plate],
+                      ["Date 1ère circ.", order.vehicle_data.date_entree],
+                      ["Année modèle", order.vehicle_data.annee],
+                      ["Genre", "VP"],
+                      ["Marque", order.vehicle_data.marque],
+                      ["Modèle", `${order.vehicle_data.modele || ""} ${order.vehicle_data.finition || ""}`.trim()],
+                      ["N° série", order.vehicle_data.vin],
+                      ["Énergie", order.vehicle_data.carburant],
+                      ["Puissance", order.vehicle_data.puissance_cv ? `${order.vehicle_data.puissance_cv} CV` : ""],
+                      ["Kilométrage", order.vehicle_data.kilometrage ? `${Number(order.vehicle_data.kilometrage).toLocaleString("fr-FR")} km` : ""],
+                      ["Options", Array.isArray(order.vehicle_data.options) ? order.vehicle_data.options.join(", ") : (order.vehicle_data.options || "")],
+                    ].map(([label, val], i) => (
+                      <tr key={i} style={{ borderBottom: "none" }}>
+                        <td style={{ padding: "3px 14px", fontSize: 11, color: "#555", fontWeight: label === "Immatriculation" ? 700 : 400, borderBottom: "none" }}>
+                          {label}
+                        </td>
+                        <td colSpan={2} style={{ padding: "3px 14px", fontSize: 11, color: "#333", borderBottom: "none" }}>
+                          {val || "—"}
+                        </td>
+                        {i === 0 ? (
+                          <td rowSpan={11} style={{ textAlign: "right", fontWeight: 700, verticalAlign: "middle", borderBottom: "none" }}>{fmtDec(c.ht)}</td>
+                        ) : null}
+                      </tr>
+                    ))}
+                  </>
+                ) : (
+                  <tr>
+                    <td style={{ fontWeight: 700 }}>{order.vehicle_label || "Véhicule"}</td>
+                    <td><PlateBadge plate={order.vehicle_plate} /></td>
+                    <td style={{ fontFamily: "monospace", fontSize: 11 }}>—</td>
+                    <td style={{ textAlign: "right", fontWeight: 700 }}>{fmtDec(c.ht)}</td>
+                  </tr>
+                )}
+                {/* Frais de mise à disposition */}
+                {(parseFloat(order.frais_mise_dispo) || 0) > 0 && (
+                  <tr style={{ borderTop: "1px solid #e8e8e8" }}>
+                    <td colSpan={3} style={{ fontWeight: 600, fontSize: 11 }}>Frais de mise à disposition</td>
+                    <td style={{ textAlign: "right", fontWeight: 600, fontSize: 11 }}>{fmtDec(parseFloat(order.frais_mise_dispo) || 0)}</td>
+                  </tr>
+                )}
                 {c.remAmt > 0 && (
                   <tr><td colSpan={3} style={{ color: "#e05252" }}>Remise ({order.remise_pct}%)</td><td style={{ textAlign: "right", color: "#e05252" }}>- {fmtDec(c.remAmt)}</td></tr>
                 )}
               </tbody>
             </table>
+
+            {/* Totaux */}
             <div className="pdoc-totals">
               <div className="pdoc-totals-box">
                 {c.avecTva ? (
                   <>
-                    <div className="pdoc-trow"><span>Montant HT</span><span>{fmtDec(c.base)}</span></div>
+                    <div className="pdoc-trow"><span>Montant HT</span><span>{fmtDec(c.baseTotal)}</span></div>
                     <div className="pdoc-trow"><span>TVA {order.tva_pct}%</span><span>{fmtDec(c.tvaAmt)}</span></div>
+                    {c.remAmt > 0 && <div className="pdoc-trow" style={{ color: "#e05252" }}><span>Remise</span><span>- {fmtDec(c.remAmt)}</span></div>}
+                    {c.carteGrise > 0 && <div className="pdoc-trow"><span>Carte grise</span><span>{fmtDec(c.carteGrise)}</span></div>}
                     <div className="pdoc-trow big"><span>TOTAL TTC</span><span>{fmtDec(c.ttc)}</span></div>
                   </>
                 ) : (
                   <>
                     <div className="pdoc-trow"><span>Montant TTC</span><span>{fmtDec(c.ttc)}</span></div>
                     <div className="pdoc-trow" style={{ fontSize: 10, color: "#aaa" }}><span>TVA non applicable</span><span>Art. 297A CGI</span></div>
+                    {c.carteGrise > 0 && <div className="pdoc-trow"><span>Carte grise</span><span>{fmtDec(c.carteGrise)}</span></div>}
                     <div className="pdoc-trow big"><span>TOTAL TTC</span><span>{fmtDec(c.ttc)}</span></div>
                   </>
                 )}
@@ -2009,6 +2326,13 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
                 </>}
               </div>
             </div>
+
+            {/* Garantie véhicule */}
+            {(order.garantie_mois || 0) > 0 && (
+              <div style={{ marginTop: 12, padding: "8px 14px", background: "#f9f8f5", borderRadius: 6, fontSize: 11, color: "#555", border: "1px solid #e8e8e8" }}>
+                🛡 <strong>Garantie véhicule : {order.garantie_mois} mois</strong>
+              </div>
+            )}
             {order.paiements?.length > 0 && (
               <div className="pdoc-paiements">
                 <div className="pdoc-paiements-title">Historique des paiements</div>
