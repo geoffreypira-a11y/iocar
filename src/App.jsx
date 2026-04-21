@@ -373,7 +373,11 @@ textarea.form-input{resize:vertical;min-height:72px}
   background:#fff;color:#111;
   padding:36px;
   border-radius:8px;
+  min-height:1090px;
+  display:flex;
+  flex-direction:column;
 }
+.print-doc-content{flex:1}
 .print-doc-bar{
   height:5px;background:linear-gradient(90deg,#d4a843,#f0c86a,#d4a843);
   margin:-36px -36px 32px;
@@ -1901,13 +1905,16 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
               win.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"/>');
               win.document.write('<title>' + (order.ref || 'Document') + '</title>');
               win.document.write('<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Syne:wght@700;800&display=swap" rel="stylesheet">');
-              win.document.write('<style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:"DM Sans",sans-serif;background:#fff;color:#111}');
-              const styles = document.querySelectorAll('style');
-              styles.forEach(s => {
-                const rules = s.textContent.match(/\.(print-doc|pdoc-|plate)[^}]+\}/g);
-                if (rules) win.document.write(rules.join('\n'));
-              });
-              win.document.write('@page{size:A4 portrait;margin:10mm}@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact;}}</style>');
+              win.document.write('<style>');
+              // Copier TOUS les styles de la page
+              document.querySelectorAll('style').forEach(s => win.document.write(s.textContent));
+              // Forcer le layout A4 et le footer en bas
+              win.document.write('body{margin:0;padding:0;background:#fff;font-family:"DM Sans",sans-serif}');
+              win.document.write('.print-doc{min-height:277mm;display:flex;flex-direction:column;padding:30px 36px}');
+              win.document.write('.print-doc-content{flex:1}');
+              win.document.write('@page{size:A4 portrait;margin:10mm}');
+              win.document.write('@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}');
+              win.document.write('</style>');
               win.document.write('</head><body>');
               win.document.write(el.outerHTML);
               win.document.write('</body></html>');
@@ -1922,6 +1929,7 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
         {/* Document scrollable */}
         <div style={{ flex: 1, overflowY: "auto", padding: 24 }}>
           <div className="print-doc">
+            <div className="print-doc-content">
             <div className="print-doc-bar" />
             <div className="pdoc-head">
               <div>
@@ -2017,6 +2025,7 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
                 {order.notes}
               </div>
             )}
+            </div>{/* /print-doc-content */}
             {order.type === "bc" ? (
               /* BON DE COMMANDE — signatures */
               <div className="pdoc-footer">
