@@ -363,13 +363,15 @@ textarea.form-input{resize:vertical;min-height:72px}
   .btn-sm{padding:5px 10px;font-size:11px}
 }
 @media print{
-  body *{visibility:hidden}
-  .print-doc,.print-doc *,.fiche-print,.fiche-print *{visibility:visible}
-  .print-doc{position:absolute;left:0;top:0;width:100%;display:block!important}
-  .fiche-print{position:absolute;left:0;top:0;width:100%}
-  .sidebar,.no-print,.hamburger,.bottom-nav,.btn{display:none!important}
-  .content{overflow:visible;margin:0;padding:0}
-  body{background:#fff;color:#000}
+  .sidebar,.hamburger,.bottom-nav,.no-print{display:none!important}
+  .modal-bg{position:static!important;background:none!important;display:block!important;overflow:visible!important}
+  .modal{position:static!important;max-height:none!important;box-shadow:none!important;border:none!important;background:none!important;width:100%!important;max-width:100%!important;overflow:visible!important}
+  .modal-hd{display:none!important}
+  .content,.shell{overflow:visible!important;display:block!important;margin:0!important;padding:0!important}
+  .page,.kpi-grid,.page-header{display:none!important}
+  .print-doc{display:block!important;padding:20px!important}
+  .fiche-print{display:block!important}
+  body{background:#fff!important;color:#000!important}
   @page{margin:15mm}
 }
 
