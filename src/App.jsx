@@ -3472,13 +3472,21 @@ function exportComptableCSV(orders, dealer) {
 function useSupabaseTable(token, garageId, table) {
   const [data, setData] = useState([]);
   const [ready, setReady] = useState(false);
-  const prevRef = useRef([]);
 
   useEffect(() => {
     if (!token || !garageId) { setReady(true); return; }
     setReady(false);
     sb.select(token, table, `garage_id=eq.${garageId}`)
-      .then(rows => { const r = rows || []; setData(r); prevRef.current = r; })
+      .then(rows => {
+        // Supabase stocke {id, garage_id, data:{...}} — on aplatit pour l'UI
+        const flat = (rows || []).map(r => {
+          if (r.data && typeof r.data === "object") {
+            return { ...r.data, id: r.id, garage_id: r.garage_id, created_at: r.created_at };
+          }
+          return r;
+        });
+        setData(flat);
+      })
       .catch(() => setData([]))
       .finally(() => setReady(true));
   }, [token, garageId]);
@@ -3488,25 +3496,26 @@ function useSupabaseTable(token, garageId, table) {
     setData(prev => {
       const next = typeof newDataOrFn === "function" ? newDataOrFn(prev) : newDataOrFn;
       if (!token || !garageId || token === "demo") return next;
-      
+
       const prevIds = new Set(prev.map(r => r.id));
       const nextIds = new Set(next.map(r => r.id));
-      
-      // Upsert : éléments nouveaux ou modifiés
+
+      // Upsert : éléments nouveaux ou modifiés — wrapper dans {id, garage_id, data:{...}}
       for (const row of next) {
         const old = prev.find(r => r.id === row.id);
         if (!old || JSON.stringify(old) !== JSON.stringify(row)) {
-          sb.upsert(token, table, { ...row, garage_id: garageId }).catch(() => {});
+          const { id, garage_id: _g, created_at: _c, ...fields } = row;
+          sb.upsert(token, table, { id, garage_id: garageId, data: fields }).catch(() => {});
         }
       }
-      
+
       // Delete : éléments supprimés
       for (const id of prevIds) {
         if (!nextIds.has(id)) {
           sb.delete(token, table, id).catch(() => {});
         }
       }
-      
+
       return next;
     });
   }, [token, garageId, table]);
