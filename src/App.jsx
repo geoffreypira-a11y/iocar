@@ -746,7 +746,8 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
   const recent = [...orders].sort((a, b) => (b.date_creation || "").localeCompare(a.date_creation || "")).slice(0, 6);
 
   const totalAchats = vehicles.reduce((s, v) => s + (parseFloat(v.prix_achat) || 0), 0);
-  const soldeTreso = encaisse - totalAchats;
+  const totalFraisDocs = vehicles.reduce((s, v) => s + (v.documents || []).reduce((s2, d) => s2 + (parseFloat(d.montant) || 0), 0), 0);
+  const soldeTreso = encaisse - totalAchats - totalFraisDocs;
   const tresoPositive = soldeTreso >= 0;
 
   // ─── RECHERCHE PLAQUE ────────────────────────────────────────
@@ -1062,7 +1063,7 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
     includeTreso: !!(parseFloat(vehicle.prix_achat) > 0),
   } : {
     plate: "", marque: "", modele: "", finition: "", annee: new Date().getFullYear(),
-    motorisation: "", carburant: "Essence", puissance_cv: "", boite: "Manuelle 6",
+    motorisation: "", carburant: "Essence", puissance_cv: "", co2: "", boite: "Manuelle 6",
     transmission: "Traction", couleur: "", couleur_int: "", nb_portes: 5, nb_places: 5,
     kilometrage: "", vin: "", date_entree: today(),
     prix_achat: "", prix_vente: "",
@@ -1175,14 +1176,24 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
                 <span style={{ fontSize: 18, color: "var(--muted)" }}>€</span>
               </div>
             </div>
-            {parseFloat(form.prix_vente) > 0 && form.includeTreso && parseFloat(form.prix_achat) > 0 && (
-              <div style={{ textAlign: "center", padding: "8px 14px", background: "var(--card2)", borderRadius: 8, border: "1px solid var(--border2)" }}>
-                <div style={{ fontSize: 10, letterSpacing: 1.5, textTransform: "uppercase", color: "var(--muted)", marginBottom: 4 }}>Marge prévue</div>
-                <div style={{ fontSize: 20, fontWeight: 800, fontFamily: "Syne", color: (parseFloat(form.prix_vente) - parseFloat(form.prix_achat)) >= 0 ? "var(--green)" : "var(--red)" }}>
-                  {(parseFloat(form.prix_vente) - parseFloat(form.prix_achat)).toLocaleString("fr-FR", { style: "currency", currency: "EUR", maximumFractionDigits: 0 })}
+            {parseFloat(form.prix_vente) > 0 && form.includeTreso && parseFloat(form.prix_achat) > 0 && (() => {
+              const totalDocs = (form.documents || []).reduce((s, d) => s + (parseFloat(d.montant) || 0), 0);
+              const coutTotal = parseFloat(form.prix_achat) + totalDocs;
+              const marge = parseFloat(form.prix_vente) - coutTotal;
+              return (
+                <div style={{ textAlign: "center", padding: "8px 14px", background: "var(--card2)", borderRadius: 8, border: "1px solid var(--border2)" }}>
+                  <div style={{ fontSize: 10, letterSpacing: 1.5, textTransform: "uppercase", color: "var(--muted)", marginBottom: 4 }}>Marge prévue</div>
+                  <div style={{ fontSize: 20, fontWeight: 800, fontFamily: "Syne", color: marge >= 0 ? "var(--green)" : "var(--red)" }}>
+                    {marge.toLocaleString("fr-FR", { style: "currency", currency: "EUR", maximumFractionDigits: 0 })}
+                  </div>
+                  {totalDocs > 0 && (
+                    <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 4 }}>
+                      Achat {fmt(parseFloat(form.prix_achat))} + Frais {fmt(totalDocs)} = Coût total {fmt(coutTotal)}
+                    </div>
+                  )}
                 </div>
-              </div>
-            )}
+              );
+            })()}
           </div>
 
           {/* TRÉSORERIE — Optionnelle (prix d'achat seulement) */}
@@ -1233,7 +1244,7 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
 
           <div className="form-grid">
             {[["marque", "Marque *"], ["modele", "Modèle *"], ["finition", "Finition"], ["annee", "Année", "number"],
-              ["motorisation", "Motorisation"], ["puissance_cv", "Puissance (ch)", "number"], ["boite", "Boîte"],
+              ["motorisation", "Motorisation"], ["puissance_cv", "Puissance (ch)", "number"], ["co2", "CO₂ (g/km)", "number"], ["boite", "Boîte"],
               ["couleur", "Couleur ext."], ["couleur_int", "Couleur int."], ["kilometrage", "Kilométrage", "number"],
               ["vin", "N° VIN"], ["date_entree", "Date d'entrée"]].map(([k, label, type]) => (
                 <div className="form-group" key={k}>
@@ -1360,7 +1371,28 @@ function VehicleFiche({ v, dealer, onClose }) {
         <div className="modal-hd no-print">
           <span className="modal-title">Aperçu fiche véhicule</span>
           <div style={{ display: "flex", gap: 8 }}>
-            <button className="btn btn-primary btn-sm" onClick={() => window.print()}>🖨 Imprimer</button>
+            <button className="btn btn-primary btn-sm" onClick={() => {
+              const el = document.querySelector('.fiche-print');
+              if (!el) return;
+              const win = window.open('', '_blank');
+              if (!win) return;
+              win.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"/>');
+              win.document.write('<title>Fiche ' + (v.marque || '') + ' ' + (v.modele || '') + '</title>');
+              win.document.write('<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Syne:wght@700;800&display=swap" rel="stylesheet">');
+              win.document.write('<style>');
+              document.querySelectorAll('style').forEach(s => win.document.write(s.textContent));
+              win.document.write('body{margin:0;padding:20px;background:#fff;font-family:"DM Sans",sans-serif}');
+              win.document.write('.fiche-print{max-width:700px;margin:0 auto}');
+              win.document.write('@page{size:A4 portrait;margin:10mm}');
+              win.document.write('@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}');
+              win.document.write('</style>');
+              win.document.write('</head><body>');
+              win.document.write(el.outerHTML);
+              win.document.write('</body></html>');
+              win.document.close();
+              win.focus();
+              setTimeout(() => { win.print(); }, 600);
+            }}>🖨 Imprimer</button>
             <button className="close-btn" onClick={onClose}>×</button>
           </div>
         </div>
@@ -1552,7 +1584,7 @@ function FleetPage({ vehicles, setVehicles, apiKey, usage, setUsage, livrePolice
           <thead>
             <tr>
               <th>Plaque</th><th>Véhicule</th><th>Année</th><th>Motorisation</th>
-              <th>Km</th><th>Prix achat</th><th>Prix vente</th><th>Marge</th><th>Statut</th><th>Actions</th>
+              <th>Km</th><th>Achat HT</th><th>Frais HT</th><th>Vente TTC</th><th>Marge</th><th>Statut</th><th>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -1560,7 +1592,9 @@ function FleetPage({ vehicles, setVehicles, apiKey, usage, setUsage, livrePolice
               <tr><td colSpan={10} style={{ textAlign: "center", color: "var(--muted)", padding: 40 }}>Aucun véhicule trouvé</td></tr>
             )}
             {filtered.map(v => {
-              const marge = (parseFloat(v.prix_vente) || 0) - (parseFloat(v.prix_achat) || 0);
+              const totalDocs = (v.documents || []).reduce((s, d) => s + (parseFloat(d.montant) || 0), 0);
+              const coutTotal = (parseFloat(v.prix_achat) || 0) + totalDocs;
+              const marge = (parseFloat(v.prix_vente) || 0) - coutTotal;
               const lpEntry = livrePolice?.find(e => e.vehicle_id === v.id || e.immat === v.plate);
               const lpIncomplete = lpEntry?._incomplete || !lpEntry;
               return (
@@ -1584,7 +1618,11 @@ function FleetPage({ vehicles, setVehicles, apiKey, usage, setUsage, livrePolice
                     <div style={{ fontSize: 11, color: "var(--muted)" }}>{v.carburant} · {v.puissance_cv}ch</div>
                   </td>
                   <td style={{ fontFamily: "DM Mono", fontSize: 12 }}>{Number(v.kilometrage || 0).toLocaleString("fr-FR")}</td>
-                  <td style={{ fontFamily: "DM Mono" }}>{fmt(v.prix_achat)}</td>
+                  <td style={{ fontFamily: "DM Mono", fontSize: 12 }}>{fmt(v.prix_achat)}</td>
+                  <td style={{ fontFamily: "DM Mono", fontSize: 12, color: totalDocs > 0 ? "var(--orange)" : "var(--muted)" }}>
+                    {totalDocs > 0 ? fmt(totalDocs) : "—"}
+                    {(v.documents || []).length > 0 && <div style={{ fontSize: 9, color: "var(--muted)" }}>{(v.documents || []).length} doc{(v.documents || []).length > 1 ? "s" : ""}</div>}
+                  </td>
                   <td style={{ fontFamily: "DM Mono", fontWeight: 700, color: "var(--gold)" }}>{fmt(v.prix_vente)}</td>
                   <td style={{ fontFamily: "DM Mono", color: marge >= 0 ? "var(--green)" : "var(--red)", fontWeight: 600 }}>{fmt(marge)}</td>
                   <td><span className={`badge ${STATUTS_FLEET[v.statut]?.cls || "badge-muted"}`}>{STATUTS_FLEET[v.statut]?.label}</span></td>
@@ -1763,19 +1801,20 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
   const [clientSearch, setClientSearch] = useState("");
   const [showClientDropdown, setShowClientDropdown] = useState(false);
   const [showCreateClient, setShowCreateClient] = useState(false);
-  const [newClientForm, setNewClientForm] = useState({ nom: "", prenom: "", email: "", phone: "", adresse: "" });
+  const [newClientForm, setNewClientForm] = useState({ nom: "", prenom: "", email: "", phone: "", adresse: "", code_postal: "", ville: "", pays: "France" });
 
   const filteredClients = (clients || []).filter(c =>
     !clientSearch || `${c.prenom} ${c.nom} ${c.email} ${c.phone}`.toLowerCase().includes(clientSearch.toLowerCase())
   );
 
   const selectClientFromCrm = (c) => {
+    const fullAddr = [c.adresse, c.code_postal && c.ville ? `${c.code_postal} ${c.ville}` : (c.code_postal || c.ville || ""), c.pays && c.pays !== "France" ? c.pays : ""].filter(Boolean).join("\n");
     setForm(f => ({
       ...f,
       client_id: c.id,
       client: {
         name: `${c.prenom || ""} ${c.nom}`.trim(),
-        address: c.adresse || "",
+        address: fullAddr || c.adresse || "",
         phone: c.phone || "",
         email: c.email || "",
       }
@@ -1797,7 +1836,7 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
     if (setClients) setClients([newClient, ...(clients || [])]);
     selectClientFromCrm(newClient);
     setShowCreateClient(false);
-    setNewClientForm({ nom: "", prenom: "", email: "", phone: "", adresse: "" });
+    setNewClientForm({ nom: "", prenom: "", email: "", phone: "", adresse: "", code_postal: "", ville: "", pays: "France" });
   };
 
   const linkedClient = form.client_id ? (clients || []).find(c => c.id === form.client_id) : null;
@@ -1813,7 +1852,7 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
       vehicle_data: {
         plate: v.plate, marque: v.marque, modele: v.modele, finition: v.finition,
         annee: v.annee, vin: v.vin, carburant: v.carburant, puissance_cv: v.puissance_cv,
-        kilometrage: v.kilometrage, couleur: v.couleur, motorisation: v.motorisation,
+        co2: v.co2, kilometrage: v.kilometrage, couleur: v.couleur, motorisation: v.motorisation,
         boite: v.boite, date_entree: v.date_entree, options: v.options,
       },
       prix_ht: f.prix_ht || v.prix_vente || "",
@@ -1928,12 +1967,28 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
                 Créer un nouveau client
               </div>
               <div className="form-grid" style={{ gridTemplateColumns: "1fr 1fr", marginBottom: 10 }}>
-                {[["prenom", "Prénom"], ["nom", "Nom *"], ["email", "Email"], ["phone", "Téléphone"], ["adresse", "Adresse"]].map(([k, l]) => (
-                  <div className="form-group" key={k} style={k === "adresse" ? { gridColumn: "1/-1" } : {}}>
+                {[["prenom", "Prénom"], ["nom", "Nom *"], ["email", "Email"], ["phone", "Téléphone"]].map(([k, l]) => (
+                  <div className="form-group" key={k}>
                     <label className="form-label">{l}</label>
                     <input className="form-input" value={newClientForm[k]} onChange={e => setNewClientForm(f => ({ ...f, [k]: e.target.value }))} />
                   </div>
                 ))}
+                <div className="form-group" style={{ gridColumn: "1/-1" }}>
+                  <label className="form-label">Adresse</label>
+                  <input className="form-input" value={newClientForm.adresse} onChange={e => setNewClientForm(f => ({ ...f, adresse: e.target.value }))} placeholder="N° et rue" />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Code postal</label>
+                  <input className="form-input" value={newClientForm.code_postal} onChange={e => setNewClientForm(f => ({ ...f, code_postal: e.target.value }))} placeholder="13001" />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Ville</label>
+                  <input className="form-input" value={newClientForm.ville} onChange={e => setNewClientForm(f => ({ ...f, ville: e.target.value }))} placeholder="Marseille" />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Pays</label>
+                  <input className="form-input" value={newClientForm.pays} onChange={e => setNewClientForm(f => ({ ...f, pays: e.target.value }))} />
+                </div>
               </div>
               <div style={{ display: "flex", gap: 8 }}>
                 <button className="btn btn-primary btn-sm" onClick={createAndSelectClient}>✅ Créer et sélectionner</button>
