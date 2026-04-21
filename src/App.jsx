@@ -522,7 +522,7 @@ async function aiLookupPlate(plate, apiKey) {
     annee:                    annee                     || "",
     motorisation:             v.AWN_code_moteur         || "",
     carburant:                mapCarburant(v.AWN_energie || v.AWN_carburant || ""),
-    puissance_cv:             v.AWN_PV                  || v.AWN_puissance_din || "",
+    puissance_cv:             v.AWN_PV                  || v.AWN_puissance_din || v.AWN_puissance_fiscale || v.AWN_puissance || "",
     boite:                    v.AWN_code_boite_de_vitesses?.[0] || v.AWN_code_de_boite_de_vitesses || "",
     transmission:             v.AWN_transmission        || "",
     couleur:                  v.AWN_couleur             || "",
@@ -532,7 +532,8 @@ async function aiLookupPlate(plate, apiKey) {
     kilometrage:              "",
     vin:                      v.AWN_VIN                 || "",
     date_mise_en_circulation: v.AWN_annee_de_debut_modele || "",
-    co2:                      v.AWN_co2                 || "",
+    co2:                      v.AWN_co2                 || v.AWN_emission_de_co2 || v.AWN_emission_co2 || v.AWN_CO2 || v.AWN_taux_co2 || "",
+    puissance_fiscale:        v.AWN_puissance_fiscale   || v.AWN_PF || "",
     options:                  [],
   };
 }
@@ -1165,7 +1166,7 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
             <div style={{ fontSize: 20 }}>🏷</div>
             <div style={{ flex: 1, minWidth: 160 }}>
               <div style={{ fontSize: 10, letterSpacing: 2, textTransform: "uppercase", color: "var(--green)", fontWeight: 700, marginBottom: 6 }}>
-                Prix de vente
+                Prix de vente HT
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <input className="form-input" type="number" placeholder="0"
@@ -1265,12 +1266,6 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
                 {["Traction", "Propulsion", "Intégrale (4x4)"].map(c => <option key={c}>{c}</option>)}
               </select>
             </div>
-            <div className="form-group">
-              <label className="form-label">Statut</label>
-              <select className="form-input" value={form.statut} onChange={e => set("statut", e.target.value)}>
-                {Object.entries(STATUTS_FLEET).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-              </select>
-            </div>
             <div className="form-group full">
               <label className="form-label">Options (séparées par des virgules)</label>
               <input className="form-input" value={Array.isArray(form.options) ? form.options.join(", ") : form.options || ""}
@@ -1318,7 +1313,7 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
                             docs[idx] = { ...docs[idx], date: e.target.value };
                             set("documents", docs);
                           }} />
-                        <input className="form-input" placeholder="Montant TTC" value={doc.montant} style={{ width: 100, padding: "5px 8px", fontSize: 11 }}
+                        <input className="form-input" placeholder="Montant HT (€)" value={doc.montant} style={{ width: 110, padding: "5px 8px", fontSize: 11 }}
                           onChange={e => {
                             const docs = [...(form.documents || [])];
                             docs[idx] = { ...docs[idx], montant: e.target.value };
@@ -1492,11 +1487,11 @@ function FleetPage({ vehicles, setVehicles, apiKey, usage, setUsage, livrePolice
     if (!exists && setLivrePolice && livrePolice) {
       const alreadyInLP = livrePolice.find(e => e.immat === v.plate || e.vehicle_id === v.id);
       if (!alreadyInLP) {
-        const entries = livrePolice;
-        const nextNum = (entries.length > 0 ? Math.max(...entries.map(e => e.num_ordre || 0)) : 0) + 1;
+        const nums = livrePolice.map(e => parseInt(e.num_ordre) || 0);
+        const nextNum = nums.length > 0 ? Math.max(0, ...nums) + 1 : 1;
 
         const newEntry = {
-          id: uid(),
+          id: crypto.randomUUID ? crypto.randomUUID() : `lp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           vehicle_id: v.id,
           num_ordre: nextNum,
           date_entree: v.date_entree || today(),
@@ -1509,18 +1504,17 @@ function FleetPage({ vehicles, setVehicles, apiKey, usage, setUsage, livrePolice
           kilometrage: v.kilometrage || "",
           pays_origine: "France",
           prix_achat: v.prix_achat || "",
-          // Champs vendeur vides — à compléter
           vendeur_type: "particulier",
           vendeur_nom: "", vendeur_prenom: "", vendeur_adresse: "",
           vendeur_piece_type: "CNI", vendeur_piece_id: "", vendeur_piece_date: "", vendeur_piece_autorite: "",
           mode_reglement: "Virement",
           date_sortie: "", acheteur_nom: "", acheteur_adresse: "",
           notes: "Entrée créée automatiquement depuis la flotte — à compléter",
-          _incomplete: true, // flag infos manquantes
+          _incomplete: true,
         };
-        setLivrePolice([...livrePolice, newEntry]);
+        const updatedLP = [...livrePolice, newEntry];
+        setLivrePolice(updatedLP);
 
-        // Alerte infos manquantes
         const missing = [];
         if (!v.plate) missing.push("plaque d'immatriculation");
         if (!v.vin) missing.push("numéro VIN");
@@ -1584,7 +1578,7 @@ function FleetPage({ vehicles, setVehicles, apiKey, usage, setUsage, livrePolice
           <thead>
             <tr>
               <th>Plaque</th><th>Véhicule</th><th>Année</th><th>Motorisation</th>
-              <th>Km</th><th>Achat HT</th><th>Frais HT</th><th>Vente TTC</th><th>Marge</th><th>Statut</th><th>Actions</th>
+              <th>Km</th><th>Achat HT</th><th>Frais HT</th><th>Vente HT</th><th>Marge</th><th>Statut</th><th>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -3749,6 +3743,7 @@ function CrmFiche({ client, orders, onEdit, onClose, onSave }) {
 function CrmModal({ client, onSave, onClose }) {
   const [form, setForm] = useState(client || {
     id: uid(), nom: "", prenom: "", email: "", phone: "", adresse: "",
+    code_postal: "", ville: "", pays: "France",
     statut: "prospect", vehicule_interet: "", budget: "", date_contact: today(),
     notes: "", annotations: []
   });
@@ -3781,7 +3776,19 @@ function CrmModal({ client, onSave, onClose }) {
             </div>
             <div className="form-group full">
               <label className="form-label">Adresse</label>
-              <input className="form-input" value={form.adresse} onChange={e => set("adresse", e.target.value)} />
+              <input className="form-input" value={form.adresse} onChange={e => set("adresse", e.target.value)} placeholder="N° et rue" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Code postal</label>
+              <input className="form-input" value={form.code_postal || ""} onChange={e => set("code_postal", e.target.value)} placeholder="13001" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Ville</label>
+              <input className="form-input" value={form.ville || ""} onChange={e => set("ville", e.target.value)} placeholder="Marseille" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Pays</label>
+              <input className="form-input" value={form.pays || "France"} onChange={e => set("pays", e.target.value)} />
             </div>
             <div className="form-group">
               <label className="form-label">Statut</label>
