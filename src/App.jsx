@@ -492,6 +492,20 @@ function mapCarburant(raw) {
   return CARBURANT_MAP[k] || raw;
 }
 
+// Extraire l'année depuis une date MEC (formats: "20/06/2019", "2019-06-20", "2019", etc.)
+function getYear(v) {
+  const d = v?.date_mise_en_circulation || v?.annee || "";
+  if (!d) return "";
+  const s = String(d);
+  // Format DD/MM/YYYY ou DD-MM-YYYY
+  if (s.length >= 10 && (s[2] === "/" || s[2] === "-")) return s.substring(6, 10);
+  // Format YYYY-MM-DD
+  if (s.length >= 10 && (s[4] === "-" || s[4] === "/")) return s.substring(0, 4);
+  // Juste une année
+  if (/^\d{4}$/.test(s)) return s;
+  return s;
+}
+
 async function aiLookupPlate(plate, apiKey) {
   const key = apiKey || "9a05402107mshffd01f995575592p162c8djsn2cf79c109e41";
   const host = "api-de-plaque-d-immatriculation-france.p.rapidapi.com";
@@ -514,9 +528,24 @@ async function aiLookupPlate(plate, apiKey) {
   // Debug : log les champs clés de la réponse API
   console.log("IO Car API →", { puissance: v.AWN_puissance_chevaux, fiscale: v.AWN_puissance_fiscale, co2: v.AWN_emission_co_2, kw: v.AWN_puissance_KW });
 
-  // Mapping des champs API → format interne IO Car
-  const anneeRaw = v.AWN_annee_de_debut_modele || v.AWN_annee_de_fin_modele || "";
-  const annee = anneeRaw ? parseInt(anneeRaw) : null;
+  // Date de première mise en circulation : "20-06-2019" → annee = 2019, date complète conservée
+  const dateMEC = v.AWN_date_mise_en_circulation || "";
+  const dateMEC_us = v.AWN_date_mise_en_circulation_us || ""; // format "2019-06-20"
+  // Extraire l'année depuis la date MEC (format DD-MM-YYYY ou YYYY-MM-DD)
+  let annee = "";
+  if (dateMEC_us) {
+    annee = parseInt(dateMEC_us.substring(0, 4)) || "";
+  } else if (dateMEC && dateMEC.length >= 10) {
+    annee = parseInt(dateMEC.substring(6, 10)) || "";
+  }
+  // Formater la date MEC en format français lisible DD/MM/YYYY
+  let dateMEC_fr = "";
+  if (dateMEC_us) {
+    const [y, m, d] = dateMEC_us.split("-");
+    dateMEC_fr = `${d}/${m}/${y}`;
+  } else if (dateMEC) {
+    dateMEC_fr = dateMEC.replace(/-/g, "/");
+  }
 
   return {
     marque:                   v.AWN_marque              || "",
@@ -539,7 +568,7 @@ async function aiLookupPlate(plate, apiKey) {
     vin:                      v.AWN_VIN                 || "",
     genre:                    v.AWN_genre               || "VP",
     carrosserie:              v.AWN_carrosserie         || "",
-    date_mise_en_circulation: v.AWN_date_mise_en_circulation || "",
+    date_mise_en_circulation: dateMEC_fr                || "",
     options:                  [],
   };
 }
@@ -1071,7 +1100,7 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
     // Si le véhicule a déjà un prix d'achat, on active le toggle tréso
     includeTreso: !!(parseFloat(vehicle.prix_achat) > 0),
   } : {
-    plate: "", marque: "", modele: "", finition: "", annee: new Date().getFullYear(),
+    plate: "", marque: "", modele: "", finition: "", date_mise_en_circulation: "",
     motorisation: "", carburant: "Essence", puissance_cv: "", co2: "", boite: "Manuelle 6",
     transmission: "Traction", couleur: "", couleur_int: "", nb_portes: 5, nb_places: 5,
     kilometrage: "", vin: "", date_entree: today(),
@@ -1252,10 +1281,10 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
           </div>
 
           <div className="form-grid">
-            {[["marque", "Marque *"], ["modele", "Modèle *"], ["finition", "Finition"], ["annee", "Année", "number"],
-              ["motorisation", "Motorisation"], ["puissance_cv", "Puissance (ch)", "number"], ["co2", "CO₂ (g/km)", "number"], ["boite", "Boîte"],
+            {[["marque", "Marque *"], ["modele", "Modèle *"], ["finition", "Finition"], ["date_mise_en_circulation", "Date 1ère MEC"],
+              ["motorisation", "Motorisation"], ["puissance_cv", "Puissance (ch)", "number"], ["puissance_fiscale", "Puissance fiscale (CV)", "number"], ["co2", "CO₂ (g/km)", "number"], ["boite", "Boîte"],
               ["couleur", "Couleur ext."], ["couleur_int", "Couleur int."], ["kilometrage", "Kilométrage", "number"],
-              ["vin", "N° VIN"], ["date_entree", "Date d'entrée"]].map(([k, label, type]) => (
+              ["vin", "N° VIN"], ["date_entree", "Date d'entrée (achat)"]].map(([k, label, type]) => (
                 <div className="form-group" key={k}>
                   <label className="form-label">{label}</label>
                   <input className="form-input" type={type || "text"} value={form[k] || ""} onChange={e => set(k, e.target.value)} />
@@ -1408,11 +1437,11 @@ function VehicleFiche({ v, dealer, onClose }) {
                 <div className="fiche-model">{v.modele} {v.finition}</div>
                 <div style={{ marginTop: 12 }}><PlateBadge plate={v.plate} /></div>
               </div>
-              <div className="fiche-year">{v.annee}</div>
+              <div className="fiche-year">{getYear(v)}</div>
             </div>
             <div className="fiche-specs">
               {[
-                ["Année", v.annee], ["Kilométrage", `${Number(v.kilometrage || 0).toLocaleString("fr-FR")} km`],
+                ["1ère MEC", v.date_mise_en_circulation || getYear(v)], ["Kilométrage", `${Number(v.kilometrage || 0).toLocaleString("fr-FR")} km`],
                 ["Motorisation", v.motorisation], ["Carburant", v.carburant],
                 ["Puissance", `${v.puissance_cv} ch`], ["Boîte", v.boite],
                 ["Transmission", v.transmission], ["Couleur ext.", v.couleur],
@@ -1509,7 +1538,7 @@ function FleetPage({ vehicles, setVehicles, apiKey, usage, setUsage, livrePolice
           date_entree: v.date_entree || today(),
           marque: v.marque || "",
           modele: v.modele || "",
-          annee: v.annee || "",
+          annee: getYear(v) || "",
           couleur: v.couleur || "",
           immat: v.plate || "",
           vin: v.vin || "",
@@ -1618,7 +1647,7 @@ function FleetPage({ vehicles, setVehicles, apiKey, usage, setUsage, livrePolice
                     <div style={{ fontWeight: 600 }}>{v.marque} {v.modele}</div>
                     <div style={{ fontSize: 11, color: "var(--muted)" }}>{v.finition} · {v.couleur}</div>
                   </td>
-                  <td>{v.annee}</td>
+                  <td>{getYear(v)}</td>
                   <td>
                     <div style={{ fontSize: 12 }}>{v.motorisation}</div>
                     <div style={{ fontSize: 11, color: "var(--muted)" }}>{v.carburant} · {v.puissance_cv}ch</div>
@@ -1854,10 +1883,10 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
       ...f,
       vehicle_id: id,
       vehicle_plate: v.plate,
-      vehicle_label: `${v.marque} ${v.modele} ${v.finition || ""} (${v.annee})`.trim(),
+      vehicle_label: `${v.marque} ${v.modele} ${v.finition || ""} (${getYear(v)})`.trim(),
       vehicle_data: {
         plate: v.plate, marque: v.marque, modele: v.modele, finition: v.finition,
-        annee: v.annee, vin: v.vin, carburant: v.carburant, puissance_cv: v.puissance_cv,
+        annee: getYear(v), date_mise_en_circulation: v.date_mise_en_circulation, vin: v.vin, carburant: v.carburant, puissance_cv: v.puissance_cv,
         puissance_fiscale: v.puissance_fiscale, co2: v.co2, genre: v.genre || "VP",
         kilometrage: v.kilometrage, couleur: v.couleur, motorisation: v.motorisation,
         boite: v.boite, date_entree: v.date_entree,
@@ -2053,7 +2082,7 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
               <label className="form-label">Sélectionner depuis la flotte</label>
               <select className="form-input" value={form.vehicle_id} onChange={e => selectVehicle(e.target.value)}>
                 <option value="">— Choisir un véhicule —</option>
-                {vehicles.map(v => <option key={v.id} value={v.id}>{v.plate} · {v.marque} {v.modele} {v.finition} ({v.annee})</option>)}
+                {vehicles.map(v => <option key={v.id} value={v.id}>{v.plate} · {v.marque} {v.modele} {v.finition} ({getYear(v)})</option>)}
               </select>
             </div>
             <div className="form-group full">
@@ -2319,14 +2348,14 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
                   <>
                     {[
                       ["Immatriculation", order.vehicle_data.plate],
-                      ["Date 1ère circ.", order.vehicle_data.date_entree],
-                      ["Année modèle", order.vehicle_data.annee],
-                      ["Genre", "VP"],
+                      ["Date 1ère circ.", order.vehicle_data.date_mise_en_circulation],
+                      ["Année", order.vehicle_data.annee],
+                      ["Genre", order.vehicle_data.genre || "VP"],
                       ["Marque", order.vehicle_data.marque],
                       ["Modèle", `${order.vehicle_data.modele || ""} ${order.vehicle_data.finition || ""}`.trim()],
                       ["N° série", order.vehicle_data.vin],
                       ["Énergie", order.vehicle_data.carburant],
-                      ["Puissance", order.vehicle_data.puissance_cv ? `${order.vehicle_data.puissance_cv} CV` : ""],
+                      ["Puissance", order.vehicle_data.puissance_cv ? `${order.vehicle_data.puissance_cv} ch (${order.vehicle_data.puissance_fiscale || "?"} CV)` : ""],
                       ["Kilométrage", order.vehicle_data.kilometrage ? `${Number(order.vehicle_data.kilometrage).toLocaleString("fr-FR")} km` : ""],
                       ["Options", Array.isArray(order.vehicle_data.options) ? order.vehicle_data.options.join(", ") : (order.vehicle_data.options || "")],
                     ].map(([label, val], i) => (
@@ -3218,7 +3247,7 @@ function LivrePoliceModal({ entry, nextNum, vehicles, onSave, onClose }) {
     const v = vehicles?.find(x => x.id === vid);
     if (!v) return;
     setForm(f => ({
-      ...f, marque: v.marque || "", modele: v.modele || "", annee: v.annee || "",
+      ...f, marque: v.marque || "", modele: v.modele || "", annee: getYear(v) || "",
       couleur: v.couleur || "", immat: v.plate || "", vin: v.vin || "",
       kilometrage: v.kilometrage || "", prix_achat: v.prix_achat || ""
     }));
@@ -3242,7 +3271,7 @@ function LivrePoliceModal({ entry, nextNum, vehicles, onSave, onClose }) {
               <label className="form-label">Importer depuis la flotte</label>
               <select className="form-input" onChange={e => fillFromVehicle(e.target.value)} style={{ marginTop: 4 }}>
                 <option value="">— Choisir un véhicule —</option>
-                {vehicles.map(v => <option key={v.id} value={v.id}>{v.plate} · {v.marque} {v.modele} ({v.annee})</option>)}
+                {vehicles.map(v => <option key={v.id} value={v.id}>{v.plate} · {v.marque} {v.modele} ({getYear(v)})</option>)}
               </select>
             </div>
           )}
@@ -3940,6 +3969,10 @@ function useSupabaseTable(token, garageId, table) {
       const next = typeof newDataOrFn === "function" ? newDataOrFn(prev) : newDataOrFn;
       if (!token || !garageId || token === "demo") return next;
 
+      if (table === "livre_police") {
+        console.log(`[LP Sync] prev: ${prev.length} → next: ${next.length} items`);
+      }
+
       const prevIds = new Set(prev.map(r => r.id));
       const nextIds = new Set(next.map(r => r.id));
 
@@ -3948,7 +3981,9 @@ function useSupabaseTable(token, garageId, table) {
         const old = prev.find(r => r.id === row.id);
         if (!old || JSON.stringify(old) !== JSON.stringify(row)) {
           const { id, garage_id: _g, created_at: _c, ...fields } = row;
-          sb.upsert(token, table, { id, garage_id: garageId, data: fields }).catch(() => {});
+          sb.upsert(token, table, { id, garage_id: garageId, data: fields })
+            .then(() => { if (table === "livre_police") console.log(`[LP Sync] ✅ upsert OK: ${id}`); })
+            .catch(err => console.error(`[LP Sync] ❌ upsert FAIL: ${id}`, err));
         }
       }
 
