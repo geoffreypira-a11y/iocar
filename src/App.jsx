@@ -363,16 +363,13 @@ textarea.form-input{resize:vertical;min-height:72px}
   .btn-sm{padding:5px 10px;font-size:11px}
 }
 @media print{
-  .sidebar,.hamburger,.bottom-nav,.no-print{display:none!important}
-  .modal-bg{position:static!important;background:none!important;display:block!important;overflow:visible!important}
-  .modal{position:static!important;max-height:none!important;box-shadow:none!important;border:none!important;background:none!important;width:100%!important;max-width:100%!important;overflow:visible!important}
-  .modal-hd{display:none!important}
-  .content,.shell{overflow:visible!important;display:block!important;margin:0!important;padding:0!important}
-  .page,.kpi-grid,.page-header{display:none!important}
-  .print-doc{display:block!important;padding:20px!important}
-  .fiche-print{display:block!important}
-  body{background:#fff!important;color:#000!important}
-  @page{margin:15mm}
+  body,html{background:#fff!important}
+  .sidebar,.hamburger,.bottom-nav,.no-print,.modal-hd,.kpi-grid,.page-header,.page,.nav-section,.sidebar-footer{display:none!important}
+  .print-container{position:fixed!important;top:0;left:0;right:0;bottom:0;background:#fff!important;z-index:9999;overflow:visible!important;display:block!important}
+  .print-container .modal{position:static!important;max-height:none!important;box-shadow:none!important;border:none!important;background:#fff!important;width:100%!important;max-width:100%!important;overflow:visible!important;border-radius:0!important}
+  .print-doc{display:block!important;padding:20px!important;background:#fff!important;color:#111!important}
+  .shell,.content{display:none!important}
+  @page{margin:10mm}
 }
 
 /* PRINT DOC */
@@ -1881,7 +1878,7 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
 function PrintDoc({ order, dealer, onClose, viewMode }) {
   const c = calcOrder(order);
   return (
-    <div className="modal-bg no-print" onClick={e => e.target === e.currentTarget && onClose()}>
+    <div className="modal-bg print-container" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal modal-lg" style={{ display: "flex", flexDirection: "column", maxHeight: "92vh" }}>
 
         {/* Barre fixe */}
