@@ -454,19 +454,33 @@ const STATUTS_FLEET = {
 };
 
 function calcOrder(o) {
-  const ht = parseFloat(o.prix_ht) || 0;
-  const remAmt = ht * ((parseFloat(o.remise_pct) || 0) / 100);
-  const base = ht - remAmt;
-  const fraisMiseDispoHT = parseFloat(o.frais_mise_dispo) || 0;
-  const carteGrise = parseFloat(o.carte_grise) || 0;
-  const baseTotal = base + fraisMiseDispoHT;
-  // Si sans TVA : prix saisi = TTC, TVA = 0
+  const prixVente = parseFloat(o.prix_ht) || 0; // C'est en fait le prix de vente TTC
+  const remAmt = prixVente * ((parseFloat(o.remise_pct) || 0) / 100);
+  const prixApresRemise = prixVente - remAmt;
+  const fraisMiseDispo = parseFloat(o.frais_mise_dispo) || 0;
+  const carteGrise = parseFloat(o.carte_grise) || 0; // Carte grise = hors TVA toujours
   const avecTva = o.avec_tva !== false;
-  const tvaAmt = avecTva ? baseTotal * ((parseFloat(o.tva_pct) || 20) / 100) : 0;
-  const ttc = (avecTva ? baseTotal + tvaAmt : baseTotal) + carteGrise;
+  const tvaPct = parseFloat(o.tva_pct) || 20;
+
+  // Le prix de vente + frais mise dispo = montant TTC soumis à TVA
+  const montantTTC_soumis = prixApresRemise + fraisMiseDispo;
+
+  let ht, tvaAmt;
+  if (avecTva) {
+    // TVA calculée "en dedans" : HT = TTC / (1 + taux)
+    ht = montantTTC_soumis / (1 + tvaPct / 100);
+    tvaAmt = montantTTC_soumis - ht;
+  } else {
+    // Pas de TVA (régime marge art. 297A)
+    ht = montantTTC_soumis;
+    tvaAmt = 0;
+  }
+
+  // Total TTC = montant soumis + carte grise (hors TVA)
+  const ttc = montantTTC_soumis + carteGrise;
   const encaisse = (o.paiements || []).reduce((s, p) => s + (parseFloat(p.montant) || 0), 0);
   const reste = ttc - encaisse;
-  return { ht, remAmt, base, fraisMiseDispoHT, carteGrise, baseTotal, tvaAmt, ttc, encaisse, reste, avecTva };
+  return { ht, remAmt, base: prixApresRemise, fraisMiseDispo, carteGrise, baseTotal: montantTTC_soumis, tvaAmt, ttc, encaisse, reste, avecTva, tvaPct };
 }
 
 // ─── NUMÉROTATION SÉQUENTIELLE ──────────────────────────────
@@ -2192,7 +2206,7 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
           {/* Frais & Garantie */}
           <div className="form-grid" style={{ marginBottom: 12 }}>
             <div className="form-group">
-              <label className="form-label">Frais de mise à disposition (€)</label>
+              <label className="form-label">Frais de mise à disposition TTC (€)</label>
               <input className="form-input" type="number" value={form.frais_mise_dispo ?? 180} onChange={e => set("frais_mise_dispo", parseFloat(e.target.value) || 0)} />
             </div>
             <div className="form-group">
@@ -2253,7 +2267,7 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
 
           <div className="form-grid" style={{ marginBottom: 4 }}>
             <div className="form-group">
-              <label className="form-label">Prix {form.avec_tva !== false ? "HT" : "TTC"} (€)</label>
+              <label className="form-label">Prix de vente TTC (€)</label>
               <input className="form-input" type="number" value={form.prix_ht} onChange={e => set("prix_ht", e.target.value)} />
             </div>
             <div className="form-group">
@@ -2275,7 +2289,7 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
 
           <div style={{ background: "var(--card2)", borderRadius: 8, padding: "14px 16px", marginBottom: 16, display: "flex", gap: 24, flexWrap: "wrap" }}>
             {(c.avecTva
-              ? [["Base HT", fmtDec(c.baseTotal)], ["TVA", fmtDec(c.tvaAmt)], c.carteGrise > 0 ? ["Carte grise", fmtDec(c.carteGrise)] : null, ["Total TTC", fmtDec(c.ttc)]].filter(Boolean)
+              ? [["HT", fmtDec(c.ht)], ["TVA " + (c.tvaPct || 20) + "%", fmtDec(c.tvaAmt)], c.carteGrise > 0 ? ["Carte grise (hors TVA)", fmtDec(c.carteGrise)] : null, ["Total TTC", fmtDec(c.ttc)]].filter(Boolean)
               : [["Prix TTC", fmtDec(c.ttc)], ["TVA", "Non applicable"], ["Régime", "Art. 297A CGI"]]
             ).map(([l, v]) => (
               <div key={l}>
@@ -2441,7 +2455,7 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
             </div>
             <table className="pdoc-table">
               <thead>
-                <tr><th>Description véhicule</th><th>Plaque</th><th>VIN / Réf.</th><th style={{ textAlign: "right" }}>{c.avecTva ? "Prix HT" : "Prix TTC"}</th></tr>
+                <tr><th>Description véhicule</th><th>Plaque</th><th>VIN / Réf.</th><th style={{ textAlign: "right" }}>Prix TTC</th></tr>
               </thead>
               <tbody>
                 {/* Désignation détaillée du véhicule */}
@@ -2468,7 +2482,7 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
                           {val || "—"}
                         </td>
                         {i === 0 ? (
-                          <td rowSpan={11} style={{ textAlign: "right", fontWeight: 700, verticalAlign: "middle", borderBottom: "none" }}>{fmtDec(c.ht)}</td>
+                          <td rowSpan={11} style={{ textAlign: "right", fontWeight: 700, verticalAlign: "middle", borderBottom: "none" }}>{fmtDec(c.base)}</td>
                         ) : null}
                       </tr>
                     ))}
@@ -2478,7 +2492,7 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
                     <td style={{ fontWeight: 700 }}>{order.vehicle_label || "Véhicule"}</td>
                     <td><PlateBadge plate={order.vehicle_plate} /></td>
                     <td style={{ fontFamily: "monospace", fontSize: 11 }}>—</td>
-                    <td style={{ textAlign: "right", fontWeight: 700 }}>{fmtDec(c.ht)}</td>
+                    <td style={{ textAlign: "right", fontWeight: 700 }}>{fmtDec(c.base)}</td>
                   </tr>
                 )}
                 {/* Frais de mise à disposition */}
@@ -2499,15 +2513,16 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
               <div className="pdoc-totals-box">
                 {c.avecTva ? (
                   <>
-                    <div className="pdoc-trow"><span>Montant HT</span><span>{fmtDec(c.baseTotal)}</span></div>
-                    <div className="pdoc-trow"><span>TVA {order.tva_pct}%</span><span>{fmtDec(c.tvaAmt)}</span></div>
+                    <div className="pdoc-trow"><span>Montant HT</span><span>{fmtDec(c.ht)}</span></div>
+                    <div className="pdoc-trow"><span>TVA {c.tvaPct || 20}%</span><span>{fmtDec(c.tvaAmt)}</span></div>
                     {c.remAmt > 0 && <div className="pdoc-trow" style={{ color: "#e05252" }}><span>Remise</span><span>- {fmtDec(c.remAmt)}</span></div>}
-                    {c.carteGrise > 0 && <div className="pdoc-trow"><span>Carte grise</span><span>{fmtDec(c.carteGrise)}</span></div>}
+                    <div className="pdoc-trow"><span>Sous-total TTC</span><span>{fmtDec(c.baseTotal)}</span></div>
+                    {c.carteGrise > 0 && <div className="pdoc-trow"><span>Carte grise (hors TVA)</span><span>{fmtDec(c.carteGrise)}</span></div>}
                     <div className="pdoc-trow big"><span>TOTAL TTC</span><span>{fmtDec(c.ttc)}</span></div>
                   </>
                 ) : (
                   <>
-                    <div className="pdoc-trow"><span>Montant TTC</span><span>{fmtDec(c.ttc)}</span></div>
+                    <div className="pdoc-trow"><span>Montant TTC</span><span>{fmtDec(c.baseTotal)}</span></div>
                     <div className="pdoc-trow" style={{ fontSize: 10, color: "#aaa" }}><span>TVA non applicable</span><span>Art. 297A CGI</span></div>
                     {c.carteGrise > 0 && <div className="pdoc-trow"><span>Carte grise</span><span>{fmtDec(c.carteGrise)}</span></div>}
                     <div className="pdoc-trow big"><span>TOTAL TTC</span><span>{fmtDec(c.ttc)}</span></div>
