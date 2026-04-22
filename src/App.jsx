@@ -1665,11 +1665,13 @@ function FleetPage({ vehicles, setVehicles, orders, apiKey, usage, setUsage, liv
 
     // Véhicule passé "livré" → retirer de la flotte + date sortie LP avec infos acheteur
     if (v.statut === "livré") {
-      // Trouver la facture/BC liée pour récupérer le client
-      const linkedOrder = (orders || []).find(o => o.vehicle_id === v.id);
+      // Trouver la facture/BC liée pour récupérer le client (essayer par vehicle_id puis par plaque)
+      const linkedOrder = (orders || []).find(o => o.vehicle_id === v.id) 
+        || (orders || []).find(o => v.plate && o.vehicle_plate && o.vehicle_plate === v.plate);
       const clientName = linkedOrder?.client?.name || "";
       const clientAddress = linkedOrder?.client?.address || "";
       const clientPhone = linkedOrder?.client?.phone || "";
+      console.log("🚗 Livré → recherche client:", { vehicleId: v.id, plate: v.plate, found: !!linkedOrder, clientName, ordersCount: (orders || []).length });
       
       if (setLivrePolice) {
         setLivrePolice(currentLP => {
@@ -2519,9 +2521,6 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
                     <td style={{ textAlign: "right", fontWeight: 600, fontSize: 11 }}>{fmtDec(c.avecTva ? (parseFloat(order.frais_mise_dispo) || 0) / (1 + (c.tvaPct || 20) / 100) : (parseFloat(order.frais_mise_dispo) || 0))}</td>
                   </tr>
                 )}
-                {c.remAmt > 0 && (
-                  <tr><td colSpan={3} style={{ color: "#e05252" }}>Remise ({order.remise_pct}%)</td><td style={{ textAlign: "right", color: "#e05252" }}>- {fmtDec(c.remAmt)}</td></tr>
-                )}
               </tbody>
             </table>
 
@@ -2532,8 +2531,6 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
                   <>
                     <div className="pdoc-trow"><span>Montant HT</span><span>{fmtDec(c.ht)}</span></div>
                     <div className="pdoc-trow"><span>TVA {c.tvaPct || 20}%</span><span>{fmtDec(c.tvaAmt)}</span></div>
-                    {c.remAmt > 0 && <div className="pdoc-trow" style={{ color: "#e05252" }}><span>Remise</span><span>- {fmtDec(c.remAmt)}</span></div>}
-                    <div className="pdoc-trow"><span>Sous-total TTC</span><span>{fmtDec(c.baseTotal)}</span></div>
                     {c.carteGrise > 0 && <div className="pdoc-trow"><span>Carte grise (hors TVA)</span><span>{fmtDec(c.carteGrise)}</span></div>}
                     <div className="pdoc-trow big"><span>TOTAL TTC</span><span>{fmtDec(c.ttc)}</span></div>
                   </>
