@@ -1587,7 +1587,7 @@ function VehicleFiche({ v, dealer, onClose }) {
 /* ═══════════════════════════════════════════════════════════════
    FLEET PAGE
 ═══════════════════════════════════════════════════════════════ */
-function FleetPage({ vehicles, setVehicles, apiKey, usage, setUsage, livrePolice, setLivrePolice, viewMode, garageId }) {
+function FleetPage({ vehicles, setVehicles, orders, apiKey, usage, setUsage, livrePolice, setLivrePolice, viewMode, garageId }) {
   const [modal, setModal] = useState(null);
   const [fiche, setFiche] = useState(null);
   const [search, setSearch] = useState("");
@@ -1599,55 +1599,55 @@ function FleetPage({ vehicles, setVehicles, apiKey, usage, setUsage, livrePolice
   // ── AUTO-CRÉATION LP : surveille les véhicules et crée les entrées manquantes ──
   const prevVehicleIdsRef = React.useRef(new Set());
   React.useEffect(() => {
-    if (!setLivrePolice || !vehicles || !livrePolice) return;
+    if (!setLivrePolice || !vehicles) return;
     const prevIds = prevVehicleIdsRef.current;
     const newVehicles = vehicles.filter(v => !prevIds.has(v.id));
     
     if (newVehicles.length > 0) {
-      let updated = false;
-      const lpCopy = [...livrePolice];
-      
-      for (const v of newVehicles) {
-        // Vérifier que le véhicule n'est pas déjà dans le LP
-        const alreadyInLP = lpCopy.find(e => 
-          (v.plate && e.immat && e.immat === v.plate) || 
-          (v.id && e.vehicle_id && e.vehicle_id === v.id)
-        );
-        if (alreadyInLP) continue;
+      setLivrePolice(currentLP => {
+        const lp = currentLP || [];
+        let lpCopy = [...lp];
+        let updated = false;
         
-        const nums = lpCopy.map(e => parseInt(e.num_ordre) || 0);
-        const nextNum = nums.length > 0 ? Math.max(0, ...nums) + 1 : 1;
+        for (const v of newVehicles) {
+          const alreadyInLP = lpCopy.find(e => 
+            (v.plate && e.immat && e.immat === v.plate) || 
+            (v.id && e.vehicle_id && e.vehicle_id === v.id)
+          );
+          if (alreadyInLP) continue;
+          
+          const nums = lpCopy.map(e => parseInt(e.num_ordre) || 0);
+          const nextNum = nums.length > 0 ? Math.max(0, ...nums) + 1 : 1;
+          
+          const newEntry = {
+            id: crypto.randomUUID ? crypto.randomUUID() : `lp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            vehicle_id: v.id,
+            num_ordre: nextNum,
+            date_entree: v.date_entree || today(),
+            marque: v.marque || "",
+            modele: v.modele || "",
+            annee: getYear(v) || "",
+            couleur: v.couleur || "",
+            immat: v.plate || "",
+            vin: v.vin || "",
+            kilometrage: v.kilometrage || "",
+            pays_origine: "France",
+            prix_achat: v.prix_achat || "",
+            vendeur_type: "particulier",
+            vendeur_nom: "", vendeur_prenom: "", vendeur_adresse: "",
+            vendeur_piece_type: "CNI", vendeur_piece_id: "", vendeur_piece_date: "", vendeur_piece_autorite: "",
+            mode_reglement: "Virement",
+            date_sortie: "", acheteur_nom: "", acheteur_adresse: "",
+            notes: "Entrée créée automatiquement depuis la flotte — à compléter",
+            _incomplete: true,
+          };
+          lpCopy.push(newEntry);
+          updated = true;
+          console.log(`✅ LP auto-créé: ${v.marque} ${v.modele} (${v.plate || "sans plaque"}) → N°${nextNum}`);
+        }
         
-        const newEntry = {
-          id: crypto.randomUUID ? crypto.randomUUID() : `lp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          vehicle_id: v.id,
-          num_ordre: nextNum,
-          date_entree: v.date_entree || today(),
-          marque: v.marque || "",
-          modele: v.modele || "",
-          annee: getYear(v) || "",
-          couleur: v.couleur || "",
-          immat: v.plate || "",
-          vin: v.vin || "",
-          kilometrage: v.kilometrage || "",
-          pays_origine: "France",
-          prix_achat: v.prix_achat || "",
-          vendeur_type: "particulier",
-          vendeur_nom: "", vendeur_prenom: "", vendeur_adresse: "",
-          vendeur_piece_type: "CNI", vendeur_piece_id: "", vendeur_piece_date: "", vendeur_piece_autorite: "",
-          mode_reglement: "Virement",
-          date_sortie: "", acheteur_nom: "", acheteur_adresse: "",
-          notes: "Entrée créée automatiquement depuis la flotte — à compléter",
-          _incomplete: true,
-        };
-        lpCopy.push(newEntry);
-        updated = true;
-        console.log(`✅ LP auto-créé: ${v.marque} ${v.modele} (${v.plate || "sans plaque"}) → N°${nextNum}`);
-      }
-      
-      if (updated) {
-        setLivrePolice(lpCopy);
-      }
+        return updated ? lpCopy : lp;
+      });
     }
     
     // Mettre à jour le ref avec tous les IDs actuels
@@ -1663,15 +1663,32 @@ function FleetPage({ vehicles, setVehicles, apiKey, usage, setUsage, livrePolice
   const save = (v) => {
     const exists = vehicles.find(x => x.id === v.id);
 
-    // Véhicule passé "livré" → retirer de la flotte + date sortie LP
+    // Véhicule passé "livré" → retirer de la flotte + date sortie LP avec infos acheteur
     if (v.statut === "livré") {
-      if (setLivrePolice && livrePolice) {
-        const lpEntry = livrePolice.find(e => e.vehicle_id === v.id || e.immat === v.plate);
-        if (lpEntry && !lpEntry.date_sortie) {
-          setLivrePolice(livrePolice.map(e =>
-            e.id === lpEntry.id ? { ...e, date_sortie: today(), acheteur_nom: v._acheteur_nom || "" } : e
-          ));
-        }
+      // Trouver la facture/BC liée pour récupérer le client
+      const linkedOrder = (orders || []).find(o => o.vehicle_id === v.id);
+      const clientName = linkedOrder?.client?.name || "";
+      const clientAddress = linkedOrder?.client?.address || "";
+      const clientPhone = linkedOrder?.client?.phone || "";
+      
+      if (setLivrePolice) {
+        setLivrePolice(currentLP => {
+          const lp = currentLP || [];
+          const lpEntry = lp.find(e => e.vehicle_id === v.id || (v.plate && e.immat === v.plate));
+          if (lpEntry && !lpEntry.date_sortie) {
+            console.log("🚗 Livré → LP mise à jour:", v.plate, "→ acheteur:", clientName);
+            return lp.map(e =>
+              e.id === lpEntry.id ? { 
+                ...e, 
+                date_sortie: today(), 
+                acheteur_nom: clientName,
+                acheteur_adresse: clientAddress,
+                acheteur_phone: clientPhone,
+              } : e
+            );
+          }
+          return lp;
+        });
       }
       // Supprimer de la flotte — le véhicule est parti
       setVehicles(vehicles.filter(x => x.id !== v.id));
@@ -2455,7 +2472,7 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
             </div>
             <table className="pdoc-table">
               <thead>
-                <tr><th>Description véhicule</th><th>Plaque</th><th>VIN / Réf.</th><th style={{ textAlign: "right" }}>Prix TTC</th></tr>
+                <tr><th>Description véhicule</th><th>Plaque</th><th>VIN / Réf.</th><th style={{ textAlign: "right" }}>Prix HT</th></tr>
               </thead>
               <tbody>
                 {/* Désignation détaillée du véhicule */}
@@ -2482,7 +2499,7 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
                           {val || "—"}
                         </td>
                         {i === 0 ? (
-                          <td rowSpan={11} style={{ textAlign: "right", fontWeight: 700, verticalAlign: "middle", borderBottom: "none" }}>{fmtDec(c.base)}</td>
+                          <td rowSpan={11} style={{ textAlign: "right", fontWeight: 700, verticalAlign: "middle", borderBottom: "none" }}>{fmtDec(c.avecTva ? c.base / (1 + (c.tvaPct || 20) / 100) : c.base)}</td>
                         ) : null}
                       </tr>
                     ))}
@@ -2492,14 +2509,14 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
                     <td style={{ fontWeight: 700 }}>{order.vehicle_label || "Véhicule"}</td>
                     <td><PlateBadge plate={order.vehicle_plate} /></td>
                     <td style={{ fontFamily: "monospace", fontSize: 11 }}>—</td>
-                    <td style={{ textAlign: "right", fontWeight: 700 }}>{fmtDec(c.base)}</td>
+                    <td style={{ textAlign: "right", fontWeight: 700 }}>{fmtDec(c.avecTva ? c.base / (1 + (c.tvaPct || 20) / 100) : c.base)}</td>
                   </tr>
                 )}
                 {/* Frais de mise à disposition */}
                 {(parseFloat(order.frais_mise_dispo) || 0) > 0 && (
                   <tr style={{ borderTop: "1px solid #e8e8e8" }}>
                     <td colSpan={3} style={{ fontWeight: 600, fontSize: 11 }}>Frais de mise à disposition</td>
-                    <td style={{ textAlign: "right", fontWeight: 600, fontSize: 11 }}>{fmtDec(parseFloat(order.frais_mise_dispo) || 0)}</td>
+                    <td style={{ textAlign: "right", fontWeight: 600, fontSize: 11 }}>{fmtDec(c.avecTva ? (parseFloat(order.frais_mise_dispo) || 0) / (1 + (c.tvaPct || 20) / 100) : (parseFloat(order.frais_mise_dispo) || 0))}</td>
                   </tr>
                 )}
                 {c.remAmt > 0 && (
@@ -5449,7 +5466,7 @@ export default function App() {
 
           <main className={`content${(viewMode === "trial" || viewMode === "subscriber") ? " demo-offset" : ""}`}>
             {tab === "dashboard"   && <Dashboard vehicles={activeVehicles} setVehicles={setVehiclesRaw} orders={activeOrders} setTab={setTab} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} />}
-            {tab === "fleet"       && <FleetPage vehicles={activeVehicles} setVehicles={setVehiclesRaw} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} livrePolice={activeLivrePolice} setLivrePolice={setLivrePoliceRaw} viewMode={viewMode} garageId={garageId} />}
+            {tab === "fleet"       && <FleetPage vehicles={activeVehicles} setVehicles={setVehiclesRaw} orders={activeOrders} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} livrePolice={activeLivrePolice} setLivrePolice={setLivrePoliceRaw} viewMode={viewMode} garageId={garageId} />}
             {tab === "orders"      && <OrdersPage orders={activeOrders} setOrders={setOrdersRaw} vehicles={activeVehicles} setVehiclesRaw={setVehiclesRaw} dealer={dealer} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} clients={activeClients} setClients={setClientsRaw} viewMode={viewMode} />}
             {tab === "crm"         && <CrmPage clients={activeClients} setClients={setClientsRaw} orders={activeOrders} viewMode={viewMode} />}
             {tab === "livrepolice" && (viewMode === "trial" ? (
