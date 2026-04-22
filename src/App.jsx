@@ -614,6 +614,93 @@ function useStored(key, def) {
 /* ═══════════════════════════════════════════════════════════════
    PLATE BADGE
 ═══════════════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════════════
+   SIGNATURE PAD — Canvas tactile pour signature manuscrite
+═══════════════════════════════════════════════════════════════ */
+function SignaturePad({ label, onSave, savedImg }) {
+  const canvasRef = React.useRef(null);
+  const [drawing, setDrawing] = useState(false);
+  const [hasDrawn, setHasDrawn] = useState(false);
+
+  const getPos = (e) => {
+    const rect = canvasRef.current.getBoundingClientRect();
+    const touch = e.touches ? e.touches[0] : e;
+    return { x: touch.clientX - rect.left, y: touch.clientY - rect.top };
+  };
+
+  const startDraw = (e) => {
+    e.preventDefault();
+    const ctx = canvasRef.current.getContext("2d");
+    const pos = getPos(e);
+    ctx.beginPath();
+    ctx.moveTo(pos.x, pos.y);
+    setDrawing(true);
+  };
+
+  const draw = (e) => {
+    if (!drawing) return;
+    e.preventDefault();
+    const ctx = canvasRef.current.getContext("2d");
+    const pos = getPos(e);
+    ctx.lineTo(pos.x, pos.y);
+    ctx.strokeStyle = "#222";
+    ctx.lineWidth = 2;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.stroke();
+    setHasDrawn(true);
+  };
+
+  const endDraw = (e) => {
+    if (e) e.preventDefault();
+    setDrawing(false);
+  };
+
+  const clear = () => {
+    const ctx = canvasRef.current.getContext("2d");
+    ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+    setHasDrawn(false);
+    if (onSave) onSave(null);
+  };
+
+  const save = () => {
+    if (!hasDrawn) return;
+    const dataUrl = canvasRef.current.toDataURL("image/png");
+    if (onSave) onSave(dataUrl);
+  };
+
+  if (savedImg) {
+    return (
+      <div style={{ textAlign: "center" }}>
+        <div style={{ fontSize: 9, letterSpacing: 1, textTransform: "uppercase", color: "var(--muted)", marginBottom: 6 }}>{label}</div>
+        <img src={savedImg} alt="Signature" style={{ maxWidth: 240, maxHeight: 80, border: "1px solid var(--border2)", borderRadius: 6, background: "#fff" }} />
+        <div style={{ marginTop: 6 }}>
+          <button className="btn btn-ghost btn-xs" onClick={() => onSave(null)}>✕ Effacer</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div style={{ fontSize: 9, letterSpacing: 1, textTransform: "uppercase", color: "var(--muted)", marginBottom: 6 }}>{label}</div>
+      <canvas
+        ref={canvasRef}
+        width={280}
+        height={90}
+        style={{ border: "1px solid var(--border2)", borderRadius: 6, background: "#fff", cursor: "crosshair", touchAction: "none", display: "block" }}
+        onMouseDown={startDraw} onMouseMove={draw} onMouseUp={endDraw} onMouseLeave={endDraw}
+        onTouchStart={startDraw} onTouchMove={draw} onTouchEnd={endDraw}
+      />
+      <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+        {hasDrawn && <button className="btn btn-primary btn-xs" onClick={save}>✅ Valider</button>}
+        {hasDrawn && <button className="btn btn-ghost btn-xs" onClick={clear}>🗑 Effacer</button>}
+        {!hasDrawn && <div style={{ fontSize: 10, color: "var(--muted)" }}>Signez dans le cadre ci-dessus</div>}
+      </div>
+    </div>
+  );
+}
+
 function PlateBadge({ plate }) {
   if (!plate) return <span style={{ color: "var(--muted)" }}>—</span>;
   return (
@@ -631,6 +718,16 @@ function PlateBadge({ plate }) {
    CALCULATEUR CARTE GRISE (ESTIMATION 2026)
 ═══════════════════════════════════════════════════════════════ */
 const TARIFS_REGIONS_2026 = {
+  // Tarifs VP par CV fiscal — source : service-public.fr 2026
+  "Île-de-France": 54.95, "Auvergne-Rhône-Alpes": 43.00, "Bourgogne-Franche-Comté": 51.00,
+  "Bretagne": 55.00, "Centre-Val de Loire": 55.00, "Corse": 43.00,
+  "Grand Est": 48.00, "Hauts-de-France": 36.20, "Normandie": 46.15,
+  "Nouvelle-Aquitaine": 45.00, "Occitanie": 47.00, "Pays de la Loire": 48.00,
+  "Provence-Alpes-Côte d'Azur": 51.20,
+};
+
+// CTTE (utilitaires) : même tarif dans la plupart des régions
+const TARIFS_CTTE_2026 = {
   "Île-de-France": 54.95, "Auvergne-Rhône-Alpes": 43.00, "Bourgogne-Franche-Comté": 51.00,
   "Bretagne": 55.00, "Centre-Val de Loire": 55.00, "Corse": 43.00,
   "Grand Est": 48.00, "Hauts-de-France": 36.20, "Normandie": 46.15,
@@ -663,48 +760,43 @@ function getRegionFromPostal(address) {
   return DEPT_TO_REGION[dept] || null;
 }
 
-function calcCarteGrise({ cv, energie, co2, region }) {
-  const tarifCV = TARIFS_REGIONS_2026[region] || 46;
-  const isElec = energie?.toLowerCase() === "electrique" || energie?.toLowerCase() === "électrique";
+function calcCarteGrise({ cv, energie, region, genre }) {
+  const isCTTE = (genre || "").toUpperCase() === "CTTE";
+  const tarifs = isCTTE ? TARIFS_CTTE_2026 : TARIFS_REGIONS_2026;
+  const tarifCV = tarifs[region] || 46;
+  const isElec = /[eé]lectrique/i.test(energie || "");
   // Y1 : taxe régionale (exonération 100% électrique dans la plupart des régions)
   const y1 = isElec ? 0 : (cv || 0) * tarifCV;
-  // Y3 : malus CO2 simplifié 2026
-  let y3 = 0;
-  if (!isElec && co2 > 0) {
-    if (co2 > 117) y3 = (co2 - 117) * 50;
-    if (co2 > 150) y3 = Math.max(y3, (150 - 117) * 50 + (co2 - 150) * 170);
-    if (co2 > 200) y3 = Math.min(y3, 60000);
-  }
-  // Y4 + Y5 fixes
+  // Y3 : PAS de malus CO2 pour les véhicules d'occasion
+  const y3 = 0;
+  // Y4 : taxe de gestion (11€ fixe)
   const y4 = 11;
+  // Y5 : redevance d'acheminement (2.76€ fixe)
   const y5 = 2.76;
   const total = y1 + y3 + y4 + y5;
-  return { y1, y3, y4, y5, total, tarifCV, isElec };
+  return { y1, y3, y4, y5, total, tarifCV, isElec, isCTTE };
 }
 
 function CarteGriseCalc({ vehicleData, clientAddress, onApply }) {
-  // Pré-remplir depuis le véhicule sélectionné si disponible
-  // La carte grise utilise la puissance FISCALE, pas la puissance DIN
   const [cv, setCv] = useState(parseInt(vehicleData?.puissance_fiscale) || parseInt(vehicleData?.puissance_cv) || 5);
   const detectedRegion = getRegionFromPostal(clientAddress);
   const [region, setRegion] = useState(detectedRegion || "Provence-Alpes-Côte d'Azur");
-  const [co2, setCo2] = useState(parseInt(vehicleData?.co2) || 0);
   const [energie, setEnergie] = useState(vehicleData?.carburant?.toLowerCase() || "essence");
+  const [genre, setGenre] = useState(vehicleData?.genre || "VP");
 
-  // Mettre à jour quand le véhicule ou client change
   React.useEffect(() => {
     if (vehicleData?.puissance_fiscale) setCv(parseInt(vehicleData.puissance_fiscale) || 5);
     else if (vehicleData?.puissance_cv) setCv(parseInt(vehicleData.puissance_cv) || 5);
     if (vehicleData?.carburant) setEnergie(vehicleData.carburant.toLowerCase());
-    if (vehicleData?.co2) setCo2(parseInt(vehicleData.co2) || 0);
-  }, [vehicleData?.puissance_fiscale, vehicleData?.puissance_cv, vehicleData?.carburant, vehicleData?.co2]);
+    if (vehicleData?.genre) setGenre(vehicleData.genre);
+  }, [vehicleData?.puissance_fiscale, vehicleData?.puissance_cv, vehicleData?.carburant, vehicleData?.genre]);
 
   React.useEffect(() => {
     const r = getRegionFromPostal(clientAddress);
     if (r) setRegion(r);
   }, [clientAddress]);
 
-  const cg = calcCarteGrise({ cv, energie, co2, region });
+  const cg = calcCarteGrise({ cv, energie, region, genre });
 
   return (
     <div>
@@ -716,7 +808,7 @@ function CarteGriseCalc({ vehicleData, clientAddress, onApply }) {
           </select>
         </div>
         <div className="form-group">
-          <label className="form-label">Puissance (CV)</label>
+          <label className="form-label">Puissance fiscale (CV)</label>
           <input className="form-input" type="number" min={1} max={100} value={cv} onChange={e => setCv(parseInt(e.target.value) || 1)} />
         </div>
         <div className="form-group">
@@ -729,27 +821,26 @@ function CarteGriseCalc({ vehicleData, clientAddress, onApply }) {
           </select>
         </div>
         <div className="form-group">
-          <label className="form-label">CO₂ (g/km)</label>
-          <input className="form-input" type="number" min={0} max={400} value={co2} onChange={e => setCo2(parseInt(e.target.value) || 0)} />
+          <label className="form-label">Genre {vehicleData?.genre && <span style={{ fontSize: 9, color: "var(--green)" }}>✓ auto</span>}</label>
+          <select className="form-input" value={genre} onChange={e => setGenre(e.target.value)} style={{ fontSize: 11 }}>
+            <option value="VP">VP — Tourisme</option>
+            <option value="CTTE">CTTE — Utilitaire</option>
+          </select>
         </div>
       </div>
 
       <div style={{ background: "var(--card2)", borderRadius: 8, padding: "12px 16px", border: "1px solid var(--border2)" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 6 }}>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, padding: "3px 0" }}>
-            <span style={{ color: "var(--muted)" }}>Y.1 Taxe régionale ({cv} CV × {cg.tarifCV.toFixed(2)}€)</span>
+            <span style={{ color: "var(--muted)" }}>Y.1 Taxe régionale ({cv} CV × {cg.tarifCV.toFixed(2)}€) {cg.isCTTE ? "CTTE" : "VP"}</span>
             <span style={{ fontWeight: 600 }}>{fmt(cg.y1)}</span>
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, padding: "3px 0" }}>
-            <span style={{ color: "var(--muted)" }}>Y.3 Malus CO₂</span>
-            <span style={{ fontWeight: 600, color: cg.y3 > 0 ? "var(--red)" : "var(--green)" }}>{cg.y3 > 0 ? fmt(cg.y3) : "0,00 €"}</span>
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, padding: "3px 0" }}>
-            <span style={{ color: "var(--muted)" }}>Y.4 Gestion</span>
+            <span style={{ color: "var(--muted)" }}>Y.4 Taxe de gestion</span>
             <span style={{ fontWeight: 600 }}>{fmt(cg.y4)}</span>
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, padding: "3px 0" }}>
-            <span style={{ color: "var(--muted)" }}>Y.5 Acheminement</span>
+            <span style={{ color: "var(--muted)" }}>Y.5 Redevance acheminement</span>
             <span style={{ fontWeight: 600 }}>{fmt(cg.y5)}</span>
           </div>
         </div>
@@ -763,7 +854,7 @@ function CarteGriseCalc({ vehicleData, clientAddress, onApply }) {
           </div>
         </div>
         {cg.isElec && <div style={{ fontSize: 10, color: "var(--green)", marginTop: 4 }}>🔋 Véhicule électrique : exonération taxe régionale</div>}
-        <div style={{ fontSize: 9, color: "var(--muted)", marginTop: 4 }}>⚠️ Estimation indicative — tarifs susceptibles de varier</div>
+        <div style={{ fontSize: 9, color: "var(--muted)", marginTop: 4 }}>⚠️ Véhicule d'occasion — pas de malus CO₂</div>
       </div>
     </div>
   );
@@ -1203,7 +1294,7 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
             <div style={{ fontSize: 20 }}>🏷</div>
             <div style={{ flex: 1, minWidth: 160 }}>
               <div style={{ fontSize: 10, letterSpacing: 2, textTransform: "uppercase", color: "var(--green)", fontWeight: 700, marginBottom: 6 }}>
-                Prix de vente HT
+                Prix de vente TTC
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <input className="form-input" type="number" placeholder="0"
@@ -1350,7 +1441,7 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
                             docs[idx] = { ...docs[idx], date: e.target.value };
                             set("documents", docs);
                           }} />
-                        <input className="form-input" placeholder="Montant HT (€)" value={doc.montant} style={{ width: 110, padding: "5px 8px", fontSize: 11 }}
+                        <input className="form-input" placeholder="Montant TTC (€)" value={doc.montant} style={{ width: 110, padding: "5px 8px", fontSize: 11 }}
                           onChange={e => {
                             const docs = [...(form.documents || [])];
                             docs[idx] = { ...docs[idx], montant: e.target.value };
@@ -1491,6 +1582,64 @@ function FleetPage({ vehicles, setVehicles, apiKey, usage, setUsage, livrePolice
   const [showDemoLimit, setShowDemoLimit] = useState(false);
   const [dealer] = useState({ name: "AUTO PRESTIGE", address: "12 Av. de la République\n75011 Paris", phone: "01 23 45 67 89" });
 
+  // ── AUTO-CRÉATION LP : surveille les véhicules et crée les entrées manquantes ──
+  const prevVehicleIdsRef = React.useRef(new Set());
+  React.useEffect(() => {
+    if (!setLivrePolice || !vehicles || !livrePolice) return;
+    const prevIds = prevVehicleIdsRef.current;
+    const newVehicles = vehicles.filter(v => !prevIds.has(v.id));
+    
+    if (newVehicles.length > 0) {
+      let updated = false;
+      const lpCopy = [...livrePolice];
+      
+      for (const v of newVehicles) {
+        // Vérifier que le véhicule n'est pas déjà dans le LP
+        const alreadyInLP = lpCopy.find(e => 
+          (v.plate && e.immat && e.immat === v.plate) || 
+          (v.id && e.vehicle_id && e.vehicle_id === v.id)
+        );
+        if (alreadyInLP) continue;
+        
+        const nums = lpCopy.map(e => parseInt(e.num_ordre) || 0);
+        const nextNum = nums.length > 0 ? Math.max(0, ...nums) + 1 : 1;
+        
+        const newEntry = {
+          id: crypto.randomUUID ? crypto.randomUUID() : `lp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          vehicle_id: v.id,
+          num_ordre: nextNum,
+          date_entree: v.date_entree || today(),
+          marque: v.marque || "",
+          modele: v.modele || "",
+          annee: getYear(v) || "",
+          couleur: v.couleur || "",
+          immat: v.plate || "",
+          vin: v.vin || "",
+          kilometrage: v.kilometrage || "",
+          pays_origine: "France",
+          prix_achat: v.prix_achat || "",
+          vendeur_type: "particulier",
+          vendeur_nom: "", vendeur_prenom: "", vendeur_adresse: "",
+          vendeur_piece_type: "CNI", vendeur_piece_id: "", vendeur_piece_date: "", vendeur_piece_autorite: "",
+          mode_reglement: "Virement",
+          date_sortie: "", acheteur_nom: "", acheteur_adresse: "",
+          notes: "Entrée créée automatiquement depuis la flotte — à compléter",
+          _incomplete: true,
+        };
+        lpCopy.push(newEntry);
+        updated = true;
+        console.log(`✅ LP auto-créé: ${v.marque} ${v.modele} (${v.plate || "sans plaque"}) → N°${nextNum}`);
+      }
+      
+      if (updated) {
+        setLivrePolice(lpCopy);
+      }
+    }
+    
+    // Mettre à jour le ref avec tous les IDs actuels
+    prevVehicleIdsRef.current = new Set(vehicles.map(v => v.id));
+  }, [vehicles]); // Se déclenche quand les véhicules changent
+
   const filtered = vehicles.filter(v => {
     const matchS = !search || `${v.marque} ${v.modele} ${v.plate} ${v.finition}`.toLowerCase().includes(search.toLowerCase());
     const matchF = filter === "all" || v.statut === filter;
@@ -1519,57 +1668,6 @@ function FleetPage({ vehicles, setVehicles, apiKey, usage, setUsage, livrePolice
     // Véhicule passé "vendu" → reste dans la flotte, pas de date sortie LP (pas encore livré)
     const next = exists ? vehicles.map(x => x.id === v.id ? v : x) : [v, ...vehicles];
     setVehicles(next);
-
-    // Création automatique dans le livre de police pour tout NOUVEAU véhicule
-    if (!exists && setLivrePolice) {
-      // Utiliser la forme fonctionnelle pour avoir le state le plus récent
-      setLivrePolice(currentLP => {
-        const lp = currentLP || [];
-        const alreadyInLP = lp.find(e => e.immat === v.plate || e.vehicle_id === v.id);
-        if (alreadyInLP) return lp;
-
-        const nums = lp.map(e => parseInt(e.num_ordre) || 0);
-        const nextNum = nums.length > 0 ? Math.max(0, ...nums) + 1 : 1;
-
-        const newEntry = {
-          id: crypto.randomUUID ? crypto.randomUUID() : `lp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          vehicle_id: v.id,
-          num_ordre: nextNum,
-          date_entree: v.date_entree || today(),
-          marque: v.marque || "",
-          modele: v.modele || "",
-          annee: getYear(v) || "",
-          couleur: v.couleur || "",
-          immat: v.plate || "",
-          vin: v.vin || "",
-          kilometrage: v.kilometrage || "",
-          pays_origine: "France",
-          prix_achat: v.prix_achat || "",
-          vendeur_type: "particulier",
-          vendeur_nom: "", vendeur_prenom: "", vendeur_adresse: "",
-          vendeur_piece_type: "CNI", vendeur_piece_id: "", vendeur_piece_date: "", vendeur_piece_autorite: "",
-          mode_reglement: "Virement",
-          date_sortie: "", acheteur_nom: "", acheteur_adresse: "",
-          notes: "Entrée créée automatiquement depuis la flotte — à compléter",
-          _incomplete: true,
-        };
-
-        const missing = [];
-        if (!v.plate) missing.push("plaque d'immatriculation");
-        if (!v.vin) missing.push("numéro VIN");
-        if (!v.prix_achat) missing.push("prix d'achat");
-        if (missing.length > 0) {
-          setTimeout(() => alert(
-            `✅ Véhicule ajouté au Livre de Police (N°${String(nextNum).padStart(4,"0")})\n\n` +
-            `⚠️ Infos manquantes à compléter :\n${missing.map(m => `  • ${m}`).join("\n")}\n` +
-            `  • Identité du vendeur (obligatoire légalement)\n\n` +
-            `→ Allez dans Livre de Police pour compléter l'entrée.`
-          ), 100);
-        }
-
-        return [...lp, newEntry];
-      });
-    }
 
     setModal(null);
   };
@@ -1619,7 +1717,7 @@ function FleetPage({ vehicles, setVehicles, apiKey, usage, setUsage, livrePolice
           <thead>
             <tr>
               <th>Plaque</th><th>Véhicule</th><th>Année</th><th>Motorisation</th>
-              <th>Km</th><th>Achat HT</th><th>Frais HT</th><th>Vente HT</th><th>Marge</th><th>Statut</th><th>Actions</th>
+              <th>Km</th><th>Achat TTC</th><th>Frais TTC</th><th>Vente TTC</th><th>Marge</th><th>Statut</th><th>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -2244,6 +2342,9 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
 ═══════════════════════════════════════════════════════════════ */
 function PrintDoc({ order, dealer, onClose, viewMode }) {
   const c = calcOrder(order);
+  const [sigVendeur, setSigVendeur] = useState(null);
+  const [sigClient, setSigClient] = useState(null);
+  const [sigMode, setSigMode] = useState("papier"); // BC par défaut papier
   return (
     <div className="modal-bg print-modal" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal modal-lg print-modal-inner" style={{ display: "flex", flexDirection: "column", maxHeight: "92vh" }}>
@@ -2444,10 +2545,29 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
             </div>{/* /print-doc-content */}
             {order.type === "bc" ? (
               /* BON DE COMMANDE — signatures */
-              <div className="pdoc-footer">
-                <div><div className="pdoc-sig">Signature vendeur</div></div>
-                <div><div className="pdoc-sig">Signature client / Bon pour accord</div></div>
-                <div className="pdoc-legal">Acompte de 30% requis à la signature. Document non contractuel avant encaissement de l'acompte.</div>
+              <div>
+                <div className="no-print" style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, margin: "12px 0", padding: "6px 10px", background: "#f9f8f5", borderRadius: 6 }}>
+                  <span style={{ fontSize: 10, color: "#aaa" }}>Signature :</span>
+                  <button style={{ fontSize: 10, padding: "3px 8px", border: "1px solid #ddd", borderRadius: 4, background: sigMode === "ecran" ? "#d4a843" : "#fff", color: sigMode === "ecran" ? "#fff" : "#555", cursor: "pointer" }} onClick={() => setSigMode("ecran")}>✍️ Écran</button>
+                  <button style={{ fontSize: 10, padding: "3px 8px", border: "1px solid #ddd", borderRadius: 4, background: sigMode === "papier" ? "#d4a843" : "#fff", color: sigMode === "papier" ? "#fff" : "#555", cursor: "pointer" }} onClick={() => setSigMode("papier")}>📝 Papier</button>
+                </div>
+                <div className="pdoc-footer">
+                  <div>
+                    {sigMode === "ecran" ? (
+                      <SignaturePad label="Signature vendeur" onSave={setSigVendeur} savedImg={sigVendeur} />
+                    ) : (
+                      <div className="pdoc-sig">Signature vendeur</div>
+                    )}
+                  </div>
+                  <div>
+                    {sigMode === "ecran" ? (
+                      <SignaturePad label="Signature client / Bon pour accord" onSave={setSigClient} savedImg={sigClient} />
+                    ) : (
+                      <div className="pdoc-sig">Signature client / Bon pour accord</div>
+                    )}
+                  </div>
+                  <div className="pdoc-legal">Acompte de 30% requis à la signature. Document non contractuel avant encaissement de l'acompte.</div>
+                </div>
               </div>
             ) : (
               /* FACTURE / AVOIR — mentions légales obligatoires 2026 */
@@ -2492,10 +2612,227 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
 /* ═══════════════════════════════════════════════════════════════
    ORDERS PAGE
 ═══════════════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════════════
+   DÉCLARATION DE CESSION (Cerfa 15776*02)
+   Pré-remplie avec les données véhicule + client + garage
+═══════════════════════════════════════════════════════════════ */
+function CessionDoc({ order, dealer, onClose }) {
+  const v = order.vehicle_data || {};
+  const client = order.client || {};
+  const todayStr = today();
+  const [sigVendeur, setSigVendeur] = useState(null);
+  const [sigAcquereur, setSigAcquereur] = useState(null);
+  const [sigMode, setSigMode] = useState("ecran"); // "ecran" ou "papier"
+
+  const printCession = () => {
+    const el = document.querySelector('.cession-doc');
+    if (!el) return;
+    const win = window.open('', '_blank');
+    if (!win) return;
+    win.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"/>');
+    win.document.write('<title>Déclaration de cession — ' + (v.plate || '') + '</title>');
+    win.document.write('<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Syne:wght@700;800&display=swap" rel="stylesheet">');
+    win.document.write('<style>');
+    win.document.write('*{margin:0;padding:0;box-sizing:border-box}');
+    win.document.write('body{font-family:"DM Sans",sans-serif;background:#fff;color:#111;padding:24px}');
+    win.document.write('.cession-doc{max-width:780px;margin:0 auto;padding:30px}');
+    win.document.write('.cess-title{font-family:"Syne",sans-serif;font-size:20px;font-weight:800;text-align:center;margin-bottom:4px}');
+    win.document.write('.cess-sub{text-align:center;font-size:11px;color:#888;margin-bottom:24px}');
+    win.document.write('.cess-section{margin-bottom:20px;border:1px solid #ddd;border-radius:6px;overflow:hidden}');
+    win.document.write('.cess-section-title{background:#f5f3ee;padding:8px 14px;font-weight:700;font-size:12px;letter-spacing:1px;text-transform:uppercase;color:#8b7a4a;border-bottom:1px solid #ddd}');
+    win.document.write('.cess-grid{display:grid;grid-template-columns:1fr 1fr;gap:0}');
+    win.document.write('.cess-field{padding:8px 14px;border-bottom:1px solid #eee;font-size:12px}');
+    win.document.write('.cess-field:nth-child(odd){border-right:1px solid #eee}');
+    win.document.write('.cess-label{font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#aaa;margin-bottom:2px}');
+    win.document.write('.cess-val{font-weight:600;min-height:16px}');
+    win.document.write('.cess-full{grid-column:1/-1;border-right:none!important}');
+    win.document.write('.cess-sig{display:flex;justify-content:space-between;gap:30px;margin-top:24px}');
+    win.document.write('.cess-sig-box{flex:1;border:1px solid #ddd;border-radius:6px;padding:14px;min-height:100px}');
+    win.document.write('.cess-sig-title{font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#aaa;margin-bottom:40px}');
+    win.document.write('.cess-footer{margin-top:20px;font-size:9px;color:#aaa;text-align:center;line-height:1.7}');
+    win.document.write('@page{size:A4 portrait;margin:10mm}');
+    win.document.write('@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}');
+    win.document.write('</style>');
+    win.document.write('</head><body>');
+    win.document.write(el.outerHTML);
+    win.document.write('</body></html>');
+    win.document.close();
+    win.focus();
+    setTimeout(() => { win.print(); }, 600);
+  };
+
+  return (
+    <div className="modal-bg" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal" style={{ maxWidth: 860, width: "95vw", maxHeight: "95vh", display: "flex", flexDirection: "column" }}>
+        <div className="modal-hd" style={{ flexShrink: 0 }}>
+          <span className="modal-title">📄 Déclaration de cession — {v.plate || "véhicule"}</span>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn btn-primary btn-sm" onClick={printCession}>🖨 Imprimer / PDF</button>
+            <button className="close-btn" onClick={onClose}>×</button>
+          </div>
+        </div>
+
+        <div style={{ flex: 1, overflowY: "auto", padding: 24 }}>
+          <div className="cession-doc">
+            <div className="cess-title">DÉCLARATION DE CESSION D'UN VÉHICULE</div>
+            <div className="cess-sub">Cerfa n° 15776*02 — Articles R322-4 et R322-9 du code de la route</div>
+
+            {/* SECTION 1 — VÉHICULE */}
+            <div className="cess-section">
+              <div className="cess-section-title">🚗 Désignation du véhicule</div>
+              <div className="cess-grid">
+                <div className="cess-field">
+                  <div className="cess-label">N° d'immatriculation</div>
+                  <div className="cess-val">{v.plate || "—"}</div>
+                </div>
+                <div className="cess-field">
+                  <div className="cess-label">Date de 1ère mise en circulation</div>
+                  <div className="cess-val">{v.date_mise_en_circulation || "—"}</div>
+                </div>
+                <div className="cess-field">
+                  <div className="cess-label">Marque</div>
+                  <div className="cess-val">{v.marque || "—"}</div>
+                </div>
+                <div className="cess-field">
+                  <div className="cess-label">Modèle / Type</div>
+                  <div className="cess-val">{v.modele || ""} {v.finition || ""}</div>
+                </div>
+                <div className="cess-field">
+                  <div className="cess-label">N° d'identification (VIN)</div>
+                  <div className="cess-val" style={{ fontFamily: "monospace" }}>{v.vin || "—"}</div>
+                </div>
+                <div className="cess-field">
+                  <div className="cess-label">Genre (VP/CTTE)</div>
+                  <div className="cess-val">{v.genre || "VP"}</div>
+                </div>
+                <div className="cess-field">
+                  <div className="cess-label">Kilométrage au compteur</div>
+                  <div className="cess-val">{v.kilometrage ? `${Number(v.kilometrage).toLocaleString("fr-FR")} km` : "—"}</div>
+                </div>
+                <div className="cess-field">
+                  <div className="cess-label">Énergie</div>
+                  <div className="cess-val">{v.carburant || "—"}</div>
+                </div>
+              </div>
+            </div>
+
+            {/* SECTION 2 — ANCIEN PROPRIÉTAIRE (le garage) */}
+            <div className="cess-section">
+              <div className="cess-section-title">👤 Ancien propriétaire (vendeur)</div>
+              <div className="cess-grid">
+                <div className="cess-field cess-full">
+                  <div className="cess-label">Nom / Raison sociale</div>
+                  <div className="cess-val">{dealer?.name || "—"}</div>
+                </div>
+                <div className="cess-field cess-full">
+                  <div className="cess-label">Adresse</div>
+                  <div className="cess-val">{dealer?.address?.replace(/\n/g, ", ") || "—"}</div>
+                </div>
+                <div className="cess-field">
+                  <div className="cess-label">SIRET</div>
+                  <div className="cess-val" style={{ fontFamily: "monospace" }}>{dealer?.siret || "—"}</div>
+                </div>
+                <div className="cess-field">
+                  <div className="cess-label">Téléphone</div>
+                  <div className="cess-val">{dealer?.phone || "—"}</div>
+                </div>
+              </div>
+            </div>
+
+            {/* SECTION 3 — NOUVEAU PROPRIÉTAIRE (le client) */}
+            <div className="cess-section">
+              <div className="cess-section-title">👤 Nouveau propriétaire (acquéreur)</div>
+              <div className="cess-grid">
+                <div className="cess-field cess-full">
+                  <div className="cess-label">Nom et prénom / Raison sociale</div>
+                  <div className="cess-val">{client.name || "—"}</div>
+                </div>
+                <div className="cess-field cess-full">
+                  <div className="cess-label">Adresse</div>
+                  <div className="cess-val">{client.address?.replace(/\n/g, ", ") || "—"}</div>
+                </div>
+                <div className="cess-field">
+                  <div className="cess-label">Téléphone</div>
+                  <div className="cess-val">{client.phone || "—"}</div>
+                </div>
+                <div className="cess-field">
+                  <div className="cess-label">Email</div>
+                  <div className="cess-val">{client.email || "—"}</div>
+                </div>
+              </div>
+            </div>
+
+            {/* SECTION 4 — CESSION */}
+            <div className="cess-section">
+              <div className="cess-section-title">📝 Conditions de la cession</div>
+              <div className="cess-grid">
+                <div className="cess-field">
+                  <div className="cess-label">Date de la cession</div>
+                  <div className="cess-val">{order.date_creation || todayStr}</div>
+                </div>
+                <div className="cess-field">
+                  <div className="cess-label">Heure de la cession</div>
+                  <div className="cess-val">{new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}</div>
+                </div>
+                <div className="cess-field">
+                  <div className="cess-label">Prix de vente TTC</div>
+                  <div className="cess-val" style={{ fontWeight: 800, color: "#8b7a4a" }}>{fmtDec(calcOrder(order).ttc)}</div>
+                </div>
+                <div className="cess-field">
+                  <div className="cess-label">N° facture</div>
+                  <div className="cess-val" style={{ fontFamily: "monospace" }}>{order.ref || "—"}</div>
+                </div>
+              </div>
+            </div>
+
+            {/* TOGGLE SIGNATURE */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, margin: "20px 0 12px", padding: "8px 14px", background: "var(--card2)", borderRadius: 8, border: "1px solid var(--border2)" }}>
+              <span style={{ fontSize: 11, color: "var(--muted)" }}>Mode signature :</span>
+              <button className={`btn btn-xs ${sigMode === "ecran" ? "btn-primary" : "btn-ghost"}`} onClick={() => setSigMode("ecran")}>✍️ Signature écran</button>
+              <button className={`btn btn-xs ${sigMode === "papier" ? "btn-primary" : "btn-ghost"}`} onClick={() => setSigMode("papier")}>📝 Signature papier</button>
+            </div>
+
+            {/* SIGNATURES */}
+            <div className="cess-sig">
+              <div className="cess-sig-box">
+                {sigMode === "ecran" ? (
+                  <SignaturePad label="Signature du vendeur" onSave={setSigVendeur} savedImg={sigVendeur} />
+                ) : (
+                  <>
+                    <div className="cess-sig-title">Signature du vendeur</div>
+                    <div style={{ fontSize: 10, color: "#bbb" }}>Lu et approuvé, bon pour cession</div>
+                  </>
+                )}
+              </div>
+              <div className="cess-sig-box">
+                {sigMode === "ecran" ? (
+                  <SignaturePad label="Signature de l'acquéreur" onSave={setSigAcquereur} savedImg={sigAcquereur} />
+                ) : (
+                  <>
+                    <div className="cess-sig-title">Signature de l'acquéreur</div>
+                    <div style={{ fontSize: 10, color: "#bbb" }}>Lu et approuvé, bon pour acquisition</div>
+                  </>
+                )}
+              </div>
+            </div>
+
+            <div className="cess-footer">
+              Ce document doit être établi en 2 exemplaires (un pour chaque partie).<br/>
+              Le vendeur doit déclarer la cession dans les 15 jours sur le site de l'ANTS (ants.gouv.fr).<br/>
+              L'acquéreur dispose d'un mois pour effectuer la demande de carte grise à son nom.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKey, usage, setUsage, clients, setClients, viewMode }) {
   const [tab, setTabLocal] = useState("all");
   const [modal, setModal] = useState(null);
   const [print, setPrint] = useState(null);
+  const [cession, setCession] = useState(null);
   const [payment, setPayment] = useState(null);
   const [search, setSearch] = useState("");
   const [pendingDelete, setPendingDelete] = useState(null);
@@ -2628,6 +2965,7 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
     <div className="page">
       {modal && <OrderForm order={modal === "new" ? null : modal} vehicles={vehicles} onSave={save} onClose={() => setModal(null)} apiKey={apiKey} clients={clients} setClients={setClients} orders={orders} viewMode={viewMode} />}
       {print && <PrintDoc order={print} dealer={dealer} onClose={() => setPrint(null)} viewMode={viewMode} />}
+      {cession && <CessionDoc order={cession} dealer={dealer} onClose={() => setCession(null)} />}
       {viewMode === "trial" && showDemoLimit && <DemoLimitModal type="orders" onClose={() => setShowDemoLimit(false)} />}
       {payment && <PaymentModal order={payment} onSave={o => { setOrders(orders.map(x => x.id === o.id ? o : x)); setPayment(null); }} onClose={() => setPayment(null)} />}
       {pendingDelete && (
@@ -2710,6 +3048,9 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
                   <td>
                     <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
                       <button className="btn btn-ghost btn-xs" onClick={() => setPrint(o)} title="Imprimer">🖨</button>
+                      {o.type === "facture" && o.vehicle_data && (
+                        <button className="btn btn-ghost btn-xs" onClick={() => setCession(o)} title="Déclaration de cession" style={{ color: "var(--gold)" }}>📄 Cession</button>
+                      )}
                       {/* En mode démo : facture validée = lecture seule */}
                       {(viewMode !== "trial" || o.type === "bc") && o.type === "bc" && (
                         <button className="btn btn-ghost btn-xs" onClick={() => toFacture(o)} title="Convertir en facture">🧾</button>
