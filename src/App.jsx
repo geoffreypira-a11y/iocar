@@ -2654,7 +2654,6 @@ function CessionDoc({ order, dealer, onClose }) {
   const generatePdf = async () => {
     setLoading(true);
     try {
-      // Charger pdf-lib depuis CDN
       if (!window.PDFLib) {
         await new Promise((resolve, reject) => {
           const script = document.createElement("script");
@@ -2664,146 +2663,131 @@ function CessionDoc({ order, dealer, onClose }) {
           document.head.appendChild(script);
         });
       }
-      const { PDFDocument, rgb, StandardFonts } = window.PDFLib;
+      const { PDFDocument } = window.PDFLib;
 
-      // Charger le Cerfa PDF vierge
       const pdfBytes = await fetch("/cerfa_15776.pdf").then(r => r.arrayBuffer());
       const pdfDoc = await PDFDocument.load(pdfBytes);
-      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-      const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-      const fontSize = 9;
-      const color = rgb(0.05, 0.05, 0.35);
+      const form = pdfDoc.getForm();
 
-      // Remplir les 2 pages (exemplaire vendeur + exemplaire acheteur)
-      for (const page of pdfDoc.getPages()) {
-        const { height } = page.getSize();
-        const draw = (x, y, text, size, bold) => {
-          if (!text) return;
-          page.drawText(String(text), { x, y, size: size || fontSize, font: bold ? fontBold : font, color });
-        };
+      // Parser la date MEC
+      const dateMEC = v.date_mise_en_circulation || "";
+      const mecParts = dateMEC.match(/(\d{2})[\/\-](\d{2})[\/\-](\d{4})/);
+      const mecJ = mecParts ? mecParts[1] : "";
+      const mecM = mecParts ? mecParts[2] : "";
+      const mecA = mecParts ? mecParts[3] : "";
 
-        // ── VÉHICULE ── (cases au-dessus des labels)
-        draw(32, height - 105, v.plate || "", 10, true);                     // (A) Immatriculation
-        draw(225, height - 105, v.vin || "", 8);                              // (E) VIN
-        draw(485, height - 105, v.date_mise_en_circulation || "", 9);         // (B) Date 1ère immat
-        draw(32, height - 138, v.marque || "", 9, true);                      // (D.1) Marque
-        draw(175, height - 138, v.finition || "", 8);                         // (D.2) Type variante
-        draw(375, height - 138, v.genre || "VP", 9);                          // (J.1) Genre
-        draw(470, height - 138, v.modele || "", 9);                           // (D.3) Dénomination
-        draw(275, height - 162, v.kilometrage ? `${Number(v.kilometrage).toLocaleString("fr-FR")}` : "", 9); // Km
+      // Date de cession
+      const now = new Date();
+      const cJ = String(now.getDate()).padStart(2, "0");
+      const cM = String(now.getMonth() + 1).padStart(2, "0");
+      const cA = String(now.getFullYear());
+      const cH = String(now.getHours()).padStart(2, "0");
+      const cMin = String(now.getMinutes()).padStart(2, "0");
 
-        // ── ANCIEN PROPRIÉTAIRE (vendeur = garage) ──
-        // Cocher "Personne morale"
-        draw(19, height - 305, "X", 10, true);
-        // Je soussigné : Raison sociale
-        draw(100, height - 323, dealer?.name || "", 9, true);
-        // SIRET
-        draw(475, height - 323, dealer?.siret || "", 8);
-        // Adresse complète
-        const addrLines = (dealer?.address || "").split("\n");
-        draw(55, height - 350, addrLines[0] || "", 8);                        // N° + rue
-        // CP + Commune
-        const addrMatch = (dealer?.address || "").match(/(\d{5})\s*(.*)/);
-        if (addrMatch) {
-          draw(115, height - 370, addrMatch[1], 9);                           // CP
-          draw(210, height - 370, addrMatch[2] || "", 9);                     // Commune
-        } else if (addrLines[1]) {
-          draw(55, height - 370, addrLines[1], 8);
-        }
+      // Adresse vendeur
+      const dealerAddr = dealer?.address || "";
+      const dMatch = dealerAddr.match(/^(\d+)\s*(.*)/);
+      const dNum = dMatch ? dMatch[1] : "";
+      const dRue = dMatch ? dMatch[2].split("\n")[0] : dealerAddr.split("\n")[0];
+      const dCPMatch = dealerAddr.match(/(\d{5})\s*(.*)/);
+      const dCP = dCPMatch ? dCPMatch[1] : "";
+      const dVille = dCPMatch ? dCPMatch[2].split("\n")[0].trim() : "";
 
-        // Cocher "céder"
-        draw(307, height - 390, "X", 10, true);
+      // Adresse client
+      const cAddr = client.address || "";
+      const cMatch = cAddr.match(/^(\d+)\s*(.*)/);
+      const cNum = cMatch ? cMatch[1] : "";
+      const cRue = cMatch ? cMatch[2].split("\n")[0] : cAddr.split("\n")[0];
+      const cCPMatch = cAddr.match(/(\d{5})\s*(.*)/);
+      const cCP = cCPMatch ? cCPMatch[1] : "";
+      const cVille = cCPMatch ? cCPMatch[2].split("\n")[0].trim() : "";
 
-        // Date et heure de cession : "Le _____ à _____ h _____"
-        draw(30, height - 410, `   ${today()}`, 9);
-        draw(155, height - 410, new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }), 9);
+      const fill = (name, value) => {
+        try { form.getTextField(name).setText(String(value || "")); } catch(e) {}
+      };
+      const check = (name) => {
+        try { form.getCheckBox(name).check(); } catch(e) {}
+      };
 
-        // Certifications (cocher)
-        draw(19, height - 440, "X", 9, true);                                 // Avoir remis certificat
-        draw(19, height - 465, "X", 9, true);                                 // Pas de transformation
-
-        // Fait à / le
-        const dealerCity = (dealer?.address || "").match(/\d{5}\s*(.*)/)?.[1] || "";
-        draw(55, height - 530, dealerCity, 9);
-        draw(210, height - 530, today(), 9);
-
-        // ── NOUVEAU PROPRIÉTAIRE (acheteur = client) ──
-        // Cocher "Personne physique"
-        draw(19, height - 600, "X", 10, true);
-        // Je soussigné : Nom
-        draw(100, height - 628, client.name || "", 9, true);
-        // SIRET si pro
-        if (client.siren) draw(475, height - 628, client.siren, 8);
-
-        // Adresse client
-        const clientAddr = (client.address || "").split("\n");
-        draw(55, height - 670, clientAddr[0] || "", 8);                        // Rue
-        const clientAddrMatch = (client.address || "").match(/(\d{5})\s*(.*)/);
-        if (clientAddrMatch) {
-          draw(115, height - 690, clientAddrMatch[1], 9);                      // CP
-          draw(210, height - 690, clientAddrMatch[2] || "", 9);                // Commune
-        } else if (clientAddr[1]) {
-          draw(55, height - 690, clientAddr[1], 8);
-        }
-
-        // Certifications acheteur (cocher)
-        draw(19, height - 720, "X", 9, true);                                 // Acquérir
-        draw(19, height - 735, "X", 9, true);                                 // Avoir été informé
-
-        // Fait à / le (acheteur)
-        draw(55, height - 760, dealerCity, 9);
-        draw(210, height - 760, today(), 9);
+      for (const pg of ["Page1", "Page2"]) {
+        const p = "topmostSubform[0]." + pg + "[0]";
+        fill(p + ".num_Immatriculation[0]", v.plate || "");
+        fill(p + "." + p + ".num_Identification[0]", v.vin || "");
+        fill(p + ".num_DateImmatriculationJour[0]", mecJ);
+        fill(p + ".num_DateImmatriculationMois[0]", mecM);
+        fill(p + ".num_DateImmatriculationAnn\u00e9e[0]", mecA);
+        fill(p + ".txt_MarqueV\u00e9hicule[0]", v.marque || "");
+        fill(p + ".txt_TypeVarianteVersionV\u00e9hicule[0]", v.finition || v.modele || "");
+        fill(p + ".txt_GenreNational[0]", v.genre || "VP");
+        fill(p + ".txt_D\u00e9nominationCommerciale[0]", v.modele || "");
+        fill(p + ".num_Kilom\u00e9trageCompteur[0]", v.kilometrage ? String(v.kilometrage) : "");
+        fill(p + ".txt_Identit\u00e9Vendeur[0]", dealer?.name || "");
+        fill(p + ".Num_Siret[0]", dealer?.siret || "");
+        fill(p + ".num_VoieAdresse[0]", dNum);
+        fill(p + ".txt_NomVoie[0]", dRue);
+        fill(p + ".num_CodePostalAdresse[0]", dCP);
+        fill(p + ".txt_CommuneAdresse[0]", dVille);
+        fill(p + ".num_DateVenteJour[0]", cJ);
+        fill(p + ".num_DateVenteMois[0]", cM);
+        fill(p + ".num_DateVenteAnn\u00e9e[0]", cA);
+        fill(p + ".num_HoraireVente1[0]", cH);
+        fill(p + ".num_HoraireVente2[0]", cMin);
+        check(p + ".ckb_ValidationD\u00e9claration1[0]");
+        check(p + ".ckb_ValidationD\u00e9claration2[0]");
+        fill(p + ".txt_LieuD\u00e9claration1[0]", dVille);
+        fill(p + ".txt_dateD\u00e9claration[0]", cJ + "/" + cM + "/" + cA);
+        fill(p + ".txt_Identit\u00e9Acheteur[0]", client.name || "");
+        fill(p + ".num_SiretAcheteur[0]", client.siren || "");
+        fill(p + ".num_VoieAdresseAcheteur[0]", cNum);
+        fill(p + ".txt_NomVoieAdresseAcheteur[0]", cRue);
+        fill(p + ".num_CodePostalAdresseAcheteur[0]", cCP);
+        fill(p + ".txt_CommuneAdresseAcheteur[0]", cVille);
+        check(p + ".ckb_ValidationD\u00e9clarationA1[0]");
+        check(p + ".ckb_ValidationD\u00e9clarationA2[0]");
+        fill(p + ".txt_LieuD\u00e9claration2[0]", dVille);
+        fill(p + ".num_DateD\u00e9claration[0]", cJ + "/" + cM + "/" + cA);
       }
 
-      // Générer le PDF final
       const filledBytes = await pdfDoc.save();
       const blob = new Blob([filledBytes], { type: "application/pdf" });
-      const url = URL.createObjectURL(blob);
-      setPdfUrl(url);
+      setPdfUrl(URL.createObjectURL(blob));
     } catch (err) {
-      console.error("Erreur génération Cerfa:", err);
-      alert("Erreur lors de la génération du Cerfa : " + err.message);
+      console.error("Erreur Cerfa:", err);
+      alert("Erreur Cerfa : " + err.message);
     } finally {
       setLoading(false);
     }
   };
 
-  // Générer automatiquement à l'ouverture
   React.useEffect(() => { generatePdf(); }, []);
 
   return (
     <div className="modal-bg" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal" style={{ maxWidth: 900, width: "95vw", maxHeight: "95vh", display: "flex", flexDirection: "column" }}>
         <div className="modal-hd" style={{ flexShrink: 0 }}>
-          <span className="modal-title">📄 Cerfa 15776*02 — Cession {v.plate || ""}</span>
+          <span className="modal-title">Cerfa 15776 — Cession {v.plate || ""}</span>
           <div style={{ display: "flex", gap: 8 }}>
             {pdfUrl && (
               <>
-                <a href={pdfUrl} download={`Cession_${v.plate || "vehicule"}_${today().replace(/\//g, "-")}.pdf`} className="btn btn-primary btn-sm">
-                  📥 Télécharger PDF
-                </a>
-                <button className="btn btn-ghost btn-sm" onClick={() => {
-                  const win = window.open(pdfUrl, "_blank");
-                  if (win) setTimeout(() => win.print(), 800);
-                }}>🖨 Imprimer</button>
+                <a href={pdfUrl} download={"Cession_" + (v.plate || "vehicule") + "_" + today().replace(/\//g, "-") + ".pdf"} className="btn btn-primary btn-sm">Telecharger</a>
+                <button className="btn btn-ghost btn-sm" onClick={() => { const w = window.open(pdfUrl, "_blank"); if (w) setTimeout(() => w.print(), 800); }}>Imprimer</button>
               </>
             )}
-            <button className="close-btn" onClick={onClose}>×</button>
+            <button className="close-btn" onClick={onClose}>x</button>
           </div>
         </div>
         <div style={{ flex: 1, overflow: "hidden", background: "#333", display: "flex", alignItems: "center", justifyContent: "center" }}>
           {loading ? (
             <div style={{ textAlign: "center", color: "#fff", padding: 40 }}>
-              <div style={{ fontSize: 32, marginBottom: 12 }}>⏳</div>
-              <div>Génération du Cerfa en cours...</div>
+              <div style={{ fontSize: 32, marginBottom: 12 }}>...</div>
+              <div>Generation du Cerfa...</div>
             </div>
           ) : pdfUrl ? (
             <iframe src={pdfUrl} style={{ width: "100%", height: "100%", border: "none" }} title="Cerfa 15776" />
           ) : (
             <div style={{ textAlign: "center", color: "#fff", padding: 40 }}>
-              <div style={{ fontSize: 32, marginBottom: 12 }}>❌</div>
-              <div>Erreur de génération</div>
-              <button className="btn btn-primary btn-sm" style={{ marginTop: 12 }} onClick={generatePdf}>🔄 Réessayer</button>
+              <div style={{ fontSize: 32, marginBottom: 12 }}>Erreur</div>
+              <button className="btn btn-primary btn-sm" style={{ marginTop: 12 }} onClick={generatePdf}>Reessayer</button>
             </div>
           )}
         </div>
