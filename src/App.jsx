@@ -2645,8 +2645,15 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
    DÉCLARATION DE CESSION (Cerfa 15776*02)
    Pré-remplie avec les données véhicule + client + garage
 ═══════════════════════════════════════════════════════════════ */
-function CessionDoc({ order, dealer, onClose }) {
-  const v = order.vehicle_data || {};
+function CessionDoc({ order, dealer, vehicles, onClose }) {
+  // Récupérer les données fraîches du véhicule si vehicle_data est vide/incomplet
+  const freshVehicle = order.vehicle_id && vehicles ? vehicles.find(vh => vh.id === order.vehicle_id) : null;
+  const v = (order.vehicle_data && order.vehicle_data.marque) ? order.vehicle_data : (freshVehicle ? {
+    plate: freshVehicle.plate, marque: freshVehicle.marque, modele: freshVehicle.modele,
+    finition: freshVehicle.finition, vin: freshVehicle.vin, genre: freshVehicle.genre || "VP",
+    date_mise_en_circulation: freshVehicle.date_mise_en_circulation,
+    kilometrage: freshVehicle.kilometrage, carburant: freshVehicle.carburant,
+  } : (order.vehicle_data || {}));
   const client = order.client || {};
   const [loading, setLoading] = useState(false);
   const [pdfUrl, setPdfUrl] = useState(null);
@@ -2962,7 +2969,7 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
     <div className="page">
       {modal && <OrderForm order={modal === "new" ? null : modal} vehicles={vehicles} onSave={save} onClose={() => setModal(null)} apiKey={apiKey} clients={clients} setClients={setClients} orders={orders} viewMode={viewMode} />}
       {print && <PrintDoc order={print} dealer={dealer} onClose={() => setPrint(null)} viewMode={viewMode} />}
-      {cession && <CessionDoc order={cession} dealer={dealer} onClose={() => setCession(null)} />}
+      {cession && <CessionDoc order={cession} dealer={dealer} vehicles={vehicles} onClose={() => setCession(null)} />}
       {viewMode === "trial" && showDemoLimit && <DemoLimitModal type="orders" onClose={() => setShowDemoLimit(false)} />}
       {payment && <PaymentModal order={payment} onSave={o => { setOrders(orders.map(x => x.id === o.id ? o : x)); setPayment(null); }} onClose={() => setPayment(null)} />}
       {pendingDelete && (
