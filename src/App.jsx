@@ -2663,89 +2663,80 @@ function CessionDoc({ order, dealer, onClose }) {
           document.head.appendChild(script);
         });
       }
-      const { PDFDocument } = window.PDFLib;
+      const { PDFDocument, rgb, StandardFonts } = window.PDFLib;
 
       const pdfBytes = await fetch("/cerfa_15776.pdf").then(r => r.arrayBuffer());
       const pdfDoc = await PDFDocument.load(pdfBytes);
-      const form = pdfDoc.getForm();
-
-      // Parser la date MEC
-      const dateMEC = v.date_mise_en_circulation || "";
-      const mecParts = dateMEC.match(/(\d{2})[\/\-](\d{2})[\/\-](\d{4})/);
-      const mecJ = mecParts ? mecParts[1] : "";
-      const mecM = mecParts ? mecParts[2] : "";
-      const mecA = mecParts ? mecParts[3] : "";
-
-      // Date de cession
-      const now = new Date();
-      const cJ = String(now.getDate()).padStart(2, "0");
-      const cM = String(now.getMonth() + 1).padStart(2, "0");
-      const cA = String(now.getFullYear());
-      const cH = String(now.getHours()).padStart(2, "0");
-      const cMin = String(now.getMinutes()).padStart(2, "0");
+      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+      const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+      const fs = 9;
+      const color = rgb(0.05, 0.05, 0.35);
 
       // Adresse vendeur
       const dealerAddr = dealer?.address || "";
-      const dMatch = dealerAddr.match(/^(\d+)\s*(.*)/);
-      const dNum = dMatch ? dMatch[1] : "";
-      const dRue = dMatch ? dMatch[2].split("\n")[0] : dealerAddr.split("\n")[0];
+      const dAddrLines = dealerAddr.split("\n");
       const dCPMatch = dealerAddr.match(/(\d{5})\s*(.*)/);
       const dCP = dCPMatch ? dCPMatch[1] : "";
       const dVille = dCPMatch ? dCPMatch[2].split("\n")[0].trim() : "";
 
       // Adresse client
       const cAddr = client.address || "";
-      const cMatch = cAddr.match(/^(\d+)\s*(.*)/);
-      const cNum = cMatch ? cMatch[1] : "";
-      const cRue = cMatch ? cMatch[2].split("\n")[0] : cAddr.split("\n")[0];
+      const cAddrLines = cAddr.split("\n");
       const cCPMatch = cAddr.match(/(\d{5})\s*(.*)/);
       const cCP = cCPMatch ? cCPMatch[1] : "";
       const cVille = cCPMatch ? cCPMatch[2].split("\n")[0].trim() : "";
 
-      const fill = (name, value) => {
-        try { form.getTextField(name).setText(String(value || "")); } catch(e) {}
-      };
-      const check = (name) => {
-        try { form.getCheckBox(name).check(); } catch(e) {}
-      };
+      const heure = new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
 
-      for (const pg of ["Page1", "Page2"]) {
-        const p = "topmostSubform[0]." + pg + "[0]";
-        fill(p + ".num_Immatriculation[0]", v.plate || "");
-        fill(p + "." + p + ".num_Identification[0]", v.vin || "");
-        fill(p + ".num_DateImmatriculationJour[0]", mecJ);
-        fill(p + ".num_DateImmatriculationMois[0]", mecM);
-        fill(p + ".num_DateImmatriculationAnn\u00e9e[0]", mecA);
-        fill(p + ".txt_MarqueV\u00e9hicule[0]", v.marque || "");
-        fill(p + ".txt_TypeVarianteVersionV\u00e9hicule[0]", v.finition || v.modele || "");
-        fill(p + ".txt_GenreNational[0]", v.genre || "VP");
-        fill(p + ".txt_D\u00e9nominationCommerciale[0]", v.modele || "");
-        fill(p + ".num_Kilom\u00e9trageCompteur[0]", v.kilometrage ? String(v.kilometrage) : "");
-        fill(p + ".txt_Identit\u00e9Vendeur[0]", dealer?.name || "");
-        fill(p + ".Num_Siret[0]", dealer?.siret || "");
-        fill(p + ".num_VoieAdresse[0]", dNum);
-        fill(p + ".txt_NomVoie[0]", dRue);
-        fill(p + ".num_CodePostalAdresse[0]", dCP);
-        fill(p + ".txt_CommuneAdresse[0]", dVille);
-        fill(p + ".num_DateVenteJour[0]", cJ);
-        fill(p + ".num_DateVenteMois[0]", cM);
-        fill(p + ".num_DateVenteAnn\u00e9e[0]", cA);
-        fill(p + ".num_HoraireVente1[0]", cH);
-        fill(p + ".num_HoraireVente2[0]", cMin);
-        check(p + ".ckb_ValidationD\u00e9claration1[0]");
-        check(p + ".ckb_ValidationD\u00e9claration2[0]");
-        fill(p + ".txt_LieuD\u00e9claration1[0]", dVille);
-        fill(p + ".txt_dateD\u00e9claration[0]", cJ + "/" + cM + "/" + cA);
-        fill(p + ".txt_Identit\u00e9Acheteur[0]", client.name || "");
-        fill(p + ".num_SiretAcheteur[0]", client.siren || "");
-        fill(p + ".num_VoieAdresseAcheteur[0]", cNum);
-        fill(p + ".txt_NomVoieAdresseAcheteur[0]", cRue);
-        fill(p + ".num_CodePostalAdresseAcheteur[0]", cCP);
-        fill(p + ".txt_CommuneAdresseAcheteur[0]", cVille);
-        check(p + ".ckb_ValidationD\u00e9clarationA1[0]");
-        check(p + ".ckb_ValidationD\u00e9clarationA2[0]");
-        fill(p + ".txt_LieuD\u00e9claration2[0]", dVille);
-        fill(p + ".num_DateD\u00e9claration[0]", cJ + "/" + cM + "/" + cA);
+      // Remplir les 2 pages (exemplaire 1 vendeur + exemplaire 2 acheteur)
+      const pages = pdfDoc.getPages();
+      for (const page of pages) {
+        const { height } = page.getSize();
+        const d = (x, y, text, size, bold) => {
+          if (!text) return;
+          page.drawText(String(text), { x, y, size: size || fs, font: bold ? fontBold : font, color });
+        };
+
+        // ── VÉHICULE ──
+        d(32, height - 105, v.plate || "", 10, true);
+        d(225, height - 105, v.vin || "", 8);
+        d(485, height - 105, v.date_mise_en_circulation || "", 9);
+        d(32, height - 138, v.marque || "", 9, true);
+        d(175, height - 138, v.finition || "", 8);
+        d(375, height - 138, v.genre || "VP", 9);
+        d(470, height - 138, v.modele || "", 9);
+        d(275, height - 162, v.kilometrage ? `${Number(v.kilometrage).toLocaleString("fr-FR")}` : "", 9);
+
+        // ── ANCIEN PROPRIÉTAIRE (vendeur = garage) ──
+        d(19, height - 305, "X", 10, true);
+        d(100, height - 323, dealer?.name || "", 9, true);
+        d(475, height - 323, dealer?.siret || "", 8);
+        d(55, height - 350, dAddrLines[0] || "", 8);
+        if (dCPMatch) {
+          d(115, height - 370, dCP, 9);
+          d(210, height - 370, dVille, 9);
+        }
+        d(307, height - 390, "X", 10, true);
+        d(30, height - 410, `   ${today()}`, 9);
+        d(155, height - 410, heure, 9);
+        d(19, height - 440, "X", 9, true);
+        d(19, height - 465, "X", 9, true);
+        d(55, height - 530, dVille, 9);
+        d(210, height - 530, today(), 9);
+
+        // ── NOUVEAU PROPRIÉTAIRE (acheteur = client) ──
+        d(19, height - 600, "X", 10, true);
+        d(100, height - 628, client.name || "", 9, true);
+        if (client.siren) d(475, height - 628, client.siren, 8);
+        d(55, height - 670, cAddrLines[0] || "", 8);
+        if (cCPMatch) {
+          d(115, height - 690, cCP, 9);
+          d(210, height - 690, cVille, 9);
+        }
+        d(19, height - 720, "X", 9, true);
+        d(19, height - 735, "X", 9, true);
+        d(55, height - 760, dVille, 9);
+        d(210, height - 760, today(), 9);
       }
 
       const filledBytes = await pdfDoc.save();
