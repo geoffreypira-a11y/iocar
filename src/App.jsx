@@ -2663,156 +2663,99 @@ function CessionDoc({ order, dealer, onClose }) {
           document.head.appendChild(script);
         });
       }
-      const { PDFDocument, PDFName, PDFBool } = window.PDFLib;
+      const { PDFDocument, rgb, StandardFonts } = window.PDFLib;
 
-      const pdfBytes = await fetch("/cerfa_15776-01_acroform.pdf").then(r => r.arrayBuffer());
+      const pdfBytes = await fetch("/cerfa_15776.pdf").then(r => r.arrayBuffer());
       const pdfDoc = await PDFDocument.load(pdfBytes);
-      const form = pdfDoc.getForm();
+      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+      const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+      const fs = 9;
+      const color = rgb(0.05, 0.05, 0.35);
 
-      // Forcer le flag NeedAppearances pour que le viewer PDF regénère l'affichage des champs
-      form.acroForm.dict.set(PDFName.of("NeedAppearances"), PDFBool.True);
-
-      // ── Helpers ──
-      const setText = (name, value) => {
-        if (!value) return;
-        try {
-          const field = form.getTextField(name);
-          field.setText(String(value));
-        } catch(e) {
-          console.warn("Champ introuvable:", name, e.message);
-        }
-      };
-      const setCheck = (name) => {
-        try { form.getCheckBox(name).check(); } catch(e) {
-          console.warn("Checkbox introuvable:", name, e.message);
-        }
-      };
-      const setRadio = (name, value) => {
-        try { form.getRadioGroup(name).select(value); } catch(e) {
-          console.warn("Radio introuvable:", name, e.message);
-        }
-      };
-
-      // ── Parser l'adresse (format: "N° TYPE NOM\nCP VILLE") ──
+      // ── Parser d'adresse française ──
       const parseAddress = (addr) => {
-        if (!addr) return {};
+        if (!addr) return { num: "", ext: "", type: "", nom: "", cp: "", ville: "" };
         const lines = addr.split("\n").map(l => l.trim()).filter(Boolean);
         const rue = lines[0] || "";
         const cpLine = lines.find(l => /\d{5}/.test(l)) || "";
         const cpMatch = cpLine.match(/(\d{5})\s*(.*)/);
         const cp = cpMatch ? cpMatch[1] : "";
         const ville = cpMatch ? cpMatch[2].trim() : "";
-
-        // Découper la rue : "2 LOTISSEMENT CANTO GRIHET" → num=2, type=LOTISSEMENT, nom=CANTO GRIHET
-        // ou "15 BIS RUE DE LA PAIX" → num=15, ext=BIS, type=RUE, nom=DE LA PAIX
         const types = ["RUE","AVENUE","AVE","AV","BOULEVARD","BD","BLVD","IMPASSE","IMP","CHEMIN","CH","ROUTE","RTE","PLACE","PL","ALLÉE","ALLEE","PASSAGE","COURS","SQUARE","SQ","LOTISSEMENT","LOT","RÉSIDENCE","RESIDENCE","HAMEAU","LIEU-DIT","QUAI","VOIE","SENTIER","TRAVERSE"];
         const extensions = ["BIS","TER","QUATER","A","B","C"];
         const parts = rue.split(/\s+/);
         let num = "", ext = "", type = "", nom = "";
-
         let idx = 0;
-        // Numéro
         if (parts[idx] && /^\d+$/.test(parts[idx])) { num = parts[idx]; idx++; }
-        // Extension (BIS, TER...)
         if (parts[idx] && extensions.includes(parts[idx].toUpperCase())) { ext = parts[idx]; idx++; }
-        // Type de voie
         if (parts[idx] && types.includes(parts[idx].toUpperCase())) { type = parts[idx]; idx++; }
-        // Le reste = nom de la voie
         nom = parts.slice(idx).join(" ");
-        // Si pas de type trouvé, tout mettre dans nom
         if (!type && !num) { nom = rue; }
-
-        return { num, ext, type, nom, cp, ville, rueFull: rue };
+        return { num, ext, type, nom, cp, ville };
       };
 
-      const dealerAddr = parseAddress(dealer?.address || "");
-      const clientAddr = parseAddress(client.address || "");
-
-      // Date du jour et heure
-      const dateJ = today();
-      const [dj, dm, da] = dateJ.includes("/") ? dateJ.split("/") : ["","",""];
+      const dA = parseAddress(dealer?.address || "");
+      const cA = parseAddress(client.address || "");
       const heure = new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
       const [h1, h2] = heure.split(":");
+      const dateJ = today();
+      const [dj, dm, da] = dateJ.includes("/") ? dateJ.split("/") : ["","",""];
 
       // Date 1re immatriculation
       const dateMEC = v.date_mise_en_circulation || "";
-      const mecParts = dateMEC.includes("/") ? dateMEC.split("/") : [];
+      const mecP = dateMEC.includes("/") ? dateMEC.split("/") : [];
 
-      // ── Remplir les 2 pages (Page1 = exemplaire vendeur, Page2 = exemplaire acheteur) ──
-      for (const pageKey of ["Page1", "Page2"]) {
-        const p = (field) => `topmostSubform[0].${pageKey}[0].${field}[0]`;
+      const pages = pdfDoc.getPages();
+      for (const page of pages) {
+        const d = (x, y, text, size, bold) => {
+          if (!text) return;
+          page.drawText(String(text), { x, y, size: size || fs, font: bold ? fontBold : font, color });
+        };
 
         // ── VÉHICULE ──
-        setText(p("num_Immatriculation"), v.plate);
-        setText(p("num_Identification"), v.vin);
-        if (mecParts.length === 3) {
-          setText(p("num_DateImmatriculationJour"), mecParts[0]);
-          setText(p("num_DateImmatriculationMois"), mecParts[1]);
-          setText(p("num_DateImmatriculationAnnée"), mecParts[2]);
-        } else {
-          setText(p("num_DateImmatriculationJour"), dateMEC);
-        }
-        setText(p("txt_MarqueVéhicule"), v.marque);
-        setText(p("txt_TypeVarianteVersionVéhicule"), v.finition);
-        setText(p("txt_GenreNational"), v.genre || "VP");
-        setText(p("txt_DénominationCommerciale"), v.modele);
-        setText(p("num_KilométrageCompteur"), v.kilometrage ? Number(v.kilometrage).toLocaleString("fr-FR") : "");
-
-        // Présence certificat d'immatriculation : OUI
-        setRadio(p("Groupe_de_boutons_radio1"), "1");
+        d(36, 721, v.plate, 10, true);                     // Immatriculation
+        d(174, 721, v.vin, 8);                             // VIN
+        if (mecP.length === 3) {                           // Date 1re immat (J/M/A séparés)
+          d(442, 721, mecP[0], 9); d(467, 721, mecP[1], 9); d(494, 721, mecP[2], 9);
+        } else { d(442, 721, dateMEC, 8); }
+        d(36, 697, v.marque, 9, true);                     // Marque
+        d(176, 697, v.finition, 8);                        // Type/Variante/Version
+        d(323, 697, v.genre || "VP", 9);                   // Genre national
+        d(443, 697, v.modele, 9);                          // Dénomination commerciale
+        d(207, 672, v.kilometrage ? Number(v.kilometrage).toLocaleString("fr-FR") : "", 9);
 
         // ── ANCIEN PROPRIÉTAIRE (vendeur = garage) ──
-        // Personne morale
-        setRadio(p("Groupe_de_boutons_radio3"), "1");
-        setText(p("txt_IdentitéVendeur"), dealer?.name);
-        setText(p("Num_Siret"), dealer?.siret);
-        // Adresse vendeur décomposée
-        setText(p("num_VoieAdresse"), dealerAddr.num);
-        setText(p("txt_ExtensionAdresse"), dealerAddr.ext);
-        setText(p("txt_TypeVoieAdresse"), dealerAddr.type);
-        setText(p("txt_NomVoie"), dealerAddr.nom);
-        setText(p("num_CodePostalAdresse"), dealerAddr.cp);
-        setText(p("txt_CommuneAdresse"), dealerAddr.ville);
-
-        // Céder
-        setRadio(p("Groupe_de_boutons_radio4"), "1");
-        // Date et heure de vente
-        setText(p("num_DateVenteJour"), dj);
-        setText(p("num_DateVenteMois"), dm);
-        setText(p("num_DateVenteAnnée"), da);
-        setText(p("num_HoraireVente1"), h1);
-        setText(p("num_HoraireVente2"), h2);
-
-        // Certifications vendeur (cocher les 2 premières uniquement)
-        setCheck(p("ckb_ValidationDéclaration1"));
-        setCheck(p("ckb_ValidationDéclaration2"));
-        // NE PAS cocher ckb_ValidationDéclaration3 (VHU)
-
-        // Fait à / le (vendeur)
-        setText(p("txt_LieuDéclaration1"), dealerAddr.ville);
-        setText(p("num_DateDéclaration"), dateJ);
+        d(36, 562, "X", 10, true);                         // Personne morale
+        d(91, 542, dealer?.name, 9, true);                 // Raison sociale
+        d(395, 542, dealer?.siret, 8);                     // SIRET
+        d(109, 510, dA.num, 9);                            // N° voie
+        d(157, 510, dA.ext, 8);                            // Extension
+        d(207, 510, dA.type, 8);                           // Type de voie
+        d(282, 510, dA.nom, 8);                            // Nom de la voie
+        d(109, 491, dA.cp, 9);                             // Code postal
+        d(193, 491, dA.ville, 9);                          // Commune
+        d(185, 466, "X", 10, true);                        // Céder
+        d(47, 448, dj, 9); d(73, 448, dm, 9); d(100, 448, da, 9);  // Date vente
+        d(154, 448, h1, 9); d(188, 448, h2, 9);           // Heure vente
+        d(36, 417, "X", 9, true);                          // Certif 1
+        d(36, 397, "X", 9, true);                          // Certif 2
+        d(64, 326, dA.ville, 9);                           // Fait à
+        d(194, 326, dateJ, 9);                             // Le
 
         // ── NOUVEAU PROPRIÉTAIRE (acheteur = client) ──
-        // Personne physique
-        setRadio(p("Groupe_de_boutons_radio5"), "2");
-        setText(p("txt_IdentitéAcheteur"), client.name);
-        if (client.siren) setText(p("num_SiretAcheteur"), client.siren);
-
-        // Adresse acheteur décomposée
-        setText(p("num_VoieAdresseAcheteur"), clientAddr.num);
-        setText(p("txt_ExtensionAdresseAcheteur"), clientAddr.ext);
-        setText(p("txt_TypeVoieAdresseAcheteur"), clientAddr.type);
-        setText(p("txt_NomVoieAdresseAcheteur"), clientAddr.nom);
-        setText(p("num_CodePostalAdresseAcheteur"), clientAddr.cp);
-        setText(p("txt_CommuneAdresseAcheteur"), clientAddr.ville);
-
-        // Certifications acheteur
-        setCheck(p("ckb_ValidationDéclarationA1"));
-        setCheck(p("ckb_ValidationDéclarationA2"));
-
-        // Fait à / le (acheteur)
-        setText(p("txt_LieuDéclaration2"), dealerAddr.ville);
-        setText(p("txt_dateDéclaration"), dateJ);
+        d(36, 240, "X", 10, true);                         // Personne physique
+        d(91, 211, client.name, 9, true);                  // Nom
+        if (client.siren) d(396, 211, client.siren, 8);    // SIRET si pro
+        d(108, 167, cA.num, 9);                            // N° voie
+        d(158, 167, cA.ext, 8);                            // Extension
+        d(205, 167, cA.type, 8);                           // Type de voie
+        d(281, 167, cA.nom, 8);                            // Nom de la voie
+        d(108, 147, cA.cp, 9);                             // Code postal
+        d(192, 147, cA.ville, 9);                          // Commune
+        d(36, 110, "X", 9, true);                          // Acquérir
+        d(36, 96, "X", 9, true);                           // Informé
+        d(64, 72, dA.ville, 9);                            // Fait à
+        d(193, 72, dateJ, 9);                              // Le
       }
 
       const filledBytes = await pdfDoc.save();
@@ -5180,6 +5123,14 @@ export default function App() {
     clearSession();
     setToken(null); setUser(null); setGarage(null); setGarageId(null);
   };
+
+  // Déconnexion auto du mode Essai quand on quitte/ferme la page
+  useEffect(() => {
+    if (!isRealDemo) return;
+    const autoLogoutDemo = () => { clearSession(); };
+    window.addEventListener("beforeunload", autoLogoutDemo);
+    return () => window.removeEventListener("beforeunload", autoLogoutDemo);
+  }, [isRealDemo]);
 
   const saveDealer = async (data) => {
     if (isRealDemo) { setDemoDealer({ ...demoDealer, ...data }); return; }
