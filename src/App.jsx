@@ -2663,75 +2663,24 @@ function CessionDoc({ order, dealer, onClose }) {
           document.head.appendChild(script);
         });
       }
-      const { PDFDocument, PDFName, PDFHexString, PDFBool, PDFDict, PDFArray } = window.PDFLib;
+      const { PDFDocument, StandardFonts } = window.PDFLib;
 
-      const pdfBytes = await fetch("/cerfa_15776_clean.pdf").then(r => r.arrayBuffer());
-      const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
-
-      // Forcer NeedAppearances directement dans le catalogue
-      const acroForm = pdfDoc.catalog.lookup(PDFName.of("AcroForm"), PDFDict);
-      if (acroForm) {
-        acroForm.set(PDFName.of("NeedAppearances"), PDFBool.True);
-      }
-
-      // ── Collecter toutes les annotations de toutes les pages ──
-      const allAnnots = [];
-      for (const page of pdfDoc.getPages()) {
-        const annotsRef = page.node.get(PDFName.of("Annots"));
-        if (!annotsRef) continue;
-        const annots = pdfDoc.context.lookup(annotsRef, PDFArray);
-        if (!annots) continue;
-        for (let i = 0; i < annots.size(); i++) {
-          const ref = annots.get(i);
-          const dict = pdfDoc.context.lookup(ref);
-          if (dict instanceof PDFDict) {
-            // Récupérer le nom complet du champ (remonter les parents)
-            let name = "";
-            const t = dict.get(PDFName.of("T"));
-            if (t) name = t.decodeText ? t.decodeText() : t.toString().replace(/[()]/g, "");
-            // Remonter la hiérarchie parent pour le nom complet
-            let parent = dict.get(PDFName.of("Parent"));
-            while (parent) {
-              const parentDict = pdfDoc.context.lookup(parent);
-              if (!(parentDict instanceof PDFDict)) break;
-              const pt = parentDict.get(PDFName.of("T"));
-              if (pt) {
-                const pName = pt.decodeText ? pt.decodeText() : pt.toString().replace(/[()]/g, "");
-                name = pName + "." + name;
-              }
-              parent = parentDict.get(PDFName.of("Parent"));
-            }
-            allAnnots.push({ name, dict, ref });
-          }
-        }
-      }
+      const pdfBytes = await fetch("/cerfa_15776-01_acroform.pdf").then(r => r.arrayBuffer());
+      const pdfDoc = await PDFDocument.load(pdfBytes);
+      const form = pdfDoc.getForm();
+      const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica);
 
       // ── Helpers ──
-      const setText = (fieldName, value) => {
+      const setText = (name, value) => {
         if (!value) return;
-        const match = allAnnots.find(a => a.name === fieldName);
-        if (!match) { console.warn("Champ absent:", fieldName); return; }
-        match.dict.set(PDFName.of("V"), PDFHexString.fromText(String(value)));
-        match.dict.delete(PDFName.of("AP"));
+        try {
+          const f = form.getTextField(name);
+          f.setText(String(value));
+          f.defaultUpdateAppearances(helvetica);
+        } catch(e) { console.warn("Champ:", name, e.message); }
       };
-      const setCheck = (fieldName) => {
-        const match = allAnnots.find(a => a.name === fieldName);
-        if (!match) { console.warn("Check absent:", fieldName); return; }
-        match.dict.set(PDFName.of("V"), PDFName.of("1"));
-        match.dict.set(PDFName.of("AS"), PDFName.of("1"));
-      };
-      const setRadio = (fieldName, value) => {
-        // Pour les radios, on cherche le parent et on set /V, puis /AS sur les enfants
-        const matches = allAnnots.filter(a => a.name === fieldName);
-        if (!matches.length) { console.warn("Radio absent:", fieldName); return; }
-        // Set /V sur le parent si on peut le trouver
-        const parentRef = matches[0].dict.get(PDFName.of("Parent"));
-        if (parentRef) {
-          const parentDict = pdfDoc.context.lookup(parentRef);
-          if (parentDict instanceof PDFDict) {
-            parentDict.set(PDFName.of("V"), PDFName.of(value));
-          }
-        }
+      const setCheck = (name) => {
+        try { form.getCheckBox(name).check(); } catch(e) { console.warn("Check:", name, e.message); }
       };
 
       // ── Parser d'adresse ──
@@ -2765,65 +2714,60 @@ function CessionDoc({ order, dealer, onClose }) {
       const dateMEC = v.date_mise_en_circulation || "";
       const mecP = dateMEC.includes("/") ? dateMEC.split("/") : [];
 
-      // ── Remplir les 2 pages ──
+      // ── Remplir les 2 pages via l'API formulaire native ──
       for (const pk of ["Page1", "Page2"]) {
-        const f = (n) => `topmostSubform[0].${pk}[0].${n}[0]`;
+        const p = (n) => `${pk}.${n}`;
 
         // VÉHICULE
-        setText(f("num_Immatriculation"), v.plate);
-        setText(f("num_Identification"), v.vin);
+        setText(p("num_Immatriculation"), v.plate);
+        setText(p("num_Identification"), v.vin);
         if (mecP.length === 3) {
-          setText(f("num_DateImmatriculationJour"), mecP[0]);
-          setText(f("num_DateImmatriculationMois"), mecP[1]);
-          setText(f("num_DateImmatriculationAnnée"), mecP[2]);
-        } else { setText(f("num_DateImmatriculationJour"), dateMEC); }
-        setText(f("txt_MarqueVéhicule"), v.marque);
-        setText(f("txt_TypeVarianteVersionVéhicule"), v.finition);
-        setText(f("txt_GenreNational"), v.genre || "VP");
-        setText(f("txt_DénominationCommerciale"), v.modele);
-        setText(f("num_KilométrageCompteur"), v.kilometrage ? Number(v.kilometrage).toLocaleString("fr-FR") : "");
+          setText(p("num_DateImmatriculationJour"), mecP[0]);
+          setText(p("num_DateImmatriculationMois"), mecP[1]);
+          setText(p("num_DateImmatriculationAnnée"), mecP[2]);
+        } else { setText(p("num_DateImmatriculationJour"), dateMEC); }
+        setText(p("txt_MarqueVéhicule"), v.marque);
+        setText(p("txt_TypeVarianteVersionVéhicule"), v.finition);
+        setText(p("txt_GenreNational"), v.genre || "VP");
+        setText(p("txt_DénominationCommerciale"), v.modele);
+        setText(p("num_KilométrageCompteur"), v.kilometrage ? Number(v.kilometrage).toLocaleString("fr-FR") : "");
 
         // ANCIEN PROPRIÉTAIRE
-        setText(f("txt_IdentitéVendeur"), dealer?.name);
-        setText(f("Num_Siret"), dealer?.siret);
-        setText(f("num_VoieAdresse"), dA.num);
-        setText(f("txt_ExtensionAdresse"), dA.ext);
-        setText(f("txt_TypeVoieAdresse"), dA.type);
-        setText(f("txt_NomVoie"), dA.nom);
-        setText(f("num_CodePostalAdresse"), dA.cp);
-        setText(f("txt_CommuneAdresse"), dA.ville);
-        setText(f("num_DateVenteJour"), dj);
-        setText(f("num_DateVenteMois"), dm);
-        setText(f("num_DateVenteAnnée"), da);
-        setText(f("num_HoraireVente1"), h1);
-        setText(f("num_HoraireVente2"), h2);
-        setCheck(f("ckb_ValidationDéclaration1"));
-        setCheck(f("ckb_ValidationDéclaration2"));
-        setText(f("txt_LieuDéclaration1"), dA.ville);
-        setText(f("num_DateDéclaration"), dateJ);
+        setText(p("txt_IdentitéVendeur"), dealer?.name);
+        setText(p("Num_Siret"), dealer?.siret);
+        setText(p("num_VoieAdresse"), dA.num);
+        setText(p("txt_ExtensionAdresse"), dA.ext);
+        setText(p("txt_TypeVoieAdresse"), dA.type);
+        setText(p("txt_NomVoie"), dA.nom);
+        setText(p("num_CodePostalAdresse"), dA.cp);
+        setText(p("txt_CommuneAdresse"), dA.ville);
+        setText(p("num_DateVenteJour"), dj);
+        setText(p("num_DateVenteMois"), dm);
+        setText(p("num_DateVenteAnnée"), da);
+        setText(p("num_HoraireVente1"), h1);
+        setText(p("num_HoraireVente2"), h2);
+        setCheck(p("ckb_ValidationDéclaration1"));
+        setCheck(p("ckb_ValidationDéclaration2"));
+        setText(p("txt_LieuDéclaration1"), dA.ville);
+        setText(p("num_DateDéclaration"), dateJ);
 
         // NOUVEAU PROPRIÉTAIRE
-        setText(f("txt_IdentitéAcheteur"), client.name);
-        if (client.siren) setText(f("num_SiretAcheteur"), client.siren);
-        setText(f("num_VoieAdresseAcheteur"), cA.num);
-        setText(f("txt_ExtensionAdresseAcheteur"), cA.ext);
-        setText(f("txt_TypeVoieAdresseAcheteur"), cA.type);
-        setText(f("txt_NomVoieAdresseAcheteur"), cA.nom);
-        setText(f("num_CodePostalAdresseAcheteur"), cA.cp);
-        setText(f("txt_CommuneAdresseAcheteur"), cA.ville);
-        setCheck(f("ckb_ValidationDéclarationA1"));
-        setCheck(f("ckb_ValidationDéclarationA2"));
-        setText(f("txt_LieuDéclaration2"), dA.ville);
-        setText(f("txt_dateDéclaration"), dateJ);
+        setText(p("txt_IdentitéAcheteur"), client.name);
+        if (client.siren) setText(p("num_SiretAcheteur"), client.siren);
+        setText(p("num_VoieAdresseAcheteur"), cA.num);
+        setText(p("txt_ExtensionAdresseAcheteur"), cA.ext);
+        setText(p("txt_TypeVoieAdresseAcheteur"), cA.type);
+        setText(p("txt_NomVoieAdresseAcheteur"), cA.nom);
+        setText(p("num_CodePostalAdresseAcheteur"), cA.cp);
+        setText(p("txt_CommuneAdresseAcheteur"), cA.ville);
+        setCheck(p("ckb_ValidationDéclarationA1"));
+        setCheck(p("ckb_ValidationDéclarationA2"));
+        setText(p("txt_LieuDéclaration2"), dA.ville);
+        setText(p("txt_dateDéclaration"), dateJ);
       }
 
-      // Supprimer les champs XFA résiduels pour éviter le crash au save
-      pdfDoc.catalog.delete(PDFName.of("XFA"));
-      if (acroForm) {
-        acroForm.delete(PDFName.of("XFA"));
-      }
-
-      const filledBytes = await pdfDoc.save({ updateFieldAppearances: false });
+      form.flatten();
+      const filledBytes = await pdfDoc.save();
       const blob = new Blob([filledBytes], { type: "application/pdf" });
       setPdfUrl(URL.createObjectURL(blob));
     } catch (err) {
