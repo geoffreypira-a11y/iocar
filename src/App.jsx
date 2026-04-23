@@ -2677,12 +2677,30 @@ function CessionDoc({ order, dealer, vehicles, onClose }) {
       const form = pdfDoc.getForm();
       const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica);
 
+      // ── MaxLen pour les champs comb (une lettre par case) ──
+      const combMaxLen = {
+        "num_Immatriculation": 11, "num_Identification": 17,
+        "num_DateImmatriculationJour": 2, "num_DateImmatriculationMois": 2, "num_DateImmatriculationAnnée": 4,
+        "Num_Siret": 14, "num_SiretAcheteur": 14,
+        "num_CodePostalAdresse": 5, "num_CodePostalAdresseAcheteur": 5,
+        "num_DateVenteJour": 2, "num_DateVenteMois": 2, "num_DateVenteAnnée": 4,
+        "num_HoraireVente1": 2, "num_HoraireVente2": 2,
+        "num_DateNaissanceAcheteurJ": 2, "num_DateNaissanceAcheteurM": 2, "num_DateNaissanceAcheteurA": 4,
+        "num_DateCertificatJour": 2, "num_DateCertificatMois": 2, "num_DateCertificatAnnée": 4,
+        "num_Formule": 13, "num_VoieAdresse": 4, "num_VoieAdresseAcheteur": 4,
+      };
+
       // ── Helpers ──
-      const setText = (name, value, size) => {
+      const setText = (name, value) => {
         if (!value) return;
         try {
           const field = form.getTextField(name);
-          field.setFontSize(size || 9);
+          // Si c'est un champ comb, définir le MaxLength pour l'espacement
+          const shortName = name.split(".").pop();
+          if (combMaxLen[shortName]) {
+            field.setMaxLength(combMaxLen[shortName]);
+          }
+          field.setFontSize(9);
           field.setText(String(value));
           field.defaultUpdateAppearances(helvetica);
         } catch(e) { console.warn("Champ:", name, e.message); }
@@ -2729,60 +2747,59 @@ function CessionDoc({ order, dealer, vehicles, onClose }) {
 
       for (const pk of ["Page1", "Page2"]) {
         const p = (n) => `${pk}.${n}`;
-        const s = 9; // taille uniforme
 
         // VÉHICULE
-        setText(p("num_Immatriculation"), v.plate, s);
-        setText(p("num_Identification"), v.vin, s);
+        setText(p("num_Immatriculation"), v.plate);
+        setText(p("num_Identification"), v.vin);
         if (mecP.length === 3) {
-          setText(p("num_DateImmatriculationJour"), mecP[0], s);
-          setText(p("num_DateImmatriculationMois"), mecP[1], s);
-          setText(p("num_DateImmatriculationAnnée"), mecP[2], s);
-        } else { setText(p("num_DateImmatriculationJour"), dateMEC, s); }
-        setText(p("txt_MarqueVéhicule"), v.marque, s);
-        setText(p("txt_TypeVarianteVersionVéhicule"), v.finition, s);
-        setText(p("txt_GenreNational"), v.genre || "VP", s);
-        setText(p("txt_DénominationCommerciale"), v.modele, s);
-        setText(p("num_KilométrageCompteur"), v.kilometrage ? Number(v.kilometrage).toLocaleString("fr-FR") : "", s);
+          setText(p("num_DateImmatriculationJour"), mecP[0]);
+          setText(p("num_DateImmatriculationMois"), mecP[1]);
+          setText(p("num_DateImmatriculationAnnée"), mecP[2]);
+        } else { setText(p("num_DateImmatriculationJour"), dateMEC); }
+        setText(p("txt_MarqueVéhicule"), v.marque);
+        setText(p("txt_TypeVarianteVersionVéhicule"), v.finition);
+        setText(p("txt_GenreNational"), v.genre || "VP");
+        setText(p("txt_DénominationCommerciale"), v.modele);
+        setText(p("num_KilométrageCompteur"), v.kilometrage ? Number(v.kilometrage).toLocaleString("fr-FR") : "");
 
         // Certificat immatriculation : OUI
         setRadio(p("Groupe_de_boutons_radio1"), "1");
 
         // ANCIEN PROPRIÉTAIRE
         setRadio(p("Groupe_de_boutons_radio3"), "1");  // Personne morale
-        setText(p("txt_IdentitéVendeur"), dealer?.name, s);
-        setText(p("Num_Siret"), dealer?.siret, s);
-        setText(p("num_VoieAdresse"), dA.num, s);
-        setText(p("txt_ExtensionAdresse"), dA.ext, s);
-        setText(p("txt_TypeVoieAdresse"), dA.type, s);
-        setText(p("txt_NomVoie"), dA.nom, s);
-        setText(p("num_CodePostalAdresse"), dA.cp, s);
-        setText(p("txt_CommuneAdresse"), dA.ville, s);
+        setText(p("txt_IdentitéVendeur"), dealer?.name);
+        setText(p("Num_Siret"), dealer?.siret);
+        setText(p("num_VoieAdresse"), dA.num);
+        setText(p("txt_ExtensionAdresse"), dA.ext);
+        setText(p("txt_TypeVoieAdresse"), dA.type);
+        setText(p("txt_NomVoie"), dA.nom);
+        setText(p("num_CodePostalAdresse"), dA.cp);
+        setText(p("txt_CommuneAdresse"), dA.ville);
         setRadio(p("Groupe_de_boutons_radio4"), "1");  // Céder
-        setText(p("num_DateVenteJour"), dj, s);
-        setText(p("num_DateVenteMois"), dm, s);
-        setText(p("num_DateVenteAnnée"), da, s);
-        setText(p("num_HoraireVente1"), h1, s);
-        setText(p("num_HoraireVente2"), h2, s);
+        setText(p("num_DateVenteJour"), dj);
+        setText(p("num_DateVenteMois"), dm);
+        setText(p("num_DateVenteAnnée"), da);
+        setText(p("num_HoraireVente1"), h1);
+        setText(p("num_HoraireVente2"), h2);
         setCheck(p("ckb_ValidationDéclaration1"));
         setCheck(p("ckb_ValidationDéclaration2"));
-        setText(p("txt_LieuDéclaration1"), dA.ville, s);
-        setText(p("num_DateDéclaration"), dateJ, s);
+        setText(p("txt_LieuDéclaration1"), dA.ville);
+        setText(p("num_DateDéclaration"), dateJ);
 
         // NOUVEAU PROPRIÉTAIRE
         setRadio(p("Groupe_de_boutons_radio5"), "2");  // Personne physique
-        setText(p("txt_IdentitéAcheteur"), client.name, s);
-        if (client.siren) setText(p("num_SiretAcheteur"), client.siren, s);
-        setText(p("num_VoieAdresseAcheteur"), cA.num, s);
-        setText(p("txt_ExtensionAdresseAcheteur"), cA.ext, s);
-        setText(p("txt_TypeVoieAdresseAcheteur"), cA.type, s);
-        setText(p("txt_NomVoieAdresseAcheteur"), cA.nom, s);
-        setText(p("num_CodePostalAdresseAcheteur"), cA.cp, s);
-        setText(p("txt_CommuneAdresseAcheteur"), cA.ville, s);
+        setText(p("txt_IdentitéAcheteur"), client.name);
+        if (client.siren) setText(p("num_SiretAcheteur"), client.siren);
+        setText(p("num_VoieAdresseAcheteur"), cA.num);
+        setText(p("txt_ExtensionAdresseAcheteur"), cA.ext);
+        setText(p("txt_TypeVoieAdresseAcheteur"), cA.type);
+        setText(p("txt_NomVoieAdresseAcheteur"), cA.nom);
+        setText(p("num_CodePostalAdresseAcheteur"), cA.cp);
+        setText(p("txt_CommuneAdresseAcheteur"), cA.ville);
         setCheck(p("ckb_ValidationDéclarationA1"));
         setCheck(p("ckb_ValidationDéclarationA2"));
-        setText(p("txt_LieuDéclaration2"), dA.ville, s);
-        setText(p("txt_dateDéclaration"), dateJ, s);
+        setText(p("txt_LieuDéclaration2"), dA.ville);
+        setText(p("txt_dateDéclaration"), dateJ);
       }
 
       form.flatten();
