@@ -2709,7 +2709,7 @@ function CessionDoc({ order, dealer, onClose }) {
 
         // ── ANCIEN PROPRIÉTAIRE (vendeur = garage) ──
         // Cocher "Personne morale"
-        d(36, 572, "X", 10, true);                                         // radio3 /2 = Personne morale
+        d(36, 562, "X", 10, true);                                         // radio3 /1 = Personne morale
         // Je soussigné : Raison sociale
         d(91, 542, dealer?.name || "", 9, true);                           // txt_IdentitéVendeur
         // SIRET
