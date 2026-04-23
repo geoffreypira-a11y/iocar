@@ -2670,19 +2670,21 @@ function CessionDoc({ order, dealer, vehicles, onClose }) {
           document.head.appendChild(script);
         });
       }
-      const { PDFDocument } = window.PDFLib;
+      const { PDFDocument, StandardFonts } = window.PDFLib;
 
       const pdfBytes = await fetch("/cerfa_15776-01_acroform.pdf").then(r => r.arrayBuffer());
       const pdfDoc = await PDFDocument.load(pdfBytes);
       const form = pdfDoc.getForm();
+      const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica);
 
       // ── Helpers ──
       const setText = (name, value, size) => {
         if (!value) return;
         try {
           const field = form.getTextField(name);
-          field.setFontSize(size || 10);
+          field.setFontSize(size || 9);
           field.setText(String(value));
+          field.defaultUpdateAppearances(helvetica);
         } catch(e) { console.warn("Champ:", name, e.message); }
       };
       const setCheck = (name) => {
