@@ -2697,63 +2697,63 @@ function CessionDoc({ order, dealer, onClose }) {
           page.drawText(String(text), { x, y, size: size || fs, font: bold ? fontBold : font, color });
         };
 
-        // ── VÉHICULE ──
-        d(32, height - 105, v.plate || "", 10, true);
-        d(225, height - 105, v.vin || "", 8);
-        d(485, height - 105, v.date_mise_en_circulation || "", 9);
-        d(32, height - 138, v.marque || "", 9, true);
-        d(175, height - 138, v.finition || "", 8);
-        d(375, height - 138, v.genre || "VP", 9);
-        d(470, height - 138, v.modele || "", 9);
-        d(275, height - 162, v.kilometrage ? `${Number(v.kilometrage).toLocaleString("fr-FR")}` : "", 9);
+        // ── VÉHICULE ── (coordonnées alignées sur les champs fillables du Cerfa)
+        d(36, 721, v.plate || "", 10, true);                                // num_Immatriculation
+        d(174, 721, v.vin || "", 8);                                       // num_Identification
+        d(442, 721, v.date_mise_en_circulation || "", 9);                   // Date 1re immatriculation
+        d(36, 697, v.marque || "", 9, true);                               // txt_MarqueVéhicule
+        d(176, 697, v.finition || "", 8);                                  // txt_TypeVarianteVersion
+        d(323, 697, v.genre || "VP", 9);                                   // txt_GenreNational
+        d(443, 697, v.modele || "", 9);                                    // txt_DénominationCommerciale
+        d(207, 672, v.kilometrage ? `${Number(v.kilometrage).toLocaleString("fr-FR")}` : "", 9); // num_Kilométrage
 
         // ── ANCIEN PROPRIÉTAIRE (vendeur = garage) ──
         // Cocher "Personne morale"
-        d(19, height - 298, "X", 10, true);
-        // Je soussigné : Raison sociale (sur la ligne du nom, pas l'adresse)
-        d(100, height - 316, dealer?.name || "", 9, true);
+        d(36, 572, "X", 10, true);                                         // radio3 /2 = Personne morale
+        // Je soussigné : Raison sociale
+        d(91, 542, dealer?.name || "", 9, true);                           // txt_IdentitéVendeur
         // SIRET
-        d(475, height - 316, dealer?.siret || "", 8);
+        d(395, 542, dealer?.siret || "", 8);                               // Num_Siret
         // Adresse : N° + rue
-        d(100, height - 343, dAddrLines[0] || "", 8);
+        d(109, 510, dAddrLines[0] || "", 8);                               // num_VoieAdresse + txt_NomVoie
         // CP + Commune
         if (dCPMatch) {
-          d(115, height - 363, dCP, 9);
-          d(210, height - 363, dVille, 9);
+          d(109, 491, dCP, 9);                                             // num_CodePostalAdresse
+          d(193, 491, dVille, 9);                                          // txt_CommuneAdresse
         }
         // Cocher "céder"
-        d(307, height - 383, "X", 10, true);
+        d(185, 466, "X", 10, true);                                        // radio4 /1 = céder
         // Le ___ à ___ h ___
-        d(30, height - 403, `   ${today()}`, 9);
-        d(155, height - 403, heure, 9);
+        d(47, 448, today(), 9);                                            // num_DateVenteJour/Mois/Année
+        d(154, 448, heure, 9);                                             // num_HoraireVente1
         // Certifications : cocher seulement les 2 premières (PAS la 3ème VHU)
-        d(19, height - 445, "X", 9, true);                                 // Avoir remis certificat
-        d(19, height - 468, "X", 9, true);                                 // Pas de transformation
+        d(36, 417, "X", 9, true);                                          // ckb_ValidationDéclaration1
+        d(36, 397, "X", 9, true);                                          // ckb_ValidationDéclaration2
         // NE PAS cocher la 3ème (VHU)
         // Fait à / le
-        d(55, height - 537, dVille, 9);
-        d(210, height - 537, today(), 9);
+        d(64, 326, dVille, 9);                                             // txt_LieuDéclaration1
+        d(194, 326, today(), 9);                                           // num_DateDéclaration
 
         // ── NOUVEAU PROPRIÉTAIRE (acheteur = client) ──
         // Cocher "Personne physique"
-        d(19, height - 593, "X", 10, true);
+        d(36, 240, "X", 10, true);                                         // radio5 /2 = Personne physique
         // Je soussigné : Nom
-        d(100, height - 621, client.name || "", 9, true);
+        d(91, 211, client.name || "", 9, true);                            // txt_IdentitéAcheteur
         // SIRET si pro
-        if (client.siren) d(475, height - 621, client.siren, 8);
-        // Adresse
-        d(100, height - 665, cAddrLines[0] || "", 8);
+        if (client.siren) d(396, 211, client.siren, 8);                   // num_SiretAcheteur
+        // Adresse : N° + rue
+        d(108, 167, cAddrLines[0] || "", 8);                               // num_VoieAdresseAcheteur + txt_NomVoie
         // CP + Commune
         if (cCPMatch) {
-          d(115, height - 685, cCP, 9);
-          d(210, height - 685, cVille, 9);
+          d(108, 147, cCP, 9);                                             // num_CodePostalAdresseAcheteur
+          d(192, 147, cVille, 9);                                          // txt_CommuneAdresseAcheteur
         }
         // Certifications acheteur
-        d(19, height - 715, "X", 9, true);                                 // Acquérir
-        d(19, height - 730, "X", 9, true);                                 // Avoir été informé
+        d(36, 110, "X", 9, true);                                          // ckb_ValidationDéclarationA1
+        d(36, 96, "X", 9, true);                                           // ckb_ValidationDéclarationA2
         // Fait à / le
-        d(55, height - 755, dVille, 9);
-        d(210, height - 755, today(), 9);
+        d(64, 72, dVille, 9);                                              // txt_LieuDéclaration2
+        d(193, 72, today(), 9);                                            // txt_dateDéclaration
       }
 
       const filledBytes = await pdfDoc.save();
