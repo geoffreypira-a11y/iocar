@@ -2648,209 +2648,157 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
 function CessionDoc({ order, dealer, onClose }) {
   const v = order.vehicle_data || {};
   const client = order.client || {};
-  const todayStr = today();
-  const [sigVendeur, setSigVendeur] = useState(null);
-  const [sigAcquereur, setSigAcquereur] = useState(null);
-  const [sigMode, setSigMode] = useState("ecran"); // "ecran" ou "papier"
+  const [loading, setLoading] = useState(false);
+  const [pdfUrl, setPdfUrl] = useState(null);
 
-  const printCession = () => {
-    const el = document.querySelector('.cession-doc');
-    if (!el) return;
-    const win = window.open('', '_blank');
-    if (!win) return;
-    win.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"/>');
-    win.document.write('<title>Déclaration de cession — ' + (v.plate || '') + '</title>');
-    win.document.write('<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Syne:wght@700;800&display=swap" rel="stylesheet">');
-    win.document.write('<style>');
-    win.document.write('*{margin:0;padding:0;box-sizing:border-box}');
-    win.document.write('body{font-family:"DM Sans",sans-serif;background:#fff;color:#111;padding:24px}');
-    win.document.write('.cession-doc{max-width:780px;margin:0 auto;padding:30px}');
-    win.document.write('.cess-title{font-family:"Syne",sans-serif;font-size:20px;font-weight:800;text-align:center;margin-bottom:4px}');
-    win.document.write('.cess-sub{text-align:center;font-size:11px;color:#888;margin-bottom:24px}');
-    win.document.write('.cess-section{margin-bottom:20px;border:1px solid #ddd;border-radius:6px;overflow:hidden}');
-    win.document.write('.cess-section-title{background:#f5f3ee;padding:8px 14px;font-weight:700;font-size:12px;letter-spacing:1px;text-transform:uppercase;color:#8b7a4a;border-bottom:1px solid #ddd}');
-    win.document.write('.cess-grid{display:grid;grid-template-columns:1fr 1fr;gap:0}');
-    win.document.write('.cess-field{padding:8px 14px;border-bottom:1px solid #eee;font-size:12px}');
-    win.document.write('.cess-field:nth-child(odd){border-right:1px solid #eee}');
-    win.document.write('.cess-label{font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#aaa;margin-bottom:2px}');
-    win.document.write('.cess-val{font-weight:600;min-height:16px}');
-    win.document.write('.cess-full{grid-column:1/-1;border-right:none!important}');
-    win.document.write('.cess-sig{display:flex;justify-content:space-between;gap:30px;margin-top:24px}');
-    win.document.write('.cess-sig-box{flex:1;border:1px solid #ddd;border-radius:6px;padding:14px;min-height:100px}');
-    win.document.write('.cess-sig-title{font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#aaa;margin-bottom:40px}');
-    win.document.write('.cess-footer{margin-top:20px;font-size:9px;color:#aaa;text-align:center;line-height:1.7}');
-    win.document.write('@page{size:A4 portrait;margin:10mm}');
-    win.document.write('@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}');
-    win.document.write('</style>');
-    win.document.write('</head><body>');
-    win.document.write(el.outerHTML);
-    win.document.write('</body></html>');
-    win.document.close();
-    win.focus();
-    setTimeout(() => { win.print(); }, 600);
+  const generatePdf = async () => {
+    setLoading(true);
+    try {
+      // Charger pdf-lib depuis CDN
+      if (!window.PDFLib) {
+        await new Promise((resolve, reject) => {
+          const script = document.createElement("script");
+          script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js";
+          script.onload = resolve;
+          script.onerror = reject;
+          document.head.appendChild(script);
+        });
+      }
+      const { PDFDocument, rgb, StandardFonts } = window.PDFLib;
+
+      // Charger le Cerfa PDF vierge
+      const pdfBytes = await fetch("/cerfa_15776.pdf").then(r => r.arrayBuffer());
+      const pdfDoc = await PDFDocument.load(pdfBytes);
+      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+      const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+      const fontSize = 9;
+      const color = rgb(0.05, 0.05, 0.35);
+
+      // Remplir les 2 pages (exemplaire vendeur + exemplaire acheteur)
+      for (const page of pdfDoc.getPages()) {
+        const { height } = page.getSize();
+        const draw = (x, y, text, size, bold) => {
+          if (!text) return;
+          page.drawText(String(text), { x, y, size: size || fontSize, font: bold ? fontBold : font, color });
+        };
+
+        // ── VÉHICULE ──
+        draw(30, height - 118, v.plate || "", 11, true);                    // Immatriculation
+        draw(220, height - 118, v.vin || "", 9);                             // VIN
+        draw(478, height - 118, v.date_mise_en_circulation || "", 9);        // Date 1ère immat
+        draw(30, height - 155, v.marque || "", 9, true);                     // Marque
+        draw(175, height - 155, v.finition || v.modele || "", 8);            // Type variante version
+        draw(370, height - 155, v.genre || "VP", 9);                         // Genre national
+        draw(458, height - 155, v.modele || "", 9);                          // Dénomination commerciale
+        draw(285, height - 178, v.kilometrage ? `${Number(v.kilometrage).toLocaleString("fr-FR")} km` : "", 9); // Km
+
+        // ── ANCIEN PROPRIÉTAIRE (vendeur = garage) ──
+        draw(105, height - 340, dealer?.name || "", 9, true);                // Nom / Raison sociale
+        draw(490, height - 340, dealer?.siret || "", 8);                     // SIRET
+        // Adresse
+        const addrLines = (dealer?.address || "").split("\n");
+        draw(105, height - 375, addrLines[0] || "", 8);                      // Adresse ligne 1
+        // CP + Commune depuis l'adresse
+        const addrMatch = (dealer?.address || "").match(/(\d{5})\s*(.*)/);
+        if (addrMatch) {
+          draw(105, height - 400, addrMatch[1], 9);                          // CP
+          draw(230, height - 400, addrMatch[2] || "", 9);                    // Commune
+        } else if (addrLines[1]) {
+          draw(105, height - 400, addrLines[1], 8);
+        }
+
+        // Cession : céder (cocher) — position approximative de la checkbox
+        draw(282, height - 425, "X", 10, true);                              // Cocher "céder"
+
+        // Date et heure de cession
+        const todayParts = today().split("/");
+        draw(30, height - 470, `       ${today()}`, 9);                      // Le date
+        draw(175, height - 470, new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }), 9); // heure
+
+        // Certifications (cocher les 2 premières)
+        draw(18, height - 497, "X", 9, true);                                // Avoir remis certificat
+        draw(18, height - 526, "X", 9, true);                                // Pas de transformation
+
+        // Fait à / le
+        const dealerCity = (dealer?.address || "").match(/\d{5}\s*(.*)/)?.[1] || "";
+        draw(60, height - 580, dealerCity, 9);                               // Fait à
+        draw(230, height - 580, today(), 9);                                  // le
+
+        // ── NOUVEAU PROPRIÉTAIRE (acheteur = client) ──
+        draw(105, height - 660, client.name || "", 9, true);                  // Nom
+        if (client.siren) draw(490, height - 660, client.siren, 8);           // SIRET
+
+        // Adresse client
+        const clientAddr = (client.address || "").split("\n");
+        draw(105, height - 710, clientAddr[0] || "", 8);                      // Rue
+        const clientAddrMatch = (client.address || "").match(/(\d{5})\s*(.*)/);
+        if (clientAddrMatch) {
+          draw(105, height - 735, clientAddrMatch[1], 9);                     // CP
+          draw(230, height - 735, clientAddrMatch[2] || "", 9);               // Commune
+        } else if (clientAddr[1]) {
+          draw(105, height - 735, clientAddr[1], 8);
+        }
+
+        // Certifications acheteur (cocher)
+        draw(18, height - 775, "X", 9, true);                                // Acquérir le véhicule
+        draw(18, height - 790, "X", 9, true);                                // Avoir été informé
+
+        // Fait à / le (acheteur)
+        draw(60, height - 810, dealerCity, 9);
+        draw(230, height - 810, today(), 9);
+      }
+
+      // Générer le PDF final
+      const filledBytes = await pdfDoc.save();
+      const blob = new Blob([filledBytes], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      setPdfUrl(url);
+    } catch (err) {
+      console.error("Erreur génération Cerfa:", err);
+      alert("Erreur lors de la génération du Cerfa : " + err.message);
+    } finally {
+      setLoading(false);
+    }
   };
+
+  // Générer automatiquement à l'ouverture
+  React.useEffect(() => { generatePdf(); }, []);
 
   return (
     <div className="modal-bg" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ maxWidth: 860, width: "95vw", maxHeight: "95vh", display: "flex", flexDirection: "column" }}>
+      <div className="modal" style={{ maxWidth: 900, width: "95vw", maxHeight: "95vh", display: "flex", flexDirection: "column" }}>
         <div className="modal-hd" style={{ flexShrink: 0 }}>
-          <span className="modal-title">📄 Déclaration de cession — {v.plate || "véhicule"}</span>
+          <span className="modal-title">📄 Cerfa 15776*02 — Cession {v.plate || ""}</span>
           <div style={{ display: "flex", gap: 8 }}>
-            <button className="btn btn-primary btn-sm" onClick={printCession}>🖨 Imprimer / PDF</button>
+            {pdfUrl && (
+              <>
+                <a href={pdfUrl} download={`Cession_${v.plate || "vehicule"}_${today().replace(/\//g, "-")}.pdf`} className="btn btn-primary btn-sm">
+                  📥 Télécharger PDF
+                </a>
+                <button className="btn btn-ghost btn-sm" onClick={() => {
+                  const win = window.open(pdfUrl, "_blank");
+                  if (win) setTimeout(() => win.print(), 800);
+                }}>🖨 Imprimer</button>
+              </>
+            )}
             <button className="close-btn" onClick={onClose}>×</button>
           </div>
         </div>
-
-        <div style={{ flex: 1, overflowY: "auto", padding: 24 }}>
-          <div className="cession-doc">
-            <div className="cess-title">DÉCLARATION DE CESSION D'UN VÉHICULE</div>
-            <div className="cess-sub">Cerfa n° 15776*02 — Articles R322-4 et R322-9 du code de la route</div>
-
-            {/* SECTION 1 — VÉHICULE */}
-            <div className="cess-section">
-              <div className="cess-section-title">🚗 Désignation du véhicule</div>
-              <div className="cess-grid">
-                <div className="cess-field">
-                  <div className="cess-label">N° d'immatriculation</div>
-                  <div className="cess-val">{v.plate || "—"}</div>
-                </div>
-                <div className="cess-field">
-                  <div className="cess-label">Date de 1ère mise en circulation</div>
-                  <div className="cess-val">{v.date_mise_en_circulation || "—"}</div>
-                </div>
-                <div className="cess-field">
-                  <div className="cess-label">Marque</div>
-                  <div className="cess-val">{v.marque || "—"}</div>
-                </div>
-                <div className="cess-field">
-                  <div className="cess-label">Modèle / Type</div>
-                  <div className="cess-val">{v.modele || ""} {v.finition || ""}</div>
-                </div>
-                <div className="cess-field">
-                  <div className="cess-label">N° d'identification (VIN)</div>
-                  <div className="cess-val" style={{ fontFamily: "monospace" }}>{v.vin || "—"}</div>
-                </div>
-                <div className="cess-field">
-                  <div className="cess-label">Genre (VP/CTTE)</div>
-                  <div className="cess-val">{v.genre || "VP"}</div>
-                </div>
-                <div className="cess-field">
-                  <div className="cess-label">Kilométrage au compteur</div>
-                  <div className="cess-val">{v.kilometrage ? `${Number(v.kilometrage).toLocaleString("fr-FR")} km` : "—"}</div>
-                </div>
-                <div className="cess-field">
-                  <div className="cess-label">Énergie</div>
-                  <div className="cess-val">{v.carburant || "—"}</div>
-                </div>
-              </div>
+        <div style={{ flex: 1, overflow: "hidden", background: "#333", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          {loading ? (
+            <div style={{ textAlign: "center", color: "#fff", padding: 40 }}>
+              <div style={{ fontSize: 32, marginBottom: 12 }}>⏳</div>
+              <div>Génération du Cerfa en cours...</div>
             </div>
-
-            {/* SECTION 2 — ANCIEN PROPRIÉTAIRE (le garage) */}
-            <div className="cess-section">
-              <div className="cess-section-title">👤 Ancien propriétaire (vendeur)</div>
-              <div className="cess-grid">
-                <div className="cess-field cess-full">
-                  <div className="cess-label">Nom / Raison sociale</div>
-                  <div className="cess-val">{dealer?.name || "—"}</div>
-                </div>
-                <div className="cess-field cess-full">
-                  <div className="cess-label">Adresse</div>
-                  <div className="cess-val">{dealer?.address?.replace(/\n/g, ", ") || "—"}</div>
-                </div>
-                <div className="cess-field">
-                  <div className="cess-label">SIRET</div>
-                  <div className="cess-val" style={{ fontFamily: "monospace" }}>{dealer?.siret || "—"}</div>
-                </div>
-                <div className="cess-field">
-                  <div className="cess-label">Téléphone</div>
-                  <div className="cess-val">{dealer?.phone || "—"}</div>
-                </div>
-              </div>
+          ) : pdfUrl ? (
+            <iframe src={pdfUrl} style={{ width: "100%", height: "100%", border: "none" }} title="Cerfa 15776" />
+          ) : (
+            <div style={{ textAlign: "center", color: "#fff", padding: 40 }}>
+              <div style={{ fontSize: 32, marginBottom: 12 }}>❌</div>
+              <div>Erreur de génération</div>
+              <button className="btn btn-primary btn-sm" style={{ marginTop: 12 }} onClick={generatePdf}>🔄 Réessayer</button>
             </div>
-
-            {/* SECTION 3 — NOUVEAU PROPRIÉTAIRE (le client) */}
-            <div className="cess-section">
-              <div className="cess-section-title">👤 Nouveau propriétaire (acquéreur)</div>
-              <div className="cess-grid">
-                <div className="cess-field cess-full">
-                  <div className="cess-label">Nom et prénom / Raison sociale</div>
-                  <div className="cess-val">{client.name || "—"}</div>
-                </div>
-                <div className="cess-field cess-full">
-                  <div className="cess-label">Adresse</div>
-                  <div className="cess-val">{client.address?.replace(/\n/g, ", ") || "—"}</div>
-                </div>
-                <div className="cess-field">
-                  <div className="cess-label">Téléphone</div>
-                  <div className="cess-val">{client.phone || "—"}</div>
-                </div>
-                <div className="cess-field">
-                  <div className="cess-label">Email</div>
-                  <div className="cess-val">{client.email || "—"}</div>
-                </div>
-              </div>
-            </div>
-
-            {/* SECTION 4 — CESSION */}
-            <div className="cess-section">
-              <div className="cess-section-title">📝 Conditions de la cession</div>
-              <div className="cess-grid">
-                <div className="cess-field">
-                  <div className="cess-label">Date de la cession</div>
-                  <div className="cess-val">{order.date_creation || todayStr}</div>
-                </div>
-                <div className="cess-field">
-                  <div className="cess-label">Heure de la cession</div>
-                  <div className="cess-val">{new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}</div>
-                </div>
-                <div className="cess-field">
-                  <div className="cess-label">Prix de vente TTC</div>
-                  <div className="cess-val" style={{ fontWeight: 800, color: "#8b7a4a" }}>{fmtDec(calcOrder(order).ttc)}</div>
-                </div>
-                <div className="cess-field">
-                  <div className="cess-label">N° facture</div>
-                  <div className="cess-val" style={{ fontFamily: "monospace" }}>{order.ref || "—"}</div>
-                </div>
-              </div>
-            </div>
-
-            {/* TOGGLE SIGNATURE */}
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, margin: "20px 0 12px", padding: "8px 14px", background: "var(--card2)", borderRadius: 8, border: "1px solid var(--border2)" }}>
-              <span style={{ fontSize: 11, color: "var(--muted)" }}>Mode signature :</span>
-              <button className={`btn btn-xs ${sigMode === "ecran" ? "btn-primary" : "btn-ghost"}`} onClick={() => setSigMode("ecran")}>✍️ Signature écran</button>
-              <button className={`btn btn-xs ${sigMode === "papier" ? "btn-primary" : "btn-ghost"}`} onClick={() => setSigMode("papier")}>📝 Signature papier</button>
-            </div>
-
-            {/* SIGNATURES */}
-            <div className="cess-sig">
-              <div className="cess-sig-box">
-                {sigMode === "ecran" ? (
-                  <SignaturePad label="Signature du vendeur" onSave={setSigVendeur} savedImg={sigVendeur} />
-                ) : (
-                  <>
-                    <div className="cess-sig-title">Signature du vendeur</div>
-                    <div style={{ fontSize: 10, color: "#bbb" }}>Lu et approuvé, bon pour cession</div>
-                  </>
-                )}
-              </div>
-              <div className="cess-sig-box">
-                {sigMode === "ecran" ? (
-                  <SignaturePad label="Signature de l'acquéreur" onSave={setSigAcquereur} savedImg={sigAcquereur} />
-                ) : (
-                  <>
-                    <div className="cess-sig-title">Signature de l'acquéreur</div>
-                    <div style={{ fontSize: 10, color: "#bbb" }}>Lu et approuvé, bon pour acquisition</div>
-                  </>
-                )}
-              </div>
-            </div>
-
-            <div className="cess-footer">
-              Ce document doit être établi en 2 exemplaires (un pour chaque partie).<br/>
-              Le vendeur doit déclarer la cession dans les 15 jours sur le site de l'ANTS (ants.gouv.fr).<br/>
-              L'acquéreur dispose d'un mois pour effectuer la demande de carte grise à son nom.
-            </div>
-          </div>
+          )}
         </div>
       </div>
     </div>
