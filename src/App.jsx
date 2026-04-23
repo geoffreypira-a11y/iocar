@@ -2682,70 +2682,77 @@ function CessionDoc({ order, dealer, onClose }) {
           page.drawText(String(text), { x, y, size: size || fontSize, font: bold ? fontBold : font, color });
         };
 
-        // ── VÉHICULE ──
-        draw(30, height - 118, v.plate || "", 11, true);                    // Immatriculation
-        draw(220, height - 118, v.vin || "", 9);                             // VIN
-        draw(478, height - 118, v.date_mise_en_circulation || "", 9);        // Date 1ère immat
-        draw(30, height - 155, v.marque || "", 9, true);                     // Marque
-        draw(175, height - 155, v.finition || v.modele || "", 8);            // Type variante version
-        draw(370, height - 155, v.genre || "VP", 9);                         // Genre national
-        draw(458, height - 155, v.modele || "", 9);                          // Dénomination commerciale
-        draw(285, height - 178, v.kilometrage ? `${Number(v.kilometrage).toLocaleString("fr-FR")} km` : "", 9); // Km
+        // ── VÉHICULE ── (cases au-dessus des labels)
+        draw(32, height - 105, v.plate || "", 10, true);                     // (A) Immatriculation
+        draw(225, height - 105, v.vin || "", 8);                              // (E) VIN
+        draw(485, height - 105, v.date_mise_en_circulation || "", 9);         // (B) Date 1ère immat
+        draw(32, height - 138, v.marque || "", 9, true);                      // (D.1) Marque
+        draw(175, height - 138, v.finition || "", 8);                         // (D.2) Type variante
+        draw(375, height - 138, v.genre || "VP", 9);                          // (J.1) Genre
+        draw(470, height - 138, v.modele || "", 9);                           // (D.3) Dénomination
+        draw(275, height - 162, v.kilometrage ? `${Number(v.kilometrage).toLocaleString("fr-FR")}` : "", 9); // Km
 
         // ── ANCIEN PROPRIÉTAIRE (vendeur = garage) ──
-        draw(105, height - 340, dealer?.name || "", 9, true);                // Nom / Raison sociale
-        draw(490, height - 340, dealer?.siret || "", 8);                     // SIRET
-        // Adresse
+        // Cocher "Personne morale"
+        draw(19, height - 305, "X", 10, true);
+        // Je soussigné : Raison sociale
+        draw(100, height - 323, dealer?.name || "", 9, true);
+        // SIRET
+        draw(475, height - 323, dealer?.siret || "", 8);
+        // Adresse complète
         const addrLines = (dealer?.address || "").split("\n");
-        draw(105, height - 375, addrLines[0] || "", 8);                      // Adresse ligne 1
-        // CP + Commune depuis l'adresse
+        draw(55, height - 350, addrLines[0] || "", 8);                        // N° + rue
+        // CP + Commune
         const addrMatch = (dealer?.address || "").match(/(\d{5})\s*(.*)/);
         if (addrMatch) {
-          draw(105, height - 400, addrMatch[1], 9);                          // CP
-          draw(230, height - 400, addrMatch[2] || "", 9);                    // Commune
+          draw(115, height - 370, addrMatch[1], 9);                           // CP
+          draw(210, height - 370, addrMatch[2] || "", 9);                     // Commune
         } else if (addrLines[1]) {
-          draw(105, height - 400, addrLines[1], 8);
+          draw(55, height - 370, addrLines[1], 8);
         }
 
-        // Cession : céder (cocher) — position approximative de la checkbox
-        draw(282, height - 425, "X", 10, true);                              // Cocher "céder"
+        // Cocher "céder"
+        draw(307, height - 390, "X", 10, true);
 
-        // Date et heure de cession
-        const todayParts = today().split("/");
-        draw(30, height - 470, `       ${today()}`, 9);                      // Le date
-        draw(175, height - 470, new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }), 9); // heure
+        // Date et heure de cession : "Le _____ à _____ h _____"
+        draw(30, height - 410, `   ${today()}`, 9);
+        draw(155, height - 410, new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }), 9);
 
-        // Certifications (cocher les 2 premières)
-        draw(18, height - 497, "X", 9, true);                                // Avoir remis certificat
-        draw(18, height - 526, "X", 9, true);                                // Pas de transformation
+        // Certifications (cocher)
+        draw(19, height - 440, "X", 9, true);                                 // Avoir remis certificat
+        draw(19, height - 465, "X", 9, true);                                 // Pas de transformation
 
         // Fait à / le
         const dealerCity = (dealer?.address || "").match(/\d{5}\s*(.*)/)?.[1] || "";
-        draw(60, height - 580, dealerCity, 9);                               // Fait à
-        draw(230, height - 580, today(), 9);                                  // le
+        draw(55, height - 530, dealerCity, 9);
+        draw(210, height - 530, today(), 9);
 
         // ── NOUVEAU PROPRIÉTAIRE (acheteur = client) ──
-        draw(105, height - 660, client.name || "", 9, true);                  // Nom
-        if (client.siren) draw(490, height - 660, client.siren, 8);           // SIRET
+        // Cocher "Personne physique"
+        draw(19, height - 600, "X", 10, true);
+        // Je soussigné : Nom
+        draw(100, height - 628, client.name || "", 9, true);
+        // SIRET si pro
+        if (client.siren) draw(475, height - 628, client.siren, 8);
 
         // Adresse client
         const clientAddr = (client.address || "").split("\n");
-        draw(105, height - 710, clientAddr[0] || "", 8);                      // Rue
+        draw(55, height - 670, clientAddr[0] || "", 8);                        // Rue
         const clientAddrMatch = (client.address || "").match(/(\d{5})\s*(.*)/);
         if (clientAddrMatch) {
-          draw(105, height - 735, clientAddrMatch[1], 9);                     // CP
-          draw(230, height - 735, clientAddrMatch[2] || "", 9);               // Commune
+          draw(115, height - 690, clientAddrMatch[1], 9);                      // CP
+          draw(210, height - 690, clientAddrMatch[2] || "", 9);                // Commune
         } else if (clientAddr[1]) {
-          draw(105, height - 735, clientAddr[1], 8);
+          draw(55, height - 690, clientAddr[1], 8);
         }
 
         // Certifications acheteur (cocher)
-        draw(18, height - 775, "X", 9, true);                                // Acquérir le véhicule
-        draw(18, height - 790, "X", 9, true);                                // Avoir été informé
+        draw(19, height - 720, "X", 9, true);                                 // Acquérir
+        draw(19, height - 735, "X", 9, true);                                 // Avoir été informé
 
         // Fait à / le (acheteur)
-        draw(60, height - 810, dealerCity, 9);
-        draw(230, height - 810, today(), 9);
+        draw(55, height - 760, dealerCity, 9);
+        draw(210, height - 760, today(), 9);
       }
 
       // Générer le PDF final
