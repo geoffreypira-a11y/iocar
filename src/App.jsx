@@ -2754,11 +2754,11 @@ function CessionDoc({ order, dealer, onClose }) {
         setText(p("num_KilométrageCompteur"), v.kilometrage ? Number(v.kilometrage).toLocaleString("fr-FR") : "");
 
         // Présence certificat d'immatriculation : OUI
-        setRadio(p("Groupe_de_boutons_radio1"), "/1");
+        setRadio(p("Groupe_de_boutons_radio1"), "1");
 
         // ── ANCIEN PROPRIÉTAIRE (vendeur = garage) ──
         // Personne morale
-        setRadio(p("Groupe_de_boutons_radio3"), "/1");
+        setRadio(p("Groupe_de_boutons_radio3"), "1");
         setText(p("txt_IdentitéVendeur"), dealer?.name);
         setText(p("Num_Siret"), dealer?.siret);
         // Adresse vendeur décomposée
@@ -2770,7 +2770,7 @@ function CessionDoc({ order, dealer, onClose }) {
         setText(p("txt_CommuneAdresse"), dealerAddr.ville);
 
         // Céder
-        setRadio(p("Groupe_de_boutons_radio4"), "/1");
+        setRadio(p("Groupe_de_boutons_radio4"), "1");
         // Date et heure de vente
         setText(p("num_DateVenteJour"), dj);
         setText(p("num_DateVenteMois"), dm);
@@ -2789,7 +2789,7 @@ function CessionDoc({ order, dealer, onClose }) {
 
         // ── NOUVEAU PROPRIÉTAIRE (acheteur = client) ──
         // Personne physique
-        setRadio(p("Groupe_de_boutons_radio5"), "/2");
+        setRadio(p("Groupe_de_boutons_radio5"), "2");
         setText(p("txt_IdentitéAcheteur"), client.name);
         if (client.siren) setText(p("num_SiretAcheteur"), client.siren);
 
@@ -2809,9 +2809,6 @@ function CessionDoc({ order, dealer, onClose }) {
         setText(p("txt_LieuDéclaration2"), dealerAddr.ville);
         setText(p("txt_dateDéclaration"), dateJ);
       }
-
-      // Aplatir le formulaire pour figer les valeurs
-      form.flatten();
 
       const filledBytes = await pdfDoc.save();
       const blob = new Blob([filledBytes], { type: "application/pdf" });
