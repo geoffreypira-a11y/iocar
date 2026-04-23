@@ -2670,40 +2670,17 @@ function CessionDoc({ order, dealer, vehicles, onClose }) {
           document.head.appendChild(script);
         });
       }
-      const { PDFDocument, StandardFonts } = window.PDFLib;
+      const { PDFDocument } = window.PDFLib;
 
       const pdfBytes = await fetch("/cerfa_15776-01_acroform.pdf").then(r => r.arrayBuffer());
       const pdfDoc = await PDFDocument.load(pdfBytes);
       const form = pdfDoc.getForm();
-      const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica);
 
-      // ── MaxLen pour les champs comb (une lettre par case) ──
-      const combMaxLen = {
-        "num_Immatriculation": 11, "num_Identification": 17,
-        "num_DateImmatriculationJour": 2, "num_DateImmatriculationMois": 2, "num_DateImmatriculationAnnée": 4,
-        "Num_Siret": 14, "num_SiretAcheteur": 14,
-        "num_CodePostalAdresse": 5, "num_CodePostalAdresseAcheteur": 5,
-        "num_DateVenteJour": 2, "num_DateVenteMois": 2, "num_DateVenteAnnée": 4,
-        "num_HoraireVente1": 2, "num_HoraireVente2": 2,
-        "num_DateNaissanceAcheteurJ": 2, "num_DateNaissanceAcheteurM": 2, "num_DateNaissanceAcheteurA": 4,
-        "num_DateCertificatJour": 2, "num_DateCertificatMois": 2, "num_DateCertificatAnnée": 4,
-        "num_Formule": 13, "num_VoieAdresse": 4, "num_VoieAdresseAcheteur": 4,
-      };
-
-      // ── Helpers ──
+      // ── Helpers ultra-simples — exactement comme le test console qui marche ──
       const setText = (name, value) => {
         if (!value) return;
-        try {
-          const field = form.getTextField(name);
-          // Si c'est un champ comb, définir le MaxLength pour l'espacement
-          const shortName = name.split(".").pop();
-          if (combMaxLen[shortName]) {
-            field.setMaxLength(combMaxLen[shortName]);
-          }
-          field.setFontSize(9);
-          field.setText(String(value));
-          field.defaultUpdateAppearances(helvetica);
-        } catch(e) { console.warn("Champ:", name, e.message); }
+        try { form.getTextField(name).setText(String(value)); }
+        catch(e) { console.warn("Champ:", name, e.message); }
       };
       const setCheck = (name) => {
         try { form.getCheckBox(name).check(); }
@@ -2738,10 +2715,10 @@ function CessionDoc({ order, dealer, vehicles, onClose }) {
 
       const dA = parseAddress(dealer?.address || "");
       const cA = parseAddress(client.address || "");
-      const heure = new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
-      const [h1, h2] = heure.split(":");
       const dateJ = today();
       const [dj, dm, da] = dateJ.includes("/") ? dateJ.split("/") : ["","",""];
+      const heure = new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+      const [h1, h2] = heure.split(":");
       const dateMEC = v.date_mise_en_circulation || "";
       const mecP = dateMEC.includes("/") ? dateMEC.split("/") : [];
 
@@ -2802,7 +2779,6 @@ function CessionDoc({ order, dealer, vehicles, onClose }) {
         setText(p("txt_dateDéclaration"), dateJ);
       }
 
-      form.flatten();
       const filledBytes = await pdfDoc.save();
       const blob = new Blob([filledBytes], { type: "application/pdf" });
       setPdfUrl(URL.createObjectURL(blob));
