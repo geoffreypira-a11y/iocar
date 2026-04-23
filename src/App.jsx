@@ -2663,13 +2663,22 @@ function CessionDoc({ order, dealer, onClose }) {
           document.head.appendChild(script);
         });
       }
-      const { PDFDocument, rgb, StandardFonts } = window.PDFLib;
+      const { PDFDocument } = window.PDFLib;
 
       const pdfBytes = await fetch("/cerfa_15776-01_acroform.pdf").then(r => r.arrayBuffer());
       const pdfDoc = await PDFDocument.load(pdfBytes);
-      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-      const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-      const color = rgb(0.05, 0.05, 0.35);
+      const form = pdfDoc.getForm();
+
+      // ── Helpers ──
+      const setText = (name, value) => {
+        if (!value) return;
+        try { form.getTextField(name).setText(String(value)); }
+        catch(e) { console.warn("Champ:", name, e.message); }
+      };
+      const setCheck = (name) => {
+        try { form.getCheckBox(name).check(); }
+        catch(e) { console.warn("Check:", name, e.message); }
+      };
 
       // ── Parser d'adresse française ──
       const parseAddress = (addr) => {
@@ -2702,60 +2711,59 @@ function CessionDoc({ order, dealer, onClose }) {
       const dateMEC = v.date_mise_en_circulation || "";
       const mecP = dateMEC.includes("/") ? dateMEC.split("/") : [];
 
-      const pages = pdfDoc.getPages();
-      for (const page of pages) {
-        const d = (x, y, text, size, bold) => {
-          if (!text) return;
-          page.drawText(String(text), { x, y, size: size || 8, font: bold ? fontBold : font, color });
-        };
+      for (const pk of ["Page1", "Page2"]) {
+        const p = (n) => `${pk}.${n}`;
 
-        // ── VÉHICULE ──
-        d(36, 721, v.plate, 10, true);
-        d(174, 721, v.vin, 7);
+        // VÉHICULE
+        setText(p("num_Immatriculation"), v.plate);
+        setText(p("num_Identification"), v.vin);
         if (mecP.length === 3) {
-          d(442, 721, mecP[0], 8); d(467, 721, mecP[1], 8); d(494, 721, mecP[2], 8);
-        } else { d(442, 721, dateMEC, 7); }
-        d(36, 697, v.marque, 9, true);
-        d(176, 697, v.finition, 7);
-        d(323, 697, v.genre || "VP", 8);
-        d(443, 697, v.modele, 8);
-        d(207, 672, v.kilometrage ? Number(v.kilometrage).toLocaleString("fr-FR") : "", 8);
+          setText(p("num_DateImmatriculationJour"), mecP[0]);
+          setText(p("num_DateImmatriculationMois"), mecP[1]);
+          setText(p("num_DateImmatriculationAnnée"), mecP[2]);
+        } else { setText(p("num_DateImmatriculationJour"), dateMEC); }
+        setText(p("txt_MarqueVéhicule"), v.marque);
+        setText(p("txt_TypeVarianteVersionVéhicule"), v.finition);
+        setText(p("txt_GenreNational"), v.genre || "VP");
+        setText(p("txt_DénominationCommerciale"), v.modele);
+        setText(p("num_KilométrageCompteur"), v.kilometrage ? Number(v.kilometrage).toLocaleString("fr-FR") : "");
 
-        // ── ANCIEN PROPRIÉTAIRE (vendeur = garage) ──
-        d(36, 562, "X", 10, true);                         // Personne morale
-        d(91, 542, dealer?.name, 8, true);
-        d(395, 542, dealer?.siret, 7);
-        d(109, 510, dA.num, 8);
-        d(150, 510, dA.ext, 8);
-        d(207, 510, dA.type, 8);
-        d(282, 510, dA.nom, 8);
-        d(109, 491, dA.cp, 8);
-        d(193, 491, dA.ville, 8);
-        d(185, 466, "X", 10, true);                        // Céder
-        d(47, 448, dj, 8); d(73, 448, dm, 8); d(100, 448, da, 8);
-        d(154, 448, h1, 8); d(188, 448, h2, 8);
-        d(36, 417, "X", 9, true);
-        d(36, 397, "X", 9, true);
-        d(64, 326, dA.ville, 8);
-        d(194, 326, dateJ, 8);
+        // ANCIEN PROPRIÉTAIRE
+        setText(p("txt_IdentitéVendeur"), dealer?.name);
+        setText(p("Num_Siret"), dealer?.siret);
+        setText(p("num_VoieAdresse"), dA.num);
+        setText(p("txt_ExtensionAdresse"), dA.ext);
+        setText(p("txt_TypeVoieAdresse"), dA.type);
+        setText(p("txt_NomVoie"), dA.nom);
+        setText(p("num_CodePostalAdresse"), dA.cp);
+        setText(p("txt_CommuneAdresse"), dA.ville);
+        setText(p("num_DateVenteJour"), dj);
+        setText(p("num_DateVenteMois"), dm);
+        setText(p("num_DateVenteAnnée"), da);
+        setText(p("num_HoraireVente1"), h1);
+        setText(p("num_HoraireVente2"), h2);
+        setCheck(p("ckb_ValidationDéclaration1"));
+        setCheck(p("ckb_ValidationDéclaration2"));
+        setText(p("txt_LieuDéclaration1"), dA.ville);
+        setText(p("num_DateDéclaration"), dateJ);
 
-        // ── NOUVEAU PROPRIÉTAIRE (acheteur = client) ──
-        d(36, 240, "X", 10, true);                         // Personne physique
-        d(91, 211, client.name, 8, true);
-        if (client.siren) d(396, 211, client.siren, 7);
-        d(108, 167, cA.num, 8);
-        d(150, 167, cA.ext, 8);
-        d(205, 167, cA.type, 8);
-        d(281, 167, cA.nom, 8);
-        d(108, 147, cA.cp, 8);
-        d(192, 147, cA.ville, 8);
-        d(36, 110, "X", 9, true);
-        d(36, 96, "X", 9, true);
-        d(64, 72, dA.ville, 8);
-        d(193, 72, dateJ, 8);
+        // NOUVEAU PROPRIÉTAIRE
+        setText(p("txt_IdentitéAcheteur"), client.name);
+        if (client.siren) setText(p("num_SiretAcheteur"), client.siren);
+        setText(p("num_VoieAdresseAcheteur"), cA.num);
+        setText(p("txt_ExtensionAdresseAcheteur"), cA.ext);
+        setText(p("txt_TypeVoieAdresseAcheteur"), cA.type);
+        setText(p("txt_NomVoieAdresseAcheteur"), cA.nom);
+        setText(p("num_CodePostalAdresseAcheteur"), cA.cp);
+        setText(p("txt_CommuneAdresseAcheteur"), cA.ville);
+        setCheck(p("ckb_ValidationDéclarationA1"));
+        setCheck(p("ckb_ValidationDéclarationA2"));
+        setText(p("txt_LieuDéclaration2"), dA.ville);
+        setText(p("txt_dateDéclaration"), dateJ);
       }
 
-      const filledBytes = await pdfDoc.save({ updateFieldAppearances: false });
+      form.flatten();
+      const filledBytes = await pdfDoc.save();
       const blob = new Blob([filledBytes], { type: "application/pdf" });
       setPdfUrl(URL.createObjectURL(blob));
     } catch (err) {
