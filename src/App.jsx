@@ -2708,35 +2708,52 @@ function CessionDoc({ order, dealer, onClose }) {
         d(275, height - 162, v.kilometrage ? `${Number(v.kilometrage).toLocaleString("fr-FR")}` : "", 9);
 
         // ── ANCIEN PROPRIÉTAIRE (vendeur = garage) ──
-        d(19, height - 305, "X", 10, true);
-        d(100, height - 323, dealer?.name || "", 9, true);
-        d(475, height - 323, dealer?.siret || "", 8);
-        d(55, height - 350, dAddrLines[0] || "", 8);
+        // Cocher "Personne morale"
+        d(19, height - 298, "X", 10, true);
+        // Je soussigné : Raison sociale (sur la ligne du nom, pas l'adresse)
+        d(100, height - 316, dealer?.name || "", 9, true);
+        // SIRET
+        d(475, height - 316, dealer?.siret || "", 8);
+        // Adresse : N° + rue
+        d(100, height - 343, dAddrLines[0] || "", 8);
+        // CP + Commune
         if (dCPMatch) {
-          d(115, height - 370, dCP, 9);
-          d(210, height - 370, dVille, 9);
+          d(115, height - 363, dCP, 9);
+          d(210, height - 363, dVille, 9);
         }
-        d(307, height - 390, "X", 10, true);
-        d(30, height - 410, `   ${today()}`, 9);
-        d(155, height - 410, heure, 9);
-        d(19, height - 440, "X", 9, true);
-        d(19, height - 465, "X", 9, true);
-        d(55, height - 530, dVille, 9);
-        d(210, height - 530, today(), 9);
+        // Cocher "céder"
+        d(307, height - 383, "X", 10, true);
+        // Le ___ à ___ h ___
+        d(30, height - 403, `   ${today()}`, 9);
+        d(155, height - 403, heure, 9);
+        // Certifications : cocher seulement les 2 premières (PAS la 3ème VHU)
+        d(19, height - 445, "X", 9, true);                                 // Avoir remis certificat
+        d(19, height - 468, "X", 9, true);                                 // Pas de transformation
+        // NE PAS cocher la 3ème (VHU)
+        // Fait à / le
+        d(55, height - 537, dVille, 9);
+        d(210, height - 537, today(), 9);
 
         // ── NOUVEAU PROPRIÉTAIRE (acheteur = client) ──
-        d(19, height - 600, "X", 10, true);
-        d(100, height - 628, client.name || "", 9, true);
-        if (client.siren) d(475, height - 628, client.siren, 8);
-        d(55, height - 670, cAddrLines[0] || "", 8);
+        // Cocher "Personne physique"
+        d(19, height - 593, "X", 10, true);
+        // Je soussigné : Nom
+        d(100, height - 621, client.name || "", 9, true);
+        // SIRET si pro
+        if (client.siren) d(475, height - 621, client.siren, 8);
+        // Adresse
+        d(100, height - 665, cAddrLines[0] || "", 8);
+        // CP + Commune
         if (cCPMatch) {
-          d(115, height - 690, cCP, 9);
-          d(210, height - 690, cVille, 9);
+          d(115, height - 685, cCP, 9);
+          d(210, height - 685, cVille, 9);
         }
-        d(19, height - 720, "X", 9, true);
-        d(19, height - 735, "X", 9, true);
-        d(55, height - 760, dVille, 9);
-        d(210, height - 760, today(), 9);
+        // Certifications acheteur
+        d(19, height - 715, "X", 9, true);                                 // Acquérir
+        d(19, height - 730, "X", 9, true);                                 // Avoir été informé
+        // Fait à / le
+        d(55, height - 755, dVille, 9);
+        d(210, height - 755, today(), 9);
       }
 
       const filledBytes = await pdfDoc.save();
@@ -2754,7 +2771,7 @@ function CessionDoc({ order, dealer, onClose }) {
 
   return (
     <div className="modal-bg" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ maxWidth: 900, width: "95vw", maxHeight: "95vh", display: "flex", flexDirection: "column" }}>
+      <div className="modal" style={{ maxWidth: 1000, width: "98vw", height: "92vh", display: "flex", flexDirection: "column" }}>
         <div className="modal-hd" style={{ flexShrink: 0 }}>
           <span className="modal-title">Cerfa 15776 — Cession {v.plate || ""}</span>
           <div style={{ display: "flex", gap: 8 }}>
