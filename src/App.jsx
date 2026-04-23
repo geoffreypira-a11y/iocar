@@ -2663,14 +2663,14 @@ function CessionDoc({ order, dealer, onClose }) {
           document.head.appendChild(script);
         });
       }
-      const { PDFDocument, StandardFonts } = window.PDFLib;
+      const { PDFDocument, PDFName, PDFBool } = window.PDFLib;
 
       const pdfBytes = await fetch("/cerfa_15776-01_acroform.pdf").then(r => r.arrayBuffer());
       const pdfDoc = await PDFDocument.load(pdfBytes);
       const form = pdfDoc.getForm();
 
-      // Embarquer la police pour que les champs remplis s'affichent correctement
-      const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica);
+      // Forcer le flag NeedAppearances pour que le viewer PDF regénère l'affichage des champs
+      form.acroForm.dict.set(PDFName.of("NeedAppearances"), PDFBool.True);
 
       // ── Helpers ──
       const setText = (name, value) => {
@@ -2678,7 +2678,6 @@ function CessionDoc({ order, dealer, onClose }) {
         try {
           const field = form.getTextField(name);
           field.setText(String(value));
-          field.defaultUpdateAppearances(helvetica);
         } catch(e) {
           console.warn("Champ introuvable:", name, e.message);
         }
@@ -2815,10 +2814,6 @@ function CessionDoc({ order, dealer, onClose }) {
         setText(p("txt_LieuDéclaration2"), dealerAddr.ville);
         setText(p("txt_dateDéclaration"), dateJ);
       }
-
-      // Mettre à jour les apparences et aplatir le formulaire
-      form.updateFieldAppearances(helvetica);
-      form.flatten();
 
       const filledBytes = await pdfDoc.save();
       const blob = new Blob([filledBytes], { type: "application/pdf" });
