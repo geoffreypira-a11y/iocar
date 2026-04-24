@@ -732,21 +732,21 @@ function PlateBadge({ plate }) {
    CALCULATEUR CARTE GRISE (ESTIMATION 2026)
 ═══════════════════════════════════════════════════════════════ */
 const TARIFS_REGIONS_2026 = {
-  // Tarifs VP par CV fiscal — source : service-public.fr 2026
-  "Île-de-France": 54.95, "Auvergne-Rhône-Alpes": 43.00, "Bourgogne-Franche-Comté": 51.00,
-  "Bretagne": 55.00, "Centre-Val de Loire": 55.00, "Corse": 43.00,
-  "Grand Est": 48.00, "Hauts-de-France": 36.20, "Normandie": 46.15,
-  "Nouvelle-Aquitaine": 45.00, "Occitanie": 47.00, "Pays de la Loire": 48.00,
-  "Provence-Alpes-Côte d'Azur": 51.20,
+  // Tarifs VP par CV fiscal — source : service-public.fr mars 2026
+  "Île-de-France": 68.95, "Auvergne-Rhône-Alpes": 43.00, "Bourgogne-Franche-Comté": 60.00,
+  "Bretagne": 60.00, "Centre-Val de Loire": 60.00, "Corse": 53.00,
+  "Grand Est": 60.00, "Hauts-de-France": 43.00, "Normandie": 60.00,
+  "Nouvelle-Aquitaine": 58.00, "Occitanie": 47.00, "Pays de la Loire": 51.00,
+  "Provence-Alpes-Côte d'Azur": 60.00,
 };
 
-// CTTE (utilitaires) : même tarif dans la plupart des régions
+// CTTE (utilitaires) : même tarif
 const TARIFS_CTTE_2026 = {
-  "Île-de-France": 54.95, "Auvergne-Rhône-Alpes": 43.00, "Bourgogne-Franche-Comté": 51.00,
-  "Bretagne": 55.00, "Centre-Val de Loire": 55.00, "Corse": 43.00,
-  "Grand Est": 48.00, "Hauts-de-France": 36.20, "Normandie": 46.15,
-  "Nouvelle-Aquitaine": 45.00, "Occitanie": 47.00, "Pays de la Loire": 48.00,
-  "Provence-Alpes-Côte d'Azur": 51.20,
+  "Île-de-France": 68.95, "Auvergne-Rhône-Alpes": 43.00, "Bourgogne-Franche-Comté": 60.00,
+  "Bretagne": 60.00, "Centre-Val de Loire": 60.00, "Corse": 53.00,
+  "Grand Est": 60.00, "Hauts-de-France": 43.00, "Normandie": 60.00,
+  "Nouvelle-Aquitaine": 58.00, "Occitanie": 47.00, "Pays de la Loire": 51.00,
+  "Provence-Alpes-Côte d'Azur": 60.00,
 };
 
 // Mapping code postal (2 premiers chiffres) → région
@@ -779,8 +779,14 @@ function calcCarteGrise({ cv, energie, region, genre }) {
   const tarifs = isCTTE ? TARIFS_CTTE_2026 : TARIFS_REGIONS_2026;
   const tarifCV = tarifs[region] || 46;
   const isElec = /[eé]lectrique/i.test(energie || "");
-  // Y1 : taxe régionale (exonération 100% électrique dans la plupart des régions)
-  const y1 = isElec ? 0 : (cv || 0) * tarifCV;
+  // Y1 : taxe régionale
+  // Exonération électrique 2026 : Corse & Pays de la Loire = 100%, Bretagne & Hauts-de-France = 50%, autres = 0%
+  let exoElec = 0;
+  if (isElec) {
+    if (region === "Corse" || region === "Pays de la Loire") exoElec = 1;
+    else if (region === "Bretagne" || region === "Hauts-de-France") exoElec = 0.5;
+  }
+  const y1 = (cv || 0) * tarifCV * (1 - exoElec);
   // Y3 : PAS de malus CO2 pour les véhicules d'occasion
   const y3 = 0;
   // Y4 : taxe de gestion (11€ fixe)
@@ -788,7 +794,7 @@ function calcCarteGrise({ cv, energie, region, genre }) {
   // Y5 : redevance d'acheminement (2.76€ fixe)
   const y5 = 2.76;
   const total = y1 + y3 + y4 + y5;
-  return { y1, y3, y4, y5, total, tarifCV, isElec, isCTTE };
+  return { y1, y3, y4, y5, total, tarifCV, isElec, isCTTE, exoElec };
 }
 
 function CarteGriseCalc({ vehicleData, clientAddress, onApply }) {
