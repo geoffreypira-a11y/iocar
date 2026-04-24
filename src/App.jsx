@@ -2699,6 +2699,7 @@ function CessionDoc({ order, dealer, vehicles, clients, onClose }) {
     date_mise_en_circulation: freshVehicle?.date_mise_en_circulation || orderV.date_mise_en_circulation,
     kilometrage: freshVehicle?.kilometrage || orderV.kilometrage,
     carburant: freshVehicle?.carburant || orderV.carburant,
+    numero_formule: freshVehicle?.numero_formule || orderV.numero_formule,
   };
   // Récupérer la civilité depuis le client CRM
   const crmClient = order.client_id && clients ? clients.find(c => c.id === order.client_id) : null;
