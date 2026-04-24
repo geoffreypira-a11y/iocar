@@ -440,10 +440,9 @@ const fmt = (n) => Number(n || 0).toLocaleString("fr-FR", { style: "currency", c
 const fmtDec = (n) => Number(n || 0).toLocaleString("fr-FR", { style: "currency", currency: "EUR" });
 
 function getPayStatut(c, type) {
-  // Avoirs : montants négatifs
   if (type === "avoir") {
-    if (Math.abs(c.reste) <= 0.01) return { label: "✅ Remboursé", cls: "badge-green" };
-    if (Math.abs(c.encaisse) > 0) return { label: "⏳ Partiel", cls: "badge-orange" };
+    if (c.reste <= 0.01) return { label: "✅ Remboursé", cls: "badge-green" };
+    if (c.encaisse > 0) return { label: "⏳ Partiel", cls: "badge-orange" };
     return { label: "💸 À rembourser", cls: "badge-red" };
   }
   if (c.ttc <= 0) return { label: "—", cls: "badge-muted" };
@@ -487,9 +486,10 @@ function calcOrder(o) {
   const encaisse = (o.paiements || []).reduce((s, p) => s + (parseFloat(p.montant) || 0), 0);
   const reste = ttc - encaisse;
 
-  // Les avoirs sont en négatif
+  // Les avoirs : le signe négatif est appliqué sur ttc/ht/tva pour le dashboard
+  // Mais encaisse et reste restent en valeur absolue pour la logique de paiement
   const sign = o.type === "avoir" ? -1 : 1;
-  return { ht: ht * sign, remAmt, base: prixApresRemise, fraisMiseDispo, carteGrise, baseTotal: montantTTC_soumis, tvaAmt: tvaAmt * sign, ttc: ttc * sign, encaisse: encaisse * sign, reste: reste * sign, avecTva, tvaPct };
+  return { ht: ht * sign, remAmt, base: prixApresRemise, fraisMiseDispo, carteGrise, baseTotal: montantTTC_soumis, tvaAmt: tvaAmt * sign, ttc: ttc * sign, encaisse, reste, avecTva, tvaPct };
 }
 
 // ─── NUMÉROTATION SÉQUENTIELLE ──────────────────────────────
@@ -1925,36 +1925,40 @@ function DemoLimitModal({ type, onClose }) {
 ═══════════════════════════════════════════════════════════════ */
 function PaymentModal({ order, onSave, onClose }) {
   const c = calcOrder(order);
-  const [form, setForm] = useState({ date: today(), montant: c.reste.toFixed(2), mode: "Virement" });
+  const isAvoir = order.type === "avoir";
+  const displayTtc = Math.abs(c.ttc);
+  const displayEncaisse = Math.abs(c.encaisse);
+  const displayReste = Math.abs(c.reste);
+  const [form, setForm] = useState({ date: today(), montant: displayReste.toFixed(2), mode: "Virement" });
   const modes = ["Virement", "Chèque", "Espèces", "CB", "Financement"];
   const submit = () => {
     if (!parseFloat(form.montant)) return;
     const pmt = { id: uid(), ...form, montant: parseFloat(form.montant) };
     const updated = { ...order, paiements: [...(order.paiements || []), pmt] };
     const newC = calcOrder(updated);
-    updated.statut = newC.reste <= 0.01 ? "payé" : newC.encaisse > 0 ? "partiel" : updated.statut;
+    updated.statut = Math.abs(newC.reste) <= 0.01 ? "payé" : Math.abs(newC.encaisse) > 0 ? "partiel" : updated.statut;
     onSave(updated);
   };
   return (
     <div className="modal-bg" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal modal-sm">
         <div className="modal-hd">
-          <span className="modal-title">Enregistrer un paiement</span>
+          <span className="modal-title">{isAvoir ? "Enregistrer un remboursement" : "Enregistrer un paiement"}</span>
           <button className="close-btn" onClick={onClose}>×</button>
         </div>
         <div className="modal-body">
           <div style={{ background: "var(--card2)", borderRadius: 8, padding: "14px 16px", marginBottom: 20 }}>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
-              <span style={{ color: "var(--muted)" }}>Total TTC</span>
-              <span style={{ fontWeight: 700 }}>{fmtDec(c.ttc)}</span>
+              <span style={{ color: "var(--muted)" }}>{isAvoir ? "Montant avoir" : "Total TTC"}</span>
+              <span style={{ fontWeight: 700 }}>{fmtDec(displayTtc)}</span>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginTop: 6 }}>
-              <span style={{ color: "var(--muted)" }}>Déjà encaissé</span>
-              <span style={{ color: "var(--green)" }}>{fmtDec(c.encaisse)}</span>
+              <span style={{ color: "var(--muted)" }}>{isAvoir ? "Déjà remboursé" : "Déjà encaissé"}</span>
+              <span style={{ color: "var(--green)" }}>{fmtDec(displayEncaisse)}</span>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, fontWeight: 700, marginTop: 8, paddingTop: 8, borderTop: "1px solid var(--border2)" }}>
-              <span>Reste à payer</span>
-              <span style={{ color: "var(--orange)" }}>{fmtDec(c.reste)}</span>
+              <span>{isAvoir ? "Reste à rembourser" : "Reste à payer"}</span>
+              <span style={{ color: "var(--orange)" }}>{fmtDec(displayReste)}</span>
             </div>
           </div>
           <div className="form-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
@@ -3141,18 +3145,54 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
                       {(viewMode !== "trial" || o.type === "bc") && o.type === "bc" && (
                         <button className="btn btn-ghost btn-xs" onClick={() => toFacture(o)} title="Convertir en facture">🧾</button>
                       )}
-                      {o.type === "facture" && viewMode !== "trial" && <button className="btn btn-ghost btn-xs" title="Créer un avoir" onClick={() => setModal({
-                        ...o, id: null, type: "avoir",
-                        ref: nextRef(orders, "avoir"),
-                        date_creation: today(),
-                        facture_origine: o.ref,
-                        paiements: [],
-                      })}>↩️</button>}
+                      {o.type === "facture" && viewMode !== "trial" && !orders.some(a => a.type === "avoir" && a.facture_origine === o.ref) && (() => {
+                        const createAvoir = (montant) => {
+                          const avoir = {
+                            ...o, id: uid(), type: "avoir",
+                            ref: nextRef(orders, "avoir"),
+                            date_creation: today(),
+                            facture_origine: o.ref,
+                            paiements: [],
+                            statut: null,
+                            prix_ht: String(montant),
+                            frais_mise_dispo: "0",
+                            carte_grise: "0",
+                            remise_ttc: "0",
+                          };
+                          setOrders([...orders, avoir]);
+                        };
+                        return <button className="btn btn-ghost btn-xs" title="Créer un avoir" onClick={() => {
+                          const totalTtc = calcOrder(o).ttc;
+                          const choix = window.prompt(
+                            `Créer un avoir sur ${o.ref} (${fmtDec(totalTtc)})\n\n` +
+                            `Tapez :\n` +
+                            `• "T" pour un avoir TOTAL\n` +
+                            `• Un montant (ex: 500) pour un avoir PARTIEL\n` +
+                            `• Laissez vide ou cliquez Annuler pour annuler`,
+                            "T"
+                          );
+                          if (choix === null || choix.trim() === "") return;
+                          if (choix.trim().toUpperCase() === "T") {
+                            createAvoir(totalTtc);
+                          } else {
+                            const montant = parseFloat(choix.replace(",", "."));
+                            if (montant > 0) {
+                              createAvoir(montant);
+                            } else {
+                              alert("Montant invalide");
+                            }
+                          }
+                        }}>↩️</button>;
+                      })()}
                       {o.type === "facture" && c.reste > 0.01 && viewMode !== "trial" && (
                         <button className="btn btn-ghost btn-xs" style={{ color: "var(--green)" }} onClick={() => setPayment(o)}>💳</button>
                       )}
-                      {o.type === "avoir" && Math.abs(c.reste) > 0.01 && viewMode !== "trial" && (
-                        <button className="btn btn-ghost btn-xs" style={{ color: "var(--red)" }} onClick={() => setPayment(o)} title="Enregistrer le remboursement">💸</button>
+                      {o.type === "avoir" && c.reste > 0.01 && viewMode !== "trial" && (
+                        <button className="btn btn-ghost btn-xs" style={{ color: "var(--red)" }} title="Marquer comme remboursé" onClick={() => {
+                          const pmt = { id: uid(), date: today(), montant: Math.abs(c.ttc), mode: "Virement" };
+                          const updated = { ...o, paiements: [pmt], statut: "payé" };
+                          setOrders(orders.map(x => x.id === o.id ? updated : x));
+                        }}>💸 Remboursé</button>
                       )}
                       {/* Modifier : bloqué sur les factures sauf admin */}
                       {(o.type !== "facture" || viewMode === "admin") && (
