@@ -3050,8 +3050,15 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
                     {o.client?.phone && <div style={{ fontSize: 11, color: "var(--muted)" }}>{o.client.phone}</div>}
                   </td>
                   <td>
-                    <div style={{ fontSize: 12 }}>{o.vehicle_label || "—"}</div>
-                    {o.vehicle_plate && <PlateBadge plate={o.vehicle_plate} />}
+                    {(() => {
+                      const fv = o.vehicle_id && vehicles ? vehicles.find(vh => vh.id === o.vehicle_id) : null;
+                      const label = fv ? `${fv.marque} ${fv.modele} ${fv.finition || ""} (${getYear(fv)})`.trim() : (o.vehicle_label || "—");
+                      const plate = fv ? fv.plate : o.vehicle_plate;
+                      return <>
+                        <div style={{ fontSize: 12 }}>{label}</div>
+                        {plate && <PlateBadge plate={plate} />}
+                      </>;
+                    })()}
                   </td>
                   <td style={{ fontFamily: "DM Mono", fontWeight: 700 }}>{fmtDec(c.ttc)}</td>
                   <td style={{ fontFamily: "DM Mono", color: "var(--green)" }}>{c.encaisse > 0 ? fmtDec(c.encaisse) : "—"}</td>
