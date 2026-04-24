@@ -877,10 +877,11 @@ function CarteGriseCalc({ vehicleData, clientAddress, onApply }) {
 /* ═══════════════════════════════════════════════════════════════
    DASHBOARD
 ═══════════════════════════════════════════════════════════════ */
-function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUsage }) {
+function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUsage, livrePolice }) {
   const fleet = vehicles.length;
   const dispo = vehicles.filter(v => v.statut === "disponible").length;
-  const vendu = vehicles.filter(v => v.statut === "vendu").length;
+  // Compter les véhicules réellement sortis du livret de police (livrés)
+  const vendu = (livrePolice || []).filter(e => e.date_sortie).length;
 
   const allTtc = orders.reduce((s, o) => s + calcOrder(o).ttc, 0);
   const encaisse = orders.reduce((s, o) => s + calcOrder(o).encaisse, 0);
@@ -5471,7 +5472,7 @@ export default function App() {
           </aside>
 
           <main className={`content${(viewMode === "trial" || viewMode === "subscriber") ? " demo-offset" : ""}`}>
-            {tab === "dashboard"   && <Dashboard vehicles={activeVehicles} setVehicles={setVehiclesRaw} orders={activeOrders} setTab={setTab} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} />}
+            {tab === "dashboard"   && <Dashboard vehicles={activeVehicles} setVehicles={setVehiclesRaw} orders={activeOrders} setTab={setTab} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} livrePolice={livrePolice} />}
             {tab === "fleet"       && <FleetPage vehicles={activeVehicles} setVehicles={setVehiclesRaw} orders={activeOrders} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} livrePolice={activeLivrePolice} setLivrePolice={setLivrePoliceRaw} viewMode={viewMode} garageId={garageId} />}
             {tab === "orders"      && <OrdersPage orders={activeOrders} setOrders={setOrdersRaw} vehicles={activeVehicles} setVehiclesRaw={setVehiclesRaw} dealer={dealer} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} clients={activeClients} setClients={setClientsRaw} viewMode={viewMode} />}
             {tab === "crm"         && <CrmPage clients={activeClients} setClients={setClientsRaw} orders={activeOrders} viewMode={viewMode} />}
