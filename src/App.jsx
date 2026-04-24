@@ -1861,6 +1861,122 @@ function FleetPage({ vehicles, setVehicles, orders, apiKey, usage, setUsage, liv
 /* ═══════════════════════════════════════════════════════════════
    CONFIRM MODAL — réutilisable partout
 ═══════════════════════════════════════════════════════════════ */
+function AvoirChoiceModal({ order, totalTtc, onTotal, onPartiel, onCancel }) {
+  return (
+    <div className="modal-bg" onClick={e => e.target === e.currentTarget && onCancel()}>
+      <div className="modal modal-sm" style={{ maxWidth: 460 }}>
+        <div className="modal-hd">
+          <span className="modal-title" style={{ color: "var(--red)" }}>↩️ Créer un avoir</span>
+          <button className="close-btn" onClick={onCancel}>×</button>
+        </div>
+        <div className="modal-body" style={{ padding: "20px 24px" }}>
+          <p style={{ fontSize: 14, color: "var(--muted2)", lineHeight: 1.6, margin: "0 0 16px 0" }}>
+            Avoir sur la facture <strong style={{ color: "var(--text)", fontFamily: "monospace" }}>{order.ref}</strong>
+          </p>
+          <div style={{
+            padding: "12px 16px",
+            background: "rgba(255,255,255,.03)",
+            border: "1px solid rgba(255,255,255,.08)",
+            borderRadius: 8,
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}>
+            <span style={{ fontSize: 13, color: "var(--muted)" }}>Montant total TTC</span>
+            <span style={{ fontSize: 18, fontWeight: 600, color: "var(--gold)" }}>{fmtDec(totalTtc)}</span>
+          </div>
+          <p style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.6, margin: "16px 0 0 0" }}>
+            Choisissez le type d'avoir à créer :
+          </p>
+        </div>
+        <div className="modal-foot" style={{ gap: 8, flexWrap: "wrap" }}>
+          <button className="btn btn-ghost" onClick={onCancel}>Annuler</button>
+          <button className="btn btn-danger" onClick={onPartiel}>Avoir partiel</button>
+          <button className="btn btn-primary" onClick={onTotal}>Avoir total</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AvoirPartielModal({ order, totalTtc, onConfirm, onCancel }) {
+  const [montant, setMontant] = useState("");
+  const [error, setError] = useState("");
+
+  const handleConfirm = () => {
+    const val = parseFloat(String(montant).replace(",", "."));
+    if (!val || val <= 0) {
+      setError("Veuillez saisir un montant valide supérieur à 0.");
+      return;
+    }
+    if (val > totalTtc) {
+      setError(`Le montant ne peut pas dépasser le total TTC (${fmtDec(totalTtc)}).`);
+      return;
+    }
+    onConfirm(val);
+  };
+
+  return (
+    <div className="modal-bg" onClick={e => e.target === e.currentTarget && onCancel()}>
+      <div className="modal modal-sm" style={{ maxWidth: 440 }}>
+        <div className="modal-hd">
+          <span className="modal-title" style={{ color: "var(--red)" }}>↩️ Avoir partiel</span>
+          <button className="close-btn" onClick={onCancel}>×</button>
+        </div>
+        <div className="modal-body" style={{ padding: "20px 24px" }}>
+          <p style={{ fontSize: 14, color: "var(--muted2)", lineHeight: 1.6, margin: "0 0 16px 0" }}>
+            Avoir partiel sur la facture <strong style={{ color: "var(--text)", fontFamily: "monospace" }}>{order.ref}</strong>
+          </p>
+          <div style={{
+            padding: "12px 16px",
+            background: "rgba(255,255,255,.03)",
+            border: "1px solid rgba(255,255,255,.08)",
+            borderRadius: 8,
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginBottom: 16,
+          }}>
+            <span style={{ fontSize: 13, color: "var(--muted)" }}>Total TTC de la facture</span>
+            <span style={{ fontSize: 16, fontWeight: 600, color: "var(--gold)" }}>{fmtDec(totalTtc)}</span>
+          </div>
+          <label style={{ display: "block", fontSize: 13, color: "var(--muted)", marginBottom: 6 }}>
+            Montant de l'avoir (€)
+          </label>
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            max={totalTtc}
+            value={montant}
+            onChange={e => { setMontant(e.target.value); setError(""); }}
+            onKeyDown={e => { if (e.key === "Enter") handleConfirm(); }}
+            placeholder="Ex : 500.00"
+            autoFocus
+            style={{
+              width: "100%",
+              padding: "10px 12px",
+              fontSize: 15,
+              background: "rgba(255,255,255,.05)",
+              border: `1px solid ${error ? "var(--red)" : "rgba(255,255,255,.1)"}`,
+              borderRadius: 8,
+              color: "var(--text)",
+              outline: "none",
+            }}
+          />
+          {error && (
+            <p style={{ fontSize: 12, color: "var(--red)", margin: "8px 0 0 0" }}>{error}</p>
+          )}
+        </div>
+        <div className="modal-foot">
+          <button className="btn btn-ghost" onClick={onCancel}>Annuler</button>
+          <button className="btn btn-primary" onClick={handleConfirm}>Créer l'avoir</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ConfirmModal({ title, message, confirmLabel = "Supprimer", onConfirm, onCancel }) {
   return (
     <div className="modal-bg" onClick={e => e.target === e.currentTarget && onCancel()}>
@@ -2912,6 +3028,8 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
   const [search, setSearch] = useState("");
   const [pendingDelete, setPendingDelete] = useState(null);
   const [showDemoLimit, setShowDemoLimit] = useState(false);
+  const [avoirChoice, setAvoirChoice] = useState(null); // { order, totalTtc } | null
+  const [avoirPartiel, setAvoirPartiel] = useState(null); // { order, totalTtc } | null
 
   const save = (o) => {
     // Sauvegarder le document
@@ -3060,6 +3178,58 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
           onCancel={() => setPendingDelete(null)}
         />
       )}
+      {avoirChoice && (
+        <AvoirChoiceModal
+          order={avoirChoice.order}
+          totalTtc={avoirChoice.totalTtc}
+          onTotal={() => {
+            const o = avoirChoice.order;
+            const avoir = {
+              ...o, id: uid(), type: "avoir",
+              ref: nextRef(orders, "avoir"),
+              date_creation: today(),
+              facture_origine: o.ref,
+              paiements: [],
+              statut: null,
+              prix_ht: String(avoirChoice.totalTtc),
+              frais_mise_dispo: "0",
+              carte_grise: "0",
+              remise_ttc: "0",
+            };
+            setOrders([...orders, avoir]);
+            setAvoirChoice(null);
+          }}
+          onPartiel={() => {
+            setAvoirPartiel({ order: avoirChoice.order, totalTtc: avoirChoice.totalTtc });
+            setAvoirChoice(null);
+          }}
+          onCancel={() => setAvoirChoice(null)}
+        />
+      )}
+      {avoirPartiel && (
+        <AvoirPartielModal
+          order={avoirPartiel.order}
+          totalTtc={avoirPartiel.totalTtc}
+          onConfirm={(montant) => {
+            const o = avoirPartiel.order;
+            const avoir = {
+              ...o, id: uid(), type: "avoir",
+              ref: nextRef(orders, "avoir"),
+              date_creation: today(),
+              facture_origine: o.ref,
+              paiements: [],
+              statut: null,
+              prix_ht: String(montant),
+              frais_mise_dispo: "0",
+              carte_grise: "0",
+              remise_ttc: "0",
+            };
+            setOrders([...orders, avoir]);
+            setAvoirPartiel(null);
+          }}
+          onCancel={() => setAvoirPartiel(null)}
+        />
+      )}
 
       <div className="page-header">
         <div>
@@ -3146,42 +3316,9 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
                         <button className="btn btn-ghost btn-xs" onClick={() => toFacture(o)} title="Convertir en facture">🧾</button>
                       )}
                       {o.type === "facture" && viewMode !== "trial" && !orders.some(a => a.type === "avoir" && a.facture_origine === o.ref) && (() => {
-                        const createAvoir = (montant) => {
-                          const avoir = {
-                            ...o, id: uid(), type: "avoir",
-                            ref: nextRef(orders, "avoir"),
-                            date_creation: today(),
-                            facture_origine: o.ref,
-                            paiements: [],
-                            statut: null,
-                            prix_ht: String(montant),
-                            frais_mise_dispo: "0",
-                            carte_grise: "0",
-                            remise_ttc: "0",
-                          };
-                          setOrders([...orders, avoir]);
-                        };
                         return <button className="btn btn-ghost btn-xs" title="Créer un avoir" onClick={() => {
                           const totalTtc = calcOrder(o).ttc;
-                          const choix = window.prompt(
-                            `Créer un avoir sur ${o.ref} (${fmtDec(totalTtc)})\n\n` +
-                            `Tapez :\n` +
-                            `• "T" pour un avoir TOTAL\n` +
-                            `• Un montant (ex: 500) pour un avoir PARTIEL\n` +
-                            `• Laissez vide ou cliquez Annuler pour annuler`,
-                            "T"
-                          );
-                          if (choix === null || choix.trim() === "") return;
-                          if (choix.trim().toUpperCase() === "T") {
-                            createAvoir(totalTtc);
-                          } else {
-                            const montant = parseFloat(choix.replace(",", "."));
-                            if (montant > 0) {
-                              createAvoir(montant);
-                            } else {
-                              alert("Montant invalide");
-                            }
-                          }
+                          setAvoirChoice({ order: o, totalTtc });
                         }}>↩️</button>;
                       })()}
                       {o.type === "facture" && c.reste > 0.01 && viewMode !== "trial" && (
