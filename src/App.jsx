@@ -1387,7 +1387,7 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
           </div>
 
           <div className="form-grid">
-            {[["marque", "Marque *"], ["modele", "Modèle *"], ["finition", "Finition"], ["date_mise_en_circulation", "Date 1ère MEC"],
+            {[["marque", "Marque *"], ["modele", "Modèle *"], ["finition", "Finition"], ["genre", "Genre national"], ["date_mise_en_circulation", "Date 1ère MEC"],
               ["motorisation", "Motorisation"], ["puissance_cv", "Puissance (ch)", "number"], ["puissance_fiscale", "Puissance fiscale (CV)", "number"], ["co2", "CO₂ (g/km)", "number"], ["boite", "Boîte"],
               ["couleur", "Couleur ext."], ["couleur_int", "Couleur int."], ["kilometrage", "Kilométrage", "number"],
               ["vin", "N° VIN"], ["date_entree", "Date d'entrée (achat)"]].map(([k, label, type]) => (
