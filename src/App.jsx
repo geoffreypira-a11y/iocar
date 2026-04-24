@@ -1418,13 +1418,19 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
             {[["marque", "Marque *"], ["modele", "Modèle *"], ["finition", "Finition"], ["genre", "Genre national"], ["date_mise_en_circulation", "Date 1ère MEC"],
               ["motorisation", "Motorisation"], ["puissance_cv", "Puissance (ch)", "number"], ["puissance_fiscale", "Puissance fiscale (CV)", "number"], ["co2", "CO₂ (g/km)", "number"], ["boite", "Boîte"],
               ["couleur", "Couleur ext."], ["couleur_int", "Couleur int."], ["kilometrage", "Kilométrage", "number"],
-              ["vin", "N° VIN"], ["numero_formule", "N° de formule"], ["date_entree", "Date d'entrée (achat)"], ["carburant", "Carburant"]].map(([k, label, type]) => (
+              ["vin", "N° VIN"], ["date_entree", "Date d'entrée (achat)"], ["carburant", "Carburant"]].map(([k, label, type]) => (
                 <div className="form-group" key={k}>
                   <label className="form-label" style={k === "numero_formule" ? { color: "var(--gold)" } : undefined}>{label}</label>
                   <input className="form-input" type={type || "text"} value={form[k] || ""} onChange={e => set(k, e.target.value)} />
                 </div>
               ))}
-
+              <div className="form-group">
+                <label className="form-label" style={{ color: "var(--gold)" }}>N° de formule</label>
+                <div style={{ display: "flex", alignItems: "center", gap: 0 }}>
+                  <span style={{ background: "var(--card2)", border: "1px solid var(--border)", borderRight: "none", borderRadius: "6px 0 0 6px", padding: "8px 10px", fontSize: 14, color: "var(--muted)", fontFamily: "DM Mono", letterSpacing: 1 }}>20</span>
+                  <input className="form-input" style={{ borderRadius: "0 6px 6px 0", fontFamily: "DM Mono", letterSpacing: 1 }} maxLength={9} value={form.numero_formule || ""} onChange={e => set("numero_formule", e.target.value)} placeholder="24 AB 12345" />
+                </div>
+              </div>
             <div className="form-group">
               <label className="form-label">Transmission</label>
               <select className="form-input" value={form.transmission} onChange={e => set("transmission", e.target.value)}>
@@ -2731,8 +2737,11 @@ function CessionDoc({ order, dealer, vehicles, clients, onClose }) {
       // ── Helpers ultra-simples — exactement comme le test console qui marche ──
       const setText = (name, value) => {
         if (!value) return;
-        try { form.getTextField(name).setText(String(value)); }
-        catch(e) { console.warn("Champ:", name, e.message); }
+        try {
+          const field = form.getTextField(name);
+          field.setMaxLength(undefined);
+          field.setText(String(value));
+        } catch(e) { console.warn("Champ:", name, e.message); }
       };
       const setCheck = (name) => {
         try { form.getCheckBox(name).check(); }
