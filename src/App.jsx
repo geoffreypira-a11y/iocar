@@ -816,7 +816,7 @@ function calcCarteGrise({ cv, energie, region, genre, dateMEC }) {
   // Y5 : redevance d'acheminement (2.76€ fixe)
   const y5 = 2.76;
   const total = y1 + y2 + y3 + y4 + y5;
-  return { y1, y2, y3, y4, y5, total, tarifCV, isElec, isCTTE, exoElec, age, coefAge };
+  return { y1, y2, y3, y4, y5, total, tarifCV, isElec, isCTTE, exoElec, ageOver10, coefAge };
 }
 
 function CarteGriseCalc({ vehicleData, clientAddress, onApply }) {
