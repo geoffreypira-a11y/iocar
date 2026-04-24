@@ -2227,7 +2227,6 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
               }}>
                 <option value="bc">Bon de commande</option>
                 <option value="facture">Facture</option>
-                <option value="avoir">Avoir / Note de crédit</option>
               </select>
             </div>
             <div className="form-group">
@@ -3171,10 +3170,18 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
     const matchS = !search || `${o.ref} ${o.client?.name} ${o.vehicle_label} ${o.vehicle_plate}`.toLowerCase().includes(search.toLowerCase());
     return matchT && matchS;
   }).sort((a, b) => {
-    // Plus récent en haut : d'abord par date de création, puis par référence
+    // 1) Date la plus récente en haut
     const dateCmp = (b.date_creation || "").localeCompare(a.date_creation || "");
     if (dateCmp !== 0) return dateCmp;
-    return (b.ref || "").localeCompare(a.ref || "");
+    // 2) À date égale : numéro séquentiel de la ref le plus élevé en haut
+    //    (ex : AV-2026-0004 et FAC-2026-0004 → même groupe "0004")
+    const numA = parseInt((a.ref || "").match(/(\d+)$/)?.[1] || "0", 10);
+    const numB = parseInt((b.ref || "").match(/(\d+)$/)?.[1] || "0", 10);
+    if (numA !== numB) return numB - numA;
+    // 3) Si même numéro : la facture d'abord, puis son avoir juste après
+    if (a.type === "facture" && b.type === "avoir") return -1;
+    if (a.type === "avoir" && b.type === "facture") return 1;
+    return 0;
   });
 
   return (
