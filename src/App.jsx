@@ -439,7 +439,13 @@ const today = () => new Date().toLocaleDateString("fr-FR");
 const fmt = (n) => Number(n || 0).toLocaleString("fr-FR", { style: "currency", currency: "EUR", maximumFractionDigits: 0 });
 const fmtDec = (n) => Number(n || 0).toLocaleString("fr-FR", { style: "currency", currency: "EUR" });
 
-function getPayStatut(c) {
+function getPayStatut(c, type) {
+  // Avoirs : montants négatifs
+  if (type === "avoir") {
+    if (Math.abs(c.reste) <= 0.01) return { label: "✅ Remboursé", cls: "badge-green" };
+    if (Math.abs(c.encaisse) > 0) return { label: "⏳ Partiel", cls: "badge-orange" };
+    return { label: "💸 À rembourser", cls: "badge-red" };
+  }
   if (c.ttc <= 0) return { label: "—", cls: "badge-muted" };
   if (c.reste <= 0.01) return { label: "✅ Soldé", cls: "badge-green" };
   if (c.encaisse > 0) return { label: "⏳ Partiel", cls: "badge-orange" };
@@ -480,7 +486,10 @@ function calcOrder(o) {
   const ttc = montantTTC_soumis + carteGrise;
   const encaisse = (o.paiements || []).reduce((s, p) => s + (parseFloat(p.montant) || 0), 0);
   const reste = ttc - encaisse;
-  return { ht, remAmt, base: prixApresRemise, fraisMiseDispo, carteGrise, baseTotal: montantTTC_soumis, tvaAmt, ttc, encaisse, reste, avecTva, tvaPct };
+
+  // Les avoirs sont en négatif
+  const sign = o.type === "avoir" ? -1 : 1;
+  return { ht: ht * sign, remAmt, base: prixApresRemise, fraisMiseDispo, carteGrise, baseTotal: montantTTC_soumis, tvaAmt: tvaAmt * sign, ttc: ttc * sign, encaisse: encaisse * sign, reste: reste * sign, avecTva, tvaPct };
 }
 
 // ─── NUMÉROTATION SÉQUENTIELLE ──────────────────────────────
@@ -1162,14 +1171,14 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
                 const c = calcOrder(o);
                 return (
                   <div key={o.id} style={{ padding: "11px 20px", borderBottom: "1px solid var(--border2)", display: "flex", alignItems: "center", gap: 12 }}>
-                    <span style={{ fontSize: 18 }}>{o.type === "facture" ? "🧾" : "📝"}</span>
+                    <span style={{ fontSize: 18 }}>{o.type === "facture" ? "🧾" : o.type === "avoir" ? "↩️" : "📝"}</span>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 600, fontSize: 13 }}>{o.client?.name || "Client non défini"}</div>
                       <div style={{ fontSize: 11, color: "var(--muted)" }}>{o.ref} · {o.date_creation}</div>
                     </div>
                     <div style={{ textAlign: "right" }}>
                       <div style={{ fontWeight: 700, fontSize: 13 }}>{fmt(c.ttc)}</div>
-                      <span className={`badge ${getPayStatut(c).cls}`}>{getPayStatut(c).label}</span>
+                      <span className={`badge ${getPayStatut(c, o.type).cls}`}>{getPayStatut(c, o.type).label}</span>
                     </div>
                   </div>
                 );
@@ -2497,7 +2506,7 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
                 </div>
               </div>
               <div>
-                <div className="pdoc-type">{order.type === "facture" ? "FACTURE" : "BON DE COMMANDE"}</div>
+                <div className="pdoc-type">{order.type === "facture" ? "FACTURE" : order.type === "avoir" ? "AVOIR" : "BON DE COMMANDE"}</div>
                 <div className="pdoc-ref">N° {order.ref}</div>
                 <div className="pdoc-ref">Date : {order.date_creation}</div>
                 {order.date_echeance && <div className="pdoc-ref">Échéance : {order.date_echeance}</div>}
@@ -3087,7 +3096,7 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
             {filtered.map(o => {
               const c = calcOrder(o);
               const pct = c.ttc > 0 ? Math.round(c.encaisse / c.ttc * 100) : 0;
-              const paySt = getPayStatut(c);
+              const paySt = getPayStatut(c, o.type);
               return (
                 <tr key={o.id}>
                   <td style={{ fontFamily: "DM Mono", fontSize: 12, fontWeight: 600 }}>{o.ref}</td>
