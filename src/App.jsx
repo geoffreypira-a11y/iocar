@@ -4164,7 +4164,7 @@ function CrmFiche({ client, orders, onEdit, onClose, onSave }) {
 /* ── Formulaire création/édition client ── */
 function CrmModal({ client, onSave, onClose }) {
   const [form, setForm] = useState(client || {
-    id: uid(), nom: "", prenom: "", email: "", phone: "", adresse: "",
+    id: uid(), civilite: "", nom: "", prenom: "", email: "", phone: "", adresse: "",
     code_postal: "", ville: "", pays: "France",
     statut: "prospect", vehicule_interet: "", budget: "", date_contact: today(),
     notes: "", annotations: []
@@ -4180,6 +4180,14 @@ function CrmModal({ client, onSave, onClose }) {
         </div>
         <div className="modal-body">
           <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Civilité</label>
+              <select className="form-input" value={form.civilite || ""} onChange={e => set("civilite", e.target.value)}>
+                <option value="">—</option>
+                <option value="M">M.</option>
+                <option value="F">Mme</option>
+              </select>
+            </div>
             <div className="form-group">
               <label className="form-label">Prénom</label>
               <input className="form-input" value={form.prenom} onChange={e => set("prenom", e.target.value)} />
