@@ -851,7 +851,7 @@ function CarteGriseCalc({ vehicleData, clientAddress, onApply }) {
           </select>
         </div>
         <div className="form-group">
-          <label className="form-label">Puissance fiscale (CV)</label>
+          <label className="form-label">Puissance fiscale (CV) {vehicleData?.puissance_fiscale && <span style={{ fontSize: 9, color: "var(--green)" }}>✓ auto</span>}</label>
           <input className="form-input" type="number" min={1} max={100} value={cv} onChange={e => setCv(parseInt(e.target.value) || 1)} />
         </div>
         <div className="form-group">
