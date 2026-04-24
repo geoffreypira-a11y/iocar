@@ -365,6 +365,13 @@ textarea.form-input{resize:vertical;min-height:72px}
 @media print{
   .no-print,.sidebar,.hamburger,.bottom-nav{display:none!important}
   @page{size:A4 portrait;margin:12mm}
+  /* Force le layout horizontal de l'en-tête du document, même si l'aperçu d'impression simule une largeur < 768px */
+  .pdoc-head{flex-direction:row!important;justify-content:space-between!important;align-items:flex-start!important;gap:24px!important}
+  .pdoc-head > div:first-child{flex:1;min-width:0}
+  .pdoc-head > div:last-child{flex-shrink:0;text-align:right}
+  .pdoc-parties{grid-template-columns:1fr 1fr!important;gap:40px!important}
+  .pdoc-type{text-align:right!important}
+  .pdoc-ref{text-align:right!important}
 }
 
 /* PRINT DOC */
@@ -2782,6 +2789,14 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
               win.document.write('body{margin:0;padding:0;background:#fff;font-family:"DM Sans",sans-serif}');
               win.document.write('.print-doc{min-height:277mm;display:flex;flex-direction:column;padding:30px 36px}');
               win.document.write('.print-doc-content{flex:1}');
+              // Force le layout horizontal de l'en-tête (annule la règle mobile @media max-width:768px
+              // qui fait passer pdoc-head en colonne, puisque la fenêtre d'impression peut être étroite)
+              win.document.write('.pdoc-head{flex-direction:row!important;justify-content:space-between!important;align-items:flex-start!important;gap:24px!important}');
+              win.document.write('.pdoc-head > div:first-child{flex:1;min-width:0}');
+              win.document.write('.pdoc-head > div:last-child{flex-shrink:0;text-align:right}');
+              win.document.write('.pdoc-parties{display:grid!important;grid-template-columns:1fr 1fr!important;gap:40px!important}');
+              win.document.write('.pdoc-type{text-align:right!important}');
+              win.document.write('.pdoc-ref{text-align:right!important}');
               win.document.write('@page{size:A4 portrait;margin:10mm}');
               win.document.write('@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}');
               win.document.write('</style>');
