@@ -787,14 +787,16 @@ function calcCarteGrise({ cv, energie, region, genre }) {
     else if (region === "Bretagne" || region === "Hauts-de-France") exoElec = 0.5;
   }
   const y1 = (cv || 0) * tarifCV * (1 - exoElec);
+  // Y2 : taxe formation professionnelle (34€ pour CTTE, 0€ pour VP)
+  const y2 = isCTTE ? 34 : 0;
   // Y3 : PAS de malus CO2 pour les véhicules d'occasion
   const y3 = 0;
   // Y4 : taxe de gestion (11€ fixe)
   const y4 = 11;
   // Y5 : redevance d'acheminement (2.76€ fixe)
   const y5 = 2.76;
-  const total = y1 + y3 + y4 + y5;
-  return { y1, y3, y4, y5, total, tarifCV, isElec, isCTTE, exoElec };
+  const total = y1 + y2 + y3 + y4 + y5;
+  return { y1, y2, y3, y4, y5, total, tarifCV, isElec, isCTTE, exoElec };
 }
 
 function CarteGriseCalc({ vehicleData, clientAddress, onApply }) {
@@ -852,12 +854,16 @@ function CarteGriseCalc({ vehicleData, clientAddress, onApply }) {
       <div style={{ background: "var(--card2)", borderRadius: 8, padding: "12px 16px", border: "1px solid var(--border2)" }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 6 }}>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, padding: "3px 0" }}>
-            <span style={{ color: "var(--muted)" }}>Y.1 Taxe régionale ({cv} CV × {cg.tarifCV.toFixed(2)}€) {cg.isCTTE ? "CTTE" : "VP"}</span>
-            <span style={{ fontWeight: 600 }}>{fmt(cg.y1)}</span>
+            <span style={{ color: "var(--muted)" }}>Y.1 Taxe régionale ({cv} CV × {cg.tarifCV.toFixed(2)}€) {cg.isCTTE ? "CTTE" : "VP"}{cg.exoElec > 0 ? ` (exo élec ${cg.exoElec * 100}%)` : ""}</span>
+            <span style={{ fontWeight: 600 }}>{fmtDec(cg.y1)}</span>
           </div>
+          {cg.isCTTE && <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, padding: "3px 0" }}>
+            <span style={{ color: "var(--muted)" }}>Y.2 Taxe formation professionnelle</span>
+            <span style={{ fontWeight: 600 }}>{fmtDec(cg.y2)}</span>
+          </div>}
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, padding: "3px 0" }}>
             <span style={{ color: "var(--muted)" }}>Y.4 Taxe de gestion</span>
-            <span style={{ fontWeight: 600 }}>{fmt(cg.y4)}</span>
+            <span style={{ fontWeight: 600 }}>{fmtDec(cg.y4)}</span>
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, padding: "3px 0" }}>
             <span style={{ color: "var(--muted)" }}>Y.5 Redevance acheminement</span>
