@@ -377,12 +377,15 @@ textarea.form-input{resize:vertical;min-height:72px}
   .print-doc-bar{display:none!important}
   .pdoc-divider{margin:10px 0!important}
   .pdoc-table{margin-bottom:14px!important}
-  .pdoc-table td{padding:6px 14px!important}
+  .pdoc-table td{padding:6px 14px!important;background:transparent!important}
   .pdoc-table th{padding:6px 14px!important}
   .pdoc-totals{margin-bottom:14px!important}
   .pdoc-trow{padding:5px 0!important}
   .pdoc-footer{margin-top:18px!important;padding-top:12px!important}
   .pdoc-paiements{margin-top:12px!important;padding:10px 14px!important}
+  /* FILIGRANE — garantir que le navigateur l'imprime (les couleurs très claires sont supprimées par défaut) */
+  .pdoc-watermark{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}
+  .pdoc-watermark img{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}
 }
 
 /* PRINT DOC */
@@ -2818,6 +2821,10 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
               win.document.write('.pdoc-trow{padding:5px 0!important}');
               win.document.write('.pdoc-footer{margin-top:18px!important;padding-top:12px!important}');
               win.document.write('.pdoc-paiements{margin-top:12px!important;padding:10px 14px!important}');
+              // Filigrane — forcer l'impression des couleurs très claires
+              win.document.write('.pdoc-watermark{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}');
+              win.document.write('.pdoc-watermark img{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}');
+              win.document.write('.pdoc-table td{background:transparent!important}');
               win.document.write('@page{size:A4 portrait;margin:8mm}');
               win.document.write('@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}');
               win.document.write('</style>');
@@ -2834,8 +2841,31 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
 
         {/* Document scrollable */}
         <div style={{ flex: 1, overflowY: "auto", padding: 24 }}>
-          <div className="print-doc">
-            <div className="print-doc-content">
+          <div className="print-doc" style={{ position: "relative", overflow: "hidden" }}>
+            {/* ── FILIGRANE DIAGONAL : logo du garage en travers, en très transparent ── */}
+            {dealer?.logo && (
+              <div className="pdoc-watermark" aria-hidden="true" style={{
+                position: "absolute",
+                top: 0, left: 0, right: 0, bottom: 0,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                pointerEvents: "none",
+                zIndex: 0,
+                overflow: "hidden",
+              }}>
+                <img src={dealer.logo} alt="" style={{
+                  width: "75%",
+                  maxWidth: 600,
+                  opacity: 0.06,
+                  transform: "rotate(-28deg)",
+                  filter: dealer.logoInvert ? "invert(1)" : "none",
+                  mixBlendMode: dealer.logoBlend || "normal",
+                  objectFit: "contain",
+                }} />
+              </div>
+            )}
+            <div className="print-doc-content" style={{ position: "relative", zIndex: 1 }}>
             <div className="print-doc-bar" />
             <div className="pdoc-head">
               <div>
