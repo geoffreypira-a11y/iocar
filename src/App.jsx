@@ -567,7 +567,7 @@ async function aiLookupPlate(plate, apiKey) {
     finition:                 v.AWN_label_moteur        || v.AWN_version || "",
     annee:                    annee                     || "",
     motorisation:             v.AWN_code_moteur         || "",
-    carburant:                mapCarburant(v.AWN_energie || "") !== "—" ? mapCarburant(v.AWN_energie || "") : (/kwh/i.test(v.AWN_label_moteur || v.AWN_version || "") ? "Électrique" : "Essence"),
+    carburant:                mapCarburant(v.AWN_energie || ""),
     puissance_cv:             v.AWN_puissance_chevaux   || "",
     puissance_fiscale:        v.AWN_puissance_fiscale   || "",
     puissance_kw:             v.AWN_puissance_KW        || "",
@@ -732,21 +732,21 @@ function PlateBadge({ plate }) {
    CALCULATEUR CARTE GRISE (ESTIMATION 2026)
 ═══════════════════════════════════════════════════════════════ */
 const TARIFS_REGIONS_2026 = {
-  // Tarifs VP par CV fiscal — source : service-public.fr mars 2026
-  "Île-de-France": 68.95, "Auvergne-Rhône-Alpes": 43.00, "Bourgogne-Franche-Comté": 60.00,
-  "Bretagne": 60.00, "Centre-Val de Loire": 60.00, "Corse": 53.00,
-  "Grand Est": 60.00, "Hauts-de-France": 43.00, "Normandie": 60.00,
-  "Nouvelle-Aquitaine": 58.00, "Occitanie": 47.00, "Pays de la Loire": 51.00,
-  "Provence-Alpes-Côte d'Azur": 60.00,
+  // Tarifs VP par CV fiscal — source : service-public.fr 2026
+  "Île-de-France": 54.95, "Auvergne-Rhône-Alpes": 43.00, "Bourgogne-Franche-Comté": 51.00,
+  "Bretagne": 55.00, "Centre-Val de Loire": 55.00, "Corse": 43.00,
+  "Grand Est": 48.00, "Hauts-de-France": 36.20, "Normandie": 46.15,
+  "Nouvelle-Aquitaine": 45.00, "Occitanie": 47.00, "Pays de la Loire": 48.00,
+  "Provence-Alpes-Côte d'Azur": 51.20,
 };
 
-// CTTE (utilitaires) : même tarif
+// CTTE (utilitaires) : même tarif dans la plupart des régions
 const TARIFS_CTTE_2026 = {
-  "Île-de-France": 68.95, "Auvergne-Rhône-Alpes": 43.00, "Bourgogne-Franche-Comté": 60.00,
-  "Bretagne": 60.00, "Centre-Val de Loire": 60.00, "Corse": 53.00,
-  "Grand Est": 60.00, "Hauts-de-France": 43.00, "Normandie": 60.00,
-  "Nouvelle-Aquitaine": 58.00, "Occitanie": 47.00, "Pays de la Loire": 51.00,
-  "Provence-Alpes-Côte d'Azur": 60.00,
+  "Île-de-France": 54.95, "Auvergne-Rhône-Alpes": 43.00, "Bourgogne-Franche-Comté": 51.00,
+  "Bretagne": 55.00, "Centre-Val de Loire": 55.00, "Corse": 43.00,
+  "Grand Est": 48.00, "Hauts-de-France": 36.20, "Normandie": 46.15,
+  "Nouvelle-Aquitaine": 45.00, "Occitanie": 47.00, "Pays de la Loire": 48.00,
+  "Provence-Alpes-Côte d'Azur": 51.20,
 };
 
 // Mapping code postal (2 premiers chiffres) → région
@@ -779,24 +779,16 @@ function calcCarteGrise({ cv, energie, region, genre }) {
   const tarifs = isCTTE ? TARIFS_CTTE_2026 : TARIFS_REGIONS_2026;
   const tarifCV = tarifs[region] || 46;
   const isElec = /[eé]lectrique/i.test(energie || "");
-  // Y1 : taxe régionale
-  // Exonération électrique 2026 : Corse & Pays de la Loire = 100%, Bretagne & Hauts-de-France = 50%, autres = 0%
-  let exoElec = 0;
-  if (isElec) {
-    if (region === "Corse" || region === "Pays de la Loire") exoElec = 1;
-    else if (region === "Bretagne" || region === "Hauts-de-France") exoElec = 0.5;
-  }
-  const y1 = (cv || 0) * tarifCV * (1 - exoElec);
-  // Y2 : taxe formation professionnelle (34€ pour CTTE, 0€ pour VP)
-  const y2 = isCTTE ? 34 : 0;
+  // Y1 : taxe régionale (exonération 100% électrique dans la plupart des régions)
+  const y1 = isElec ? 0 : (cv || 0) * tarifCV;
   // Y3 : PAS de malus CO2 pour les véhicules d'occasion
   const y3 = 0;
   // Y4 : taxe de gestion (11€ fixe)
   const y4 = 11;
   // Y5 : redevance d'acheminement (2.76€ fixe)
   const y5 = 2.76;
-  const total = y1 + y2 + y3 + y4 + y5;
-  return { y1, y2, y3, y4, y5, total, tarifCV, isElec, isCTTE, exoElec };
+  const total = y1 + y3 + y4 + y5;
+  return { y1, y3, y4, y5, total, tarifCV, isElec, isCTTE };
 }
 
 function CarteGriseCalc({ vehicleData, clientAddress, onApply }) {
@@ -854,26 +846,22 @@ function CarteGriseCalc({ vehicleData, clientAddress, onApply }) {
       <div style={{ background: "var(--card2)", borderRadius: 8, padding: "12px 16px", border: "1px solid var(--border2)" }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 6 }}>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, padding: "3px 0" }}>
-            <span style={{ color: "var(--muted)" }}>Y.1 Taxe régionale ({cv} CV × {cg.tarifCV.toFixed(2)}€) {cg.isCTTE ? "CTTE" : "VP"}{cg.exoElec > 0 ? ` (exo élec ${cg.exoElec * 100}%)` : ""}</span>
-            <span style={{ fontWeight: 600 }}>{fmtDec(cg.y1)}</span>
+            <span style={{ color: "var(--muted)" }}>Y.1 Taxe régionale ({cv} CV × {cg.tarifCV.toFixed(2)}€) {cg.isCTTE ? "CTTE" : "VP"}</span>
+            <span style={{ fontWeight: 600 }}>{fmt(cg.y1)}</span>
           </div>
-          {cg.isCTTE && <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, padding: "3px 0" }}>
-            <span style={{ color: "var(--muted)" }}>Y.2 Taxe formation professionnelle</span>
-            <span style={{ fontWeight: 600 }}>{fmtDec(cg.y2)}</span>
-          </div>}
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, padding: "3px 0" }}>
             <span style={{ color: "var(--muted)" }}>Y.4 Taxe de gestion</span>
-            <span style={{ fontWeight: 600 }}>{fmtDec(cg.y4)}</span>
+            <span style={{ fontWeight: 600 }}>{fmt(cg.y4)}</span>
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, padding: "3px 0" }}>
             <span style={{ color: "var(--muted)" }}>Y.5 Redevance acheminement</span>
-            <span style={{ fontWeight: 600 }}>{fmtDec(cg.y5)}</span>
+            <span style={{ fontWeight: 600 }}>{fmt(cg.y5)}</span>
           </div>
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8, padding: "8px 0", borderTop: "2px solid var(--gold)" }}>
           <span style={{ fontSize: 14, fontWeight: 800 }}>TOTAL</span>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <span style={{ fontSize: 16, fontWeight: 800, color: "var(--gold)" }}>{fmtDec(cg.total)}</span>
+            <span style={{ fontSize: 16, fontWeight: 800, color: "var(--gold)" }}>{fmt(cg.total)}</span>
             {onApply && <button className="btn btn-primary btn-sm" onClick={() => onApply(Math.round(cg.total * 100) / 100)}>
               ✅ Appliquer
             </button>}
@@ -889,11 +877,10 @@ function CarteGriseCalc({ vehicleData, clientAddress, onApply }) {
 /* ═══════════════════════════════════════════════════════════════
    DASHBOARD
 ═══════════════════════════════════════════════════════════════ */
-function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUsage, livrePolice }) {
+function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUsage }) {
   const fleet = vehicles.length;
   const dispo = vehicles.filter(v => v.statut === "disponible").length;
-  // Compter les véhicules réellement sortis du livret de police (livrés)
-  const vendu = (livrePolice || []).filter(e => e.date_sortie).length;
+  const vendu = vehicles.filter(v => v.statut === "vendu").length;
 
   const allTtc = orders.reduce((s, o) => s + calcOrder(o).ttc, 0);
   const encaisse = orders.reduce((s, o) => s + calcOrder(o).encaisse, 0);
@@ -1399,16 +1386,22 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
           </div>
 
           <div className="form-grid">
-            {[["marque", "Marque *"], ["modele", "Modèle *"], ["finition", "Finition"], ["genre", "Genre national"], ["date_mise_en_circulation", "Date 1ère MEC"],
+            {[["marque", "Marque *"], ["modele", "Modèle *"], ["finition", "Finition"], ["date_mise_en_circulation", "Date 1ère MEC"],
               ["motorisation", "Motorisation"], ["puissance_cv", "Puissance (ch)", "number"], ["puissance_fiscale", "Puissance fiscale (CV)", "number"], ["co2", "CO₂ (g/km)", "number"], ["boite", "Boîte"],
               ["couleur", "Couleur ext."], ["couleur_int", "Couleur int."], ["kilometrage", "Kilométrage", "number"],
-              ["vin", "N° VIN"], ["date_entree", "Date d'entrée (achat)"], ["carburant", "Carburant"]].map(([k, label, type]) => (
+              ["vin", "N° VIN"], ["date_entree", "Date d'entrée (achat)"]].map(([k, label, type]) => (
                 <div className="form-group" key={k}>
                   <label className="form-label">{label}</label>
                   <input className="form-input" type={type || "text"} value={form[k] || ""} onChange={e => set(k, e.target.value)} />
                 </div>
               ))}
 
+            <div className="form-group">
+              <label className="form-label">Carburant</label>
+              <select className="form-input" value={form.carburant} onChange={e => set("carburant", e.target.value)}>
+                {["Essence", "Diesel", "Hybride", "Hybride rechargeable", "Électrique", "GPL"].map(c => <option key={c}>{c}</option>)}
+              </select>
+            </div>
             <div className="form-group">
               <label className="form-label">Transmission</label>
               <select className="form-input" value={form.transmission} onChange={e => set("transmission", e.target.value)}>
@@ -2269,10 +2262,7 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
             </summary>
             <div style={{ padding: "12px 14px", borderTop: "1px solid var(--border2)" }}>
               <CarteGriseCalc
-                vehicleData={(() => {
-                  const fv = form.vehicle_id && vehicles ? vehicles.find(vh => vh.id === form.vehicle_id) : null;
-                  return fv || form.vehicle_data;
-                })()}
+                vehicleData={form.vehicle_data}
                 clientAddress={form.client?.address}
                 onApply={(total) => set("carte_grise", total)}
               />
@@ -2665,15 +2655,15 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
    Pré-remplie avec les données véhicule + client + garage
 ═══════════════════════════════════════════════════════════════ */
 function CessionDoc({ order, dealer, vehicles, clients, onClose }) {
-  // Toujours prendre les données fraîches du véhicule depuis la flotte
+  // Récupérer les données fraîches du véhicule si vehicle_data est vide/incomplet
   const freshVehicle = order.vehicle_id && vehicles ? vehicles.find(vh => vh.id === order.vehicle_id) : null;
-  const v = freshVehicle ? {
+  const v = (order.vehicle_data && order.vehicle_data.marque) ? order.vehicle_data : (freshVehicle ? {
     plate: freshVehicle.plate, marque: freshVehicle.marque, modele: freshVehicle.modele,
     finition: freshVehicle.finition, vin: freshVehicle.vin, genre: freshVehicle.genre || "VP",
     date_mise_en_circulation: freshVehicle.date_mise_en_circulation,
     kilometrage: freshVehicle.kilometrage, carburant: freshVehicle.carburant,
-  } : (order.vehicle_data || {});
-  // Récupérer la civilité depuis le client CRM
+  } : (order.vehicle_data || {}));
+  // Récupérer la civilité depuis le client CRM si pas dans la commande
   const crmClient = order.client_id && clients ? clients.find(c => c.id === order.client_id) : null;
   const client = {
     ...(order.client || {}),
@@ -2700,11 +2690,14 @@ function CessionDoc({ order, dealer, vehicles, clients, onClose }) {
       const pdfDoc = await PDFDocument.load(pdfBytes);
       const form = pdfDoc.getForm();
 
-      // ── Helpers ultra-simples — exactement comme le test console qui marche ──
+      // ── Helpers ──
       const setText = (name, value) => {
         if (!value) return;
-        try { form.getTextField(name).setText(String(value)); }
-        catch(e) { console.warn("Champ:", name, e.message); }
+        try {
+          const field = form.getTextField(name);
+          field.setFontSize(9);
+          field.setText(String(value));
+        } catch(e) { console.warn("Champ:", name, e.message); }
       };
       const setCheck = (name) => {
         try { form.getCheckBox(name).check(); }
@@ -2789,6 +2782,7 @@ function CessionDoc({ order, dealer, vehicles, clients, onClose }) {
 
         // NOUVEAU PROPRIÉTAIRE
         setRadio(p("Groupe_de_boutons_radio5"), "2");  // Personne physique
+        // Sexe : radio6 — "1" = M, "2" = F
         if (client.civilite === "M") setRadio(p("Groupe_de_boutons_radio6"), "1");
         if (client.civilite === "F") setRadio(p("Groupe_de_boutons_radio6"), "2");
         setText(p("txt_IdentitéAcheteur"), client.name);
@@ -3060,15 +3054,8 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
                     {o.client?.phone && <div style={{ fontSize: 11, color: "var(--muted)" }}>{o.client.phone}</div>}
                   </td>
                   <td>
-                    {(() => {
-                      const fv = o.vehicle_id && vehicles ? vehicles.find(vh => vh.id === o.vehicle_id) : null;
-                      const label = fv ? `${fv.marque} ${fv.modele} ${fv.finition || ""} (${getYear(fv)})`.trim() : (o.vehicle_label || "—");
-                      const plate = fv ? fv.plate : o.vehicle_plate;
-                      return <>
-                        <div style={{ fontSize: 12 }}>{label}</div>
-                        {plate && <PlateBadge plate={plate} />}
-                      </>;
-                    })()}
+                    <div style={{ fontSize: 12 }}>{o.vehicle_label || "—"}</div>
+                    {o.vehicle_plate && <PlateBadge plate={o.vehicle_plate} />}
                   </td>
                   <td style={{ fontFamily: "DM Mono", fontWeight: 700 }}>{fmtDec(c.ttc)}</td>
                   <td style={{ fontFamily: "DM Mono", color: "var(--green)" }}>{c.encaisse > 0 ? fmtDec(c.encaisse) : "—"}</td>
@@ -3924,8 +3911,8 @@ function CrmPage({ clients, setClients, orders, viewMode }) {
 
   return (
     <div className="page">
-      {fiche && <CrmFiche client={fiche} orders={clientOrders(fiche.id)} onEdit={() => setModal(fiche)} onClose={() => setFiche(null)} onSave={save} />}
       {modal && <CrmModal client={modal === "add" ? null : modal} onSave={save} onClose={() => setModal(null)} />}
+      {fiche && <CrmFiche client={fiche} orders={clientOrders(fiche.id)} onEdit={() => setModal(fiche)} onClose={() => setFiche(null)} onSave={save} />}
       {pendingDelete && (
         <ConfirmModal
           title="Supprimer le contact"
@@ -4174,7 +4161,7 @@ function CrmFiche({ client, orders, onEdit, onClose, onSave }) {
 /* ── Formulaire création/édition client ── */
 function CrmModal({ client, onSave, onClose }) {
   const [form, setForm] = useState(client || {
-    id: uid(), civilite: "", nom: "", prenom: "", email: "", phone: "", adresse: "",
+    id: uid(), nom: "", prenom: "", email: "", phone: "", adresse: "",
     code_postal: "", ville: "", pays: "France",
     statut: "prospect", vehicule_interet: "", budget: "", date_contact: today(),
     notes: "", annotations: []
@@ -4190,14 +4177,6 @@ function CrmModal({ client, onSave, onClose }) {
         </div>
         <div className="modal-body">
           <div className="form-grid">
-            <div className="form-group">
-              <label className="form-label">Civilité</label>
-              <select className="form-input" value={form.civilite || ""} onChange={e => set("civilite", e.target.value)}>
-                <option value="">—</option>
-                <option value="M">M.</option>
-                <option value="F">Mme</option>
-              </select>
-            </div>
             <div className="form-group">
               <label className="form-label">Prénom</label>
               <input className="form-input" value={form.prenom} onChange={e => set("prenom", e.target.value)} />
@@ -5481,7 +5460,7 @@ export default function App() {
           </aside>
 
           <main className={`content${(viewMode === "trial" || viewMode === "subscriber") ? " demo-offset" : ""}`}>
-            {tab === "dashboard"   && <Dashboard vehicles={activeVehicles} setVehicles={setVehiclesRaw} orders={activeOrders} setTab={setTab} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} livrePolice={livrePolice} />}
+            {tab === "dashboard"   && <Dashboard vehicles={activeVehicles} setVehicles={setVehiclesRaw} orders={activeOrders} setTab={setTab} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} />}
             {tab === "fleet"       && <FleetPage vehicles={activeVehicles} setVehicles={setVehiclesRaw} orders={activeOrders} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} livrePolice={activeLivrePolice} setLivrePolice={setLivrePoliceRaw} viewMode={viewMode} garageId={garageId} />}
             {tab === "orders"      && <OrdersPage orders={activeOrders} setOrders={setOrdersRaw} vehicles={activeVehicles} setVehiclesRaw={setVehiclesRaw} dealer={dealer} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} clients={activeClients} setClients={setClientsRaw} viewMode={viewMode} />}
             {tab === "crm"         && <CrmPage clients={activeClients} setClients={setClientsRaw} orders={activeOrders} viewMode={viewMode} />}
