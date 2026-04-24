@@ -481,15 +481,16 @@ function calcOrder(o) {
     tvaAmt = 0;
   }
 
-  // Total TTC = montant soumis + carte grise (hors TVA)
-  const ttc = montantTTC_soumis + carteGrise;
+  // Total TTC = montant soumis + carte grise (hors TVA) − reprise véhicule
+  const repriseValeur = o.reprise_active ? (parseFloat(o.reprise_valeur) || 0) : 0;
+  const ttc = montantTTC_soumis + carteGrise - repriseValeur;
   const encaisse = (o.paiements || []).reduce((s, p) => s + (parseFloat(p.montant) || 0), 0);
   const reste = ttc - encaisse;
 
   // Les avoirs : le signe négatif est appliqué sur ttc/ht/tva pour le dashboard
   // Mais encaisse et reste restent en valeur absolue pour la logique de paiement
   const sign = o.type === "avoir" ? -1 : 1;
-  return { ht: ht * sign, remAmt, base: prixApresRemise, fraisMiseDispo, carteGrise, baseTotal: montantTTC_soumis, tvaAmt: tvaAmt * sign, ttc: ttc * sign, encaisse, reste, avecTva, tvaPct };
+  return { ht: ht * sign, remAmt, base: prixApresRemise, fraisMiseDispo, carteGrise, repriseValeur, baseTotal: montantTTC_soumis, tvaAmt: tvaAmt * sign, ttc: ttc * sign, encaisse, reste, avecTva, tvaPct };
 }
 
 // ─── NUMÉROTATION SÉQUENTIELLE ──────────────────────────────
@@ -2116,7 +2117,7 @@ function PaymentModal({ order, onSave, onClose }) {
 /* ═══════════════════════════════════════════════════════════════
    ORDER / INVOICE FORM
 ═══════════════════════════════════════════════════════════════ */
-function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClients, orders }) {
+function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClients, orders, setVehiclesRaw }) {
   const isEdit = !!order?.id;
   const [form, setForm] = useState(order || {
     type: "bc", ref: "", date_creation: today(), date_echeance: "",
@@ -2127,6 +2128,16 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
     frais_mise_dispo: 180, // frais de mise à disposition (par défaut 180€)
     garantie_mois: 3, // durée garantie : 3, 6 ou 12 mois
     carte_grise: 0, // frais carte grise
+    // Reprise véhicule (optionnelle)
+    reprise_active: false,
+    reprise_plate: "",
+    reprise_marque: "",
+    reprise_modele: "",
+    reprise_annee: "",
+    reprise_vin: "",
+    reprise_km: "",
+    reprise_valeur: 0,
+    reprise_ajoutee_flotte: false,
     categorie_operation: "livraison_biens",
     tva_sur_debits: false,
     paiements: [], notes: ""
@@ -2140,6 +2151,8 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
   const [showClientDropdown, setShowClientDropdown] = useState(false);
   const [showCreateClient, setShowCreateClient] = useState(false);
   const [newClientForm, setNewClientForm] = useState({ civilite: "", nom: "", prenom: "", email: "", phone: "", adresse: "", code_postal: "", ville: "", pays: "France" });
+  // ── Reprise véhicule : recherche par plaque ──────────────
+  const [repriseSearching, setRepriseSearching] = useState(false);
 
   const filteredClients = (clients || []).filter(c =>
     !clientSearch || `${c.prenom} ${c.nom} ${c.email} ${c.phone}`.toLowerCase().includes(clientSearch.toLowerCase())
@@ -2443,6 +2456,174 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
             </div>
           </details>
 
+          {/* ═══ REPRISE VÉHICULE ═══ */}
+          <details
+            open={form.reprise_active}
+            style={{ marginBottom: 20, background: "var(--card2)", borderRadius: 10, border: `1px solid ${form.reprise_active ? "rgba(212,168,67,.4)" : "var(--border2)"}`, padding: "0" }}
+          >
+            <summary style={{ padding: "10px 14px", cursor: "pointer", fontSize: 12, fontWeight: 600, color: "var(--gold)", listStyle: "none", display: "flex", alignItems: "center", gap: 8 }}>
+              🔄 Reprise véhicule
+              {form.reprise_active && (parseFloat(form.reprise_valeur) || 0) > 0 && (
+                <span style={{ fontSize: 10, color: "var(--green)", fontWeight: 400 }}>
+                  — {fmt(parseFloat(form.reprise_valeur))} déduits du total
+                </span>
+              )}
+            </summary>
+            <div style={{ padding: "12px 14px", borderTop: "1px solid var(--border2)" }}>
+              {/* Toggle d'activation */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: form.reprise_active ? 14 : 0, padding: "8px 12px", background: "var(--card)", borderRadius: 8, border: "1px solid var(--border2)" }}>
+                <div style={{ fontSize: 12, fontWeight: 500 }}>Le client a un véhicule à reprendre</div>
+                <div style={{
+                  width: 40, height: 22, borderRadius: 11, cursor: "pointer",
+                  background: form.reprise_active ? "var(--gold)" : "var(--card2)",
+                  border: "1px solid var(--border2)", position: "relative", transition: "background .2s", flexShrink: 0
+                }} onClick={() => set("reprise_active", !form.reprise_active)}>
+                  <div style={{
+                    position: "absolute", top: 2, left: form.reprise_active ? 20 : 2,
+                    width: 16, height: 16, borderRadius: "50%", background: "#fff", transition: "left .2s"
+                  }} />
+                </div>
+              </div>
+
+              {form.reprise_active && (
+                <>
+                  {/* Ligne recherche plaque */}
+                  <div style={{ display: "flex", gap: 8, marginBottom: 10, alignItems: "flex-end" }}>
+                    <div style={{ flex: 1 }}>
+                      <label className="form-label">Plaque d'immatriculation</label>
+                      <input
+                        className="form-input"
+                        value={form.reprise_plate || ""}
+                        onChange={e => set("reprise_plate", e.target.value.toUpperCase())}
+                        placeholder="AB-123-CD"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      style={{ height: 40 }}
+                      disabled={repriseSearching || !(form.reprise_plate || "").trim()}
+                      onClick={async () => {
+                        const plate = (form.reprise_plate || "").trim().toUpperCase().replace(/\s/g, "");
+                        if (!plate) return;
+                        setRepriseSearching(true);
+                        try {
+                          const data = await aiLookupPlate(plate, apiKey);
+                          setForm(f => ({
+                            ...f,
+                            reprise_plate: plate,
+                            reprise_marque: data.marque || f.reprise_marque,
+                            reprise_modele: data.modele || f.reprise_modele,
+                            reprise_annee: data.annee || f.reprise_annee,
+                            reprise_vin: data.vin || f.reprise_vin,
+                            reprise_data: data, // on garde les données complètes pour la flotte
+                          }));
+                        } catch (err) {
+                          alert(`Erreur recherche plaque : ${err.message}`);
+                        } finally {
+                          setRepriseSearching(false);
+                        }
+                      }}
+                    >
+                      {repriseSearching ? "…" : "🔍 Rechercher"}
+                    </button>
+                  </div>
+
+                  {/* Champs véhicule */}
+                  <div className="form-grid" style={{ marginBottom: 10 }}>
+                    <div className="form-group">
+                      <label className="form-label">Marque</label>
+                      <input className="form-input" value={form.reprise_marque || ""} onChange={e => set("reprise_marque", e.target.value)} />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Modèle</label>
+                      <input className="form-input" value={form.reprise_modele || ""} onChange={e => set("reprise_modele", e.target.value)} />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Année</label>
+                      <input className="form-input" value={form.reprise_annee || ""} onChange={e => set("reprise_annee", e.target.value)} />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Kilométrage</label>
+                      <input className="form-input" type="number" value={form.reprise_km || ""} onChange={e => set("reprise_km", e.target.value)} placeholder="km" />
+                    </div>
+                    <div className="form-group full">
+                      <label className="form-label">N° de série (VIN)</label>
+                      <input className="form-input" value={form.reprise_vin || ""} onChange={e => set("reprise_vin", e.target.value)} placeholder="17 caractères" />
+                    </div>
+                    <div className="form-group full">
+                      <label className="form-label" style={{ color: "var(--gold)" }}>Valeur de reprise TTC (€) · déduite du total</label>
+                      <input
+                        className="form-input"
+                        type="number"
+                        step="0.01"
+                        value={form.reprise_valeur || ""}
+                        onChange={e => set("reprise_valeur", parseFloat(e.target.value) || 0)}
+                        placeholder="0.00"
+                        style={{ fontSize: 15, fontWeight: 600 }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Bouton ajouter à la flotte */}
+                  {setVehiclesRaw && (parseFloat(form.reprise_valeur) || 0) > 0 && (form.reprise_plate || "").trim() && (form.reprise_marque || "").trim() && (
+                    <div style={{ paddingTop: 10, borderTop: "1px solid var(--border2)" }}>
+                      {form.reprise_ajoutee_flotte ? (
+                        <div style={{ fontSize: 12, color: "var(--green)", textAlign: "center", padding: "8px" }}>
+                          ✅ Véhicule ajouté à la flotte
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          style={{ width: "100%" }}
+                          onClick={() => {
+                            const d = form.reprise_data || {};
+                            const newVehicle = {
+                              id: uid(),
+                              plate: (form.reprise_plate || "").toUpperCase().replace(/\s/g, ""),
+                              marque: form.reprise_marque || "",
+                              modele: form.reprise_modele || "",
+                              annee: form.reprise_annee || "",
+                              vin: form.reprise_vin || "",
+                              kilometrage: form.reprise_km || "",
+                              prix_achat: parseFloat(form.reprise_valeur) || 0,
+                              prix_vente: "",
+                              statut: "disponible",
+                              date_entree: today(),
+                              // Données additionnelles si issues de la recherche
+                              finition: d.finition || "",
+                              motorisation: d.motorisation || "",
+                              carburant: d.carburant || "",
+                              puissance_cv: d.puissance_cv || "",
+                              puissance_fiscale: d.puissance_fiscale || "",
+                              puissance_kw: d.puissance_kw || "",
+                              co2: d.co2 || "",
+                              boite: d.boite || "",
+                              transmission: d.transmission || "",
+                              couleur: d.couleur || "",
+                              nb_portes: d.nb_portes || "",
+                              nb_places: d.nb_places || "",
+                              genre: d.genre || "VP",
+                              carrosserie: d.carrosserie || "",
+                              date_mise_en_circulation: d.date_mise_en_circulation || "",
+                              documents: [],
+                              notes: `Véhicule repris lors de la vente ${form.ref || ""}`.trim(),
+                            };
+                            setVehiclesRaw(prev => [newVehicle, ...(prev || [])]);
+                            set("reprise_ajoutee_flotte", true);
+                          }}
+                        >
+                          ➕ Ajouter ce véhicule à ma flotte (prix d'achat : {fmt(parseFloat(form.reprise_valeur) || 0)})
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </details>
+
           <div style={{ fontFamily: "Syne", fontSize: 13, fontWeight: 700, letterSpacing: 1, color: "var(--gold)", marginBottom: 10, textTransform: "uppercase" }}>TARIFICATION</div>
 
           {/* Toggle TVA */}
@@ -2715,6 +2896,7 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
                     <div className="pdoc-trow"><span>TVA {c.tvaPct || 20}%</span><span>{fmtDec(c.tvaAmt)}</span></div>
                     {c.remAmt > 0 && <div className="pdoc-trow" style={{ color: "#e5973c" }}><span>Remise</span><span>- {fmtDec(c.remAmt)}</span></div>}
                     {c.carteGrise > 0 && <div className="pdoc-trow"><span>Carte grise (hors TVA)</span><span>{fmtDec(c.carteGrise)}</span></div>}
+                    {c.repriseValeur > 0 && <div className="pdoc-trow" style={{ color: "#c79528" }}><span>Reprise véhicule</span><span>- {fmtDec(c.repriseValeur)}</span></div>}
                     <div className="pdoc-trow big"><span>TOTAL TTC</span><span>{fmtDec(c.ttc)}</span></div>
                   </>
                 ) : (
@@ -2723,6 +2905,7 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
                     <div className="pdoc-trow" style={{ fontSize: 10, color: "#aaa" }}><span>TVA non applicable</span><span>Art. 297A CGI</span></div>
                     {c.remAmt > 0 && <div className="pdoc-trow" style={{ color: "#e5973c" }}><span>Remise</span><span>- {fmtDec(c.remAmt)}</span></div>}
                     {c.carteGrise > 0 && <div className="pdoc-trow"><span>Carte grise</span><span>{fmtDec(c.carteGrise)}</span></div>}
+                    {c.repriseValeur > 0 && <div className="pdoc-trow" style={{ color: "#c79528" }}><span>Reprise véhicule</span><span>- {fmtDec(c.repriseValeur)}</span></div>}
                     <div className="pdoc-trow big"><span>TOTAL TTC</span><span>{fmtDec(c.ttc)}</span></div>
                   </>
                 )}
@@ -2737,6 +2920,34 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
             {(order.garantie_mois || 0) > 0 && (
               <div style={{ marginTop: 12, padding: "8px 14px", background: "#f9f8f5", borderRadius: 6, fontSize: 11, color: "#555", border: "1px solid #e8e8e8" }}>
                 🛡 <strong>Garantie véhicule : {order.garantie_mois} mois</strong>
+              </div>
+            )}
+
+            {/* Reprise véhicule */}
+            {order.reprise_active && (parseFloat(order.reprise_valeur) || 0) > 0 && (
+              <div style={{ marginTop: 12, padding: "10px 14px", background: "#fdf8ec", borderRadius: 6, fontSize: 11, color: "#555", border: "1px solid #e8d9a8" }}>
+                <div style={{ fontWeight: 700, color: "#8a6a1a", marginBottom: 6, fontSize: 12 }}>🔄 Reprise véhicule</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 16px", fontSize: 11 }}>
+                  {(order.reprise_marque || order.reprise_modele) && (
+                    <div><span style={{ color: "#888" }}>Modèle : </span><strong>{[order.reprise_marque, order.reprise_modele].filter(Boolean).join(" ")}</strong></div>
+                  )}
+                  {order.reprise_plate && (
+                    <div><span style={{ color: "#888" }}>Plaque : </span><strong style={{ fontFamily: "monospace" }}>{order.reprise_plate}</strong></div>
+                  )}
+                  {order.reprise_annee && (
+                    <div><span style={{ color: "#888" }}>Année : </span><strong>{order.reprise_annee}</strong></div>
+                  )}
+                  {order.reprise_km && (
+                    <div><span style={{ color: "#888" }}>Kilométrage : </span><strong>{order.reprise_km} km</strong></div>
+                  )}
+                  {order.reprise_vin && (
+                    <div style={{ gridColumn: "1 / -1" }}><span style={{ color: "#888" }}>N° de série : </span><strong style={{ fontFamily: "monospace" }}>{order.reprise_vin}</strong></div>
+                  )}
+                  <div style={{ gridColumn: "1 / -1", marginTop: 4, paddingTop: 6, borderTop: "1px solid #e8d9a8" }}>
+                    <span style={{ color: "#888" }}>Valeur de reprise déduite du total : </span>
+                    <strong style={{ color: "#8a6a1a", fontSize: 12 }}>{fmtDec(parseFloat(order.reprise_valeur) || 0)}</strong>
+                  </div>
+                </div>
               </div>
             )}
             {order.paiements?.length > 0 && (
@@ -3186,7 +3397,7 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
 
   return (
     <div className="page">
-      {modal && <OrderForm order={modal === "new" ? null : modal} vehicles={vehicles} onSave={save} onClose={() => setModal(null)} apiKey={apiKey} clients={clients} setClients={setClients} orders={orders} viewMode={viewMode} />}
+      {modal && <OrderForm order={modal === "new" ? null : modal} vehicles={vehicles} onSave={save} onClose={() => setModal(null)} apiKey={apiKey} clients={clients} setClients={setClients} orders={orders} viewMode={viewMode} setVehiclesRaw={setVehiclesRaw} />}
       {print && <PrintDoc order={print} dealer={dealer} onClose={() => setPrint(null)} viewMode={viewMode} />}
       {cession && <CessionDoc order={cession} dealer={dealer} vehicles={vehicles} clients={clients} onClose={() => setCession(null)} />}
       {viewMode === "trial" && showDemoLimit && <DemoLimitModal type="orders" onClose={() => setShowDemoLimit(false)} />}
@@ -3217,6 +3428,8 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
               frais_mise_dispo: "0",
               carte_grise: "0",
               remise_ttc: "0",
+              reprise_active: false,
+              reprise_valeur: 0,
             };
             setOrders([...orders, avoir]);
             setAvoirChoice(null);
@@ -3245,6 +3458,8 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
               frais_mise_dispo: "0",
               carte_grise: "0",
               remise_ttc: "0",
+              reprise_active: false,
+              reprise_valeur: 0,
             };
             setOrders([...orders, avoir]);
             setAvoirPartiel(null);
@@ -4392,6 +4607,51 @@ function CrmFiche({ client, orders, onEdit, onClose, onSave }) {
               )}
             </div>
           </div>
+
+          {/* Reprises véhicules — calculé à partir des ordres du client */}
+          {(() => {
+            const reprises = orders.filter(o => o.reprise_active && (parseFloat(o.reprise_valeur) || 0) > 0);
+            if (reprises.length === 0) return null;
+            const totalReprise = reprises.reduce((s, o) => s + (parseFloat(o.reprise_valeur) || 0), 0);
+            return (
+              <div className="card card-pad" style={{ marginBottom: 24, border: "1px solid rgba(212,168,67,.3)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                  <div style={{ fontFamily: "Syne", fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "var(--gold)", textTransform: "uppercase" }}>
+                    🔄 Reprises véhicules ({reprises.length})
+                  </div>
+                  <div style={{ fontSize: 12, color: "var(--muted)" }}>
+                    Total repris : <strong style={{ color: "var(--gold)" }}>{fmt(totalReprise)}</strong>
+                  </div>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {reprises.map(o => {
+                    const modele = [o.reprise_marque, o.reprise_modele].filter(Boolean).join(" ") || "Véhicule";
+                    return (
+                      <div key={o.id} style={{ padding: "10px 12px", background: "var(--card2)", borderRadius: 6, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                        <div style={{ flex: 1, minWidth: 200 }}>
+                          <div style={{ fontSize: 13, fontWeight: 600 }}>{modele} {o.reprise_annee && <span style={{ color: "var(--muted)", fontWeight: 400 }}>· {o.reprise_annee}</span>}</div>
+                          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 3, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                            {o.reprise_plate && <span style={{ fontFamily: "monospace" }}>🔖 {o.reprise_plate}</span>}
+                            {o.reprise_km && <span>📏 {o.reprise_km} km</span>}
+                            <span>📄 {o.ref} · {o.date_creation}</span>
+                          </div>
+                          {o.reprise_vin && (
+                            <div style={{ fontSize: 10, color: "var(--muted)", fontFamily: "monospace", marginTop: 2 }}>
+                              VIN : {o.reprise_vin}
+                            </div>
+                          )}
+                        </div>
+                        <div style={{ textAlign: "right" }}>
+                          <div style={{ fontSize: 14, fontWeight: 700, color: "var(--gold)" }}>{fmt(parseFloat(o.reprise_valeur) || 0)}</div>
+                          <div style={{ fontSize: 10, color: "var(--muted)" }}>valeur reprise</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Annotations */}
           <div className="card">
