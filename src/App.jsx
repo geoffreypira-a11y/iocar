@@ -3716,18 +3716,93 @@ function SettingsPage({ dealer, setDealer, usage }) {
     }
   };
 
-  const handleLogo = (e) => {
+  // ─── PERSISTANCE LOCALE DU LOGO ──────────────────────────
+  // Le logo est stocké en base64 et peut être lourd. On sauvegarde en local
+  // immédiatement (résiste aux reload) et on tente Supabase en parallèle.
+  const LOGO_LS_KEY = "iocar_logo_cache";
+
+  const saveLogoEverywhere = (logoFields) => {
+    // logoFields = { logo, logo_original, logoBlend, logoInvert }
+    // 1) met à jour le formulaire local (affichage immédiat)
+    setForm(f => ({ ...f, ...logoFields }));
+    // 2) persiste dans localStorage (résiste au reload)
+    try {
+      localStorage.setItem(LOGO_LS_KEY, JSON.stringify({
+        logo: logoFields.logo ?? null,
+        logo_original: logoFields.logo_original ?? null,
+        logoBlend: logoFields.logoBlend ?? "normal",
+        logoInvert: !!logoFields.logoInvert,
+        updated_at: new Date().toISOString(),
+      }));
+    } catch (e) {
+      console.warn("localStorage plein ou indisponible", e);
+    }
+    // 3) enregistre aussi dans la source "officielle" (Supabase via setDealer)
+    //    — garantit que d'autres pages/appareils voient la modif
+    if (typeof setDealer === "function") {
+      try { setDealer({ ...dealer, ...logoFields }); } catch (e) {}
+    }
+  };
+
+  // Au montage : si un logo est en localStorage et pas encore dans le dealer, on l'injecte
+  useEffect(() => {
+    try {
+      const cached = localStorage.getItem(LOGO_LS_KEY);
+      if (!cached) return;
+      const parsed = JSON.parse(cached);
+      if (parsed?.logo && !form.logo) {
+        setForm(f => ({
+          ...f,
+          logo: parsed.logo,
+          logo_original: parsed.logo_original || parsed.logo,
+          logoBlend: parsed.logoBlend || "normal",
+          logoInvert: !!parsed.logoInvert,
+        }));
+      }
+    } catch (e) {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Compresse une image data-URL : redimensionne à max maxWidth et ré-encode en PNG
+  // Réduit la taille de 2 Mo → ~100-300 Ko typiquement, compatible avec toutes les DBs.
+  const compressLogo = (dataUrl, maxWidth = 800) => new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxWidth / img.naturalWidth);
+      const w = Math.round(img.naturalWidth * scale);
+      const h = Math.round(img.naturalHeight * scale);
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(img, 0, 0, w, h);
+      resolve(canvas.toDataURL("image/png"));
+    };
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
+
+  const handleLogo = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = (ev) => setForm(f => ({
-      ...f,
-      logo: ev.target.result,
-      logo_original: ev.target.result, // on garde l'original pour pouvoir restaurer
-      // on réinitialise les anciens filtres de rendu, plus utiles
-      logoBlend: "normal",
-      logoInvert: false,
-    }));
+    reader.onload = async (ev) => {
+      // On compresse directement à l'upload pour éviter les logos énormes
+      let finalDataUrl = ev.target.result;
+      try {
+        finalDataUrl = await compressLogo(ev.target.result, 800);
+      } catch (err) {
+        console.warn("Compression échouée, on garde l'original", err);
+      }
+      saveLogoEverywhere({
+        logo: finalDataUrl,
+        logo_original: finalDataUrl,
+        logoBlend: "normal",
+        logoInvert: false,
+      });
+    };
     reader.readAsDataURL(file);
   };
 
@@ -3740,13 +3815,17 @@ function SettingsPage({ dealer, setDealer, usage }) {
     const img = new Image();
     img.crossOrigin = "anonymous";
     img.onload = () => {
+      // Redimensionne si trop grand (protection contre les énormes uploads)
+      const scale = Math.min(1, 800 / img.naturalWidth);
+      const w = Math.round(img.naturalWidth * scale);
+      const h = Math.round(img.naturalHeight * scale);
       const canvas = document.createElement("canvas");
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
+      canvas.width = w;
+      canvas.height = h;
       const ctx = canvas.getContext("2d");
-      ctx.drawImage(img, 0, 0);
+      ctx.drawImage(img, 0, 0, w, h);
       try {
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const imageData = ctx.getImageData(0, 0, w, h);
         const d = imageData.data;
         for (let i = 0; i < d.length; i += 4) {
           const r = d[i], g = d[i + 1], b = d[i + 2];
@@ -3764,13 +3843,13 @@ function SettingsPage({ dealer, setDealer, usage }) {
         }
         ctx.putImageData(imageData, 0, 0);
         const dataUrl = canvas.toDataURL("image/png");
-        setForm(f => ({
-          ...f,
+        // Sauvegarde immédiate (local + Supabase)
+        saveLogoEverywhere({
           logo: dataUrl,
-          logo_original: f.logo_original || src, // on conserve l'original
-          logoBlend: "normal", // plus besoin de filtres
+          logo_original: form.logo_original || src,
+          logoBlend: "normal",
           logoInvert: false,
-        }));
+        });
       } catch (err) {
         alert("Impossible de détourer ce logo. Essayez avec une autre image.");
         console.error(err);
@@ -3782,12 +3861,22 @@ function SettingsPage({ dealer, setDealer, usage }) {
 
   const restaurerLogo = () => {
     if (!form.logo_original) return;
-    setForm(f => ({
-      ...f,
-      logo: f.logo_original,
+    saveLogoEverywhere({
+      logo: form.logo_original,
+      logo_original: form.logo_original,
       logoBlend: "normal",
       logoInvert: false,
-    }));
+    });
+  };
+
+  const supprimerLogo = () => {
+    saveLogoEverywhere({
+      logo: null,
+      logo_original: null,
+      logoBlend: "normal",
+      logoInvert: false,
+    });
+    try { localStorage.removeItem(LOGO_LS_KEY); } catch (e) {}
   };
 
   const saved = JSON.stringify(form) !== JSON.stringify(dealer);
@@ -3832,7 +3921,7 @@ function SettingsPage({ dealer, setDealer, usage }) {
 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
             <button className="btn btn-ghost btn-sm" onClick={() => fileRef.current?.click()}>📁 Choisir un fichier</button>
-            {form.logo && <button className="btn btn-danger btn-sm" onClick={() => setForm(f => ({ ...f, logo: null }))}>🗑 Supprimer</button>}
+            {form.logo && <button className="btn btn-danger btn-sm" onClick={supprimerLogo}>🗑 Supprimer</button>}
           </div>
 
           {form.logo && (
@@ -3885,6 +3974,9 @@ function SettingsPage({ dealer, setDealer, usage }) {
                   </div>
                 </div>
 
+                <div style={{ fontSize: 10, color: "var(--green)", marginTop: 2, lineHeight: 1.5, display: "flex", alignItems: "center", gap: 6 }}>
+                  <span>✓</span> Logo sauvegardé automatiquement (vous pouvez actualiser la page)
+                </div>
                 <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 2, lineHeight: 1.5 }}>
                   💡 Le détourage crée un PNG transparent à partir de votre logo. Utilisez "Détourage fort" si le fond n'est pas un blanc parfait.
                 </div>
