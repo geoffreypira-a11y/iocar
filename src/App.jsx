@@ -3720,8 +3720,74 @@ function SettingsPage({ dealer, setDealer, usage }) {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = (ev) => setForm(f => ({ ...f, logo: ev.target.result }));
+    reader.onload = (ev) => setForm(f => ({
+      ...f,
+      logo: ev.target.result,
+      logo_original: ev.target.result, // on garde l'original pour pouvoir restaurer
+      // on réinitialise les anciens filtres de rendu, plus utiles
+      logoBlend: "normal",
+      logoInvert: false,
+    }));
     reader.readAsDataURL(file);
+  };
+
+  // ─── DÉTOURAGE AUTOMATIQUE DU FOND BLANC ──────────────────
+  // Utilise un canvas pour remplacer les pixels blancs/quasi-blancs par transparent.
+  // Tolerance = écart max au blanc (0 = blanc pur seulement, 40 = tolère les gris très clairs).
+  const detourerFondBlanc = (tolerance = 20) => {
+    const src = form.logo_original || form.logo;
+    if (!src) return;
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0);
+      try {
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const d = imageData.data;
+        for (let i = 0; i < d.length; i += 4) {
+          const r = d[i], g = d[i + 1], b = d[i + 2];
+          // Si le pixel est "proche du blanc" → on le rend transparent
+          if (r >= 255 - tolerance && g >= 255 - tolerance && b >= 255 - tolerance) {
+            d[i + 3] = 0; // alpha = 0
+          } else {
+            // Léger adoucissement des bords : pixels clairs → semi-transparents
+            const maxChannel = Math.max(r, g, b);
+            if (maxChannel > 240 - tolerance) {
+              const ratio = (255 - maxChannel) / (15 + tolerance);
+              d[i + 3] = Math.min(255, Math.round(d[i + 3] * Math.max(0.3, ratio)));
+            }
+          }
+        }
+        ctx.putImageData(imageData, 0, 0);
+        const dataUrl = canvas.toDataURL("image/png");
+        setForm(f => ({
+          ...f,
+          logo: dataUrl,
+          logo_original: f.logo_original || src, // on conserve l'original
+          logoBlend: "normal", // plus besoin de filtres
+          logoInvert: false,
+        }));
+      } catch (err) {
+        alert("Impossible de détourer ce logo. Essayez avec une autre image.");
+        console.error(err);
+      }
+    };
+    img.onerror = () => alert("Impossible de charger l'image pour le détourage.");
+    img.src = src;
+  };
+
+  const restaurerLogo = () => {
+    if (!form.logo_original) return;
+    setForm(f => ({
+      ...f,
+      logo: f.logo_original,
+      logoBlend: "normal",
+      logoInvert: false,
+    }));
   };
 
   const saved = JSON.stringify(form) !== JSON.stringify(dealer);
@@ -3771,47 +3837,56 @@ function SettingsPage({ dealer, setDealer, usage }) {
 
           {form.logo && (
             <>
-              <div style={{ fontFamily: "Syne", fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "var(--muted)", textTransform: "uppercase", marginBottom: 10 }}>Options de détourage</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ fontFamily: "Syne", fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "var(--muted)", textTransform: "uppercase", marginBottom: 10 }}>Détourage</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
 
-                {/* Fond d'aperçu */}
-                <div>
-                  <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 6 }}>Fond d'aperçu</div>
+                {/* Bouton de détourage principal */}
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  style={{ width: "100%" }}
+                  onClick={() => detourerFondBlanc(20)}
+                  title="Supprime le fond blanc du logo (utile pour les logos sur fond blanc photographiés ou scannés)"
+                >
+                  ✂️ Détourer le fond blanc
+                </button>
+
+                {/* Détourage plus agressif si le premier ne suffit pas */}
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  style={{ width: "100%" }}
+                  onClick={() => detourerFondBlanc(50)}
+                  title="Détourage plus agressif — utile si le fond n'est pas un blanc pur (gris clair, beige…)"
+                >
+                  ✂️ Détourage fort (fond clair non blanc)
+                </button>
+
+                {/* Restaurer original */}
+                {form.logo_original && form.logo !== form.logo_original && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    style={{ width: "100%" }}
+                    onClick={restaurerLogo}
+                  >
+                    ↩️ Restaurer l'original
+                  </button>
+                )}
+
+                {/* Fond d'aperçu (utile pour voir le résultat) */}
+                <div style={{ marginTop: 4 }}>
+                  <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 6 }}>Fond d'aperçu (visuel uniquement)</div>
                   <div style={{ display: "flex", gap: 6 }}>
                     {[["checker", "Damier"], ["dark", "Sombre"], ["white", "Blanc"]].map(([v, l]) => (
-                      <button key={v} className={`btn btn-xs ${form.logoBg === v ? "btn-primary" : "btn-ghost"}`}
+                      <button key={v} className={`btn btn-xs ${(form.logoBg || "checker") === v ? "btn-primary" : "btn-ghost"}`}
                         onClick={() => setForm(f => ({ ...f, logoBg: v }))}>{l}</button>
                     ))}
                   </div>
                 </div>
 
-                {/* Mode de fusion */}
-                <div>
-                  <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 6 }}>Détourage fond blanc</div>
-                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    {[["normal", "Aucun"], ["multiply", "Multiply"], ["screen", "Screen"], ["darken", "Darken"]].map(([v, l]) => (
-                      <button key={v} className={`btn btn-xs ${(form.logoBlend || "normal") === v ? "btn-primary" : "btn-ghost"}`}
-                        onClick={() => setForm(f => ({ ...f, logoBlend: v }))}>{l}</button>
-                    ))}
-                  </div>
-                  <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 6 }}>
-                    💡 <em>Multiply</em> efface les fonds blancs · <em>Screen</em> efface les fonds noirs
-                  </div>
-                </div>
-
-                {/* Inverser */}
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <div style={{
-                    width: 36, height: 20, borderRadius: 10, cursor: "pointer",
-                    background: form.logoInvert ? "var(--gold)" : "var(--card2)",
-                    border: "1px solid var(--border2)", position: "relative", transition: "background .2s"
-                  }} onClick={() => setForm(f => ({ ...f, logoInvert: !f.logoInvert }))}>
-                    <div style={{
-                      width: 14, height: 14, borderRadius: "50%", background: "#fff",
-                      position: "absolute", top: 2, left: form.logoInvert ? 19 : 3, transition: "left .2s"
-                    }} />
-                  </div>
-                  <span style={{ fontSize: 12, color: "var(--muted2)" }}>Inverser les couleurs</span>
+                <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 2, lineHeight: 1.5 }}>
+                  💡 Le détourage crée un PNG transparent à partir de votre logo. Utilisez "Détourage fort" si le fond n'est pas un blanc parfait.
                 </div>
               </div>
             </>
