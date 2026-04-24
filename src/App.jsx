@@ -1418,7 +1418,7 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
             {[["marque", "Marque *"], ["modele", "Modèle *"], ["finition", "Finition"], ["genre", "Genre national"], ["date_mise_en_circulation", "Date 1ère MEC"],
               ["motorisation", "Motorisation"], ["puissance_cv", "Puissance (ch)", "number"], ["puissance_fiscale", "Puissance fiscale (CV)", "number"], ["co2", "CO₂ (g/km)", "number"], ["boite", "Boîte"],
               ["couleur", "Couleur ext."], ["couleur_int", "Couleur int."], ["kilometrage", "Kilométrage", "number"],
-              ["vin", "N° VIN"], ["date_entree", "Date d'entrée (achat)"], ["carburant", "Carburant"]].map(([k, label, type]) => (
+              ["vin", "N° VIN"], ["numero_formule", "N° de formule"], ["date_entree", "Date d'entrée (achat)"], ["carburant", "Carburant"]].map(([k, label, type]) => (
                 <div className="form-group" key={k}>
                   <label className="form-label">{label}</label>
                   <input className="form-input" type={type || "text"} value={form[k] || ""} onChange={e => set(k, e.target.value)} />
