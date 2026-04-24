@@ -364,14 +364,25 @@ textarea.form-input{resize:vertical;min-height:72px}
 }
 @media print{
   .no-print,.sidebar,.hamburger,.bottom-nav{display:none!important}
-  @page{size:A4 portrait;margin:12mm}
+  @page{size:A4 portrait;margin:10mm}
   /* Force le layout horizontal de l'en-tête du document, même si l'aperçu d'impression simule une largeur < 768px */
-  .pdoc-head{flex-direction:row!important;justify-content:space-between!important;align-items:flex-start!important;gap:24px!important}
+  .pdoc-head{flex-direction:row!important;justify-content:space-between!important;align-items:flex-start!important;gap:24px!important;margin-bottom:16px!important}
   .pdoc-head > div:first-child{flex:1;min-width:0}
   .pdoc-head > div:last-child{flex-shrink:0;text-align:right}
-  .pdoc-parties{grid-template-columns:1fr 1fr!important;gap:40px!important}
+  .pdoc-parties{grid-template-columns:1fr 1fr!important;gap:40px!important;margin-bottom:14px!important}
   .pdoc-type{text-align:right!important}
   .pdoc-ref{text-align:right!important}
+  /* Compaction générale pour tenir sur une page */
+  .print-doc{padding:0!important;min-height:auto!important}
+  .print-doc-bar{display:none!important}
+  .pdoc-divider{margin:10px 0!important}
+  .pdoc-table{margin-bottom:14px!important}
+  .pdoc-table td{padding:6px 14px!important}
+  .pdoc-table th{padding:6px 14px!important}
+  .pdoc-totals{margin-bottom:14px!important}
+  .pdoc-trow{padding:5px 0!important}
+  .pdoc-footer{margin-top:18px!important;padding-top:12px!important}
+  .pdoc-paiements{margin-top:12px!important;padding:10px 14px!important}
 }
 
 /* PRINT DOC */
@@ -2787,17 +2798,27 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
               document.querySelectorAll('style').forEach(s => win.document.write(s.textContent));
               // Forcer le layout A4 et le footer en bas
               win.document.write('body{margin:0;padding:0;background:#fff;font-family:"DM Sans",sans-serif}');
-              win.document.write('.print-doc{min-height:277mm;display:flex;flex-direction:column;padding:30px 36px}');
+              win.document.write('.print-doc{min-height:auto;display:flex;flex-direction:column;padding:18px 22px}');
               win.document.write('.print-doc-content{flex:1}');
               // Force le layout horizontal de l'en-tête (annule la règle mobile @media max-width:768px
               // qui fait passer pdoc-head en colonne, puisque la fenêtre d'impression peut être étroite)
-              win.document.write('.pdoc-head{flex-direction:row!important;justify-content:space-between!important;align-items:flex-start!important;gap:24px!important}');
+              win.document.write('.pdoc-head{flex-direction:row!important;justify-content:space-between!important;align-items:flex-start!important;gap:24px!important;margin-bottom:16px!important}');
               win.document.write('.pdoc-head > div:first-child{flex:1;min-width:0}');
               win.document.write('.pdoc-head > div:last-child{flex-shrink:0;text-align:right}');
-              win.document.write('.pdoc-parties{display:grid!important;grid-template-columns:1fr 1fr!important;gap:40px!important}');
+              win.document.write('.pdoc-parties{display:block!important;margin-bottom:14px!important}');
               win.document.write('.pdoc-type{text-align:right!important}');
               win.document.write('.pdoc-ref{text-align:right!important}');
-              win.document.write('@page{size:A4 portrait;margin:10mm}');
+              // Compaction pour tenir sur une seule page A4
+              win.document.write('.print-doc-bar{display:none!important}');
+              win.document.write('.pdoc-divider{margin:10px 0!important}');
+              win.document.write('.pdoc-table{margin-bottom:14px!important}');
+              win.document.write('.pdoc-table td{padding:6px 14px!important}');
+              win.document.write('.pdoc-table th{padding:6px 14px!important}');
+              win.document.write('.pdoc-totals{margin-bottom:14px!important}');
+              win.document.write('.pdoc-trow{padding:5px 0!important}');
+              win.document.write('.pdoc-footer{margin-top:18px!important;padding-top:12px!important}');
+              win.document.write('.pdoc-paiements{margin-top:12px!important;padding:10px 14px!important}');
+              win.document.write('@page{size:A4 portrait;margin:8mm}');
               win.document.write('@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}');
               win.document.write('</style>');
               win.document.write('</head><body>');
@@ -2818,21 +2839,29 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
             <div className="print-doc-bar" />
             <div className="pdoc-head">
               <div>
-                {dealer?.logo && (
-                  <div style={{ marginBottom: 10 }}>
+                {dealer?.logo ? (
+                  // Avec logo : on n'affiche pas le nom en gros, le logo le contient déjà
+                  <div style={{ marginBottom: 8 }}>
                     <img src={dealer.logo} alt="Logo"
                       style={{
-                        maxHeight: 70, maxWidth: 200, objectFit: "contain",
+                        maxHeight: 60, maxWidth: 200, objectFit: "contain",
                         mixBlendMode: dealer.logoBlend || "normal",
                         filter: dealer.logoInvert ? "invert(1)" : "none"
                       }} />
                   </div>
+                ) : (
+                  // Sans logo : on affiche le nom en gros
+                  <div className="pdoc-logo">{dealer?.name || "AUTO DEALER"}</div>
                 )}
-                <div className="pdoc-logo">{dealer?.name || "AUTO DEALER"}</div>
-                <div style={{ fontSize: 11, color: "#888", marginTop: 6, lineHeight: 1.7 }}>
+                <div style={{ fontSize: 10, color: "#888", marginTop: 4, lineHeight: 1.5 }}>
                   {dealer?.address?.split("\n").map((l, i) => <span key={i}>{l}<br /></span>)}
-                  {dealer?.phone && <span>Tél : {dealer.phone}<br /></span>}
+                  {dealer?.phone && <span>Tél : {dealer.phone}</span>}
+                  {dealer?.phone && dealer?.email && <span> · </span>}
+                  {dealer?.email && <span>{dealer.email}</span>}
+                  {(dealer?.phone || dealer?.email) && (dealer?.siret || dealer?.tva_num) && <br />}
                   {dealer?.siret && <span>SIRET : {dealer.siret}</span>}
+                  {dealer?.siret && dealer?.tva_num && <span> · </span>}
+                  {dealer?.tva_num && <span>TVA : {dealer.tva_num}</span>}
                 </div>
               </div>
               <div>
@@ -2843,12 +2872,8 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
               </div>
             </div>
             <hr className="pdoc-divider" />
-            <div className="pdoc-parties">
-              <div>
-                <div className="pdoc-plabel">Vendeur</div>
-                <div className="pdoc-pname">{dealer?.name || "AUTO DEALER"}</div>
-                <div className="pdoc-pinfo">{dealer?.address}{dealer?.phone && <><br />Tél : {dealer.phone}</>}</div>
-              </div>
+            {/* Section Client uniquement (les infos vendeur sont déjà dans l'en-tête) */}
+            <div className="pdoc-parties pdoc-parties-client-only" style={{ display: "block", marginBottom: 20 }}>
               <div>
                 <div className="pdoc-plabel">Client</div>
                 <div className="pdoc-pname">{order.client?.name || "—"}</div>
