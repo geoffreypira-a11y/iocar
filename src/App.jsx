@@ -861,13 +861,13 @@ function CarteGriseCalc({ vehicleData, clientAddress, onApply }) {
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, padding: "3px 0" }}>
             <span style={{ color: "var(--muted)" }}>Y.5 Redevance acheminement</span>
-            <span style={{ fontWeight: 600 }}>{fmt(cg.y5)}</span>
+            <span style={{ fontWeight: 600 }}>{fmtDec(cg.y5)}</span>
           </div>
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8, padding: "8px 0", borderTop: "2px solid var(--gold)" }}>
           <span style={{ fontSize: 14, fontWeight: 800 }}>TOTAL</span>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <span style={{ fontSize: 16, fontWeight: 800, color: "var(--gold)" }}>{fmt(cg.total)}</span>
+            <span style={{ fontSize: 16, fontWeight: 800, color: "var(--gold)" }}>{fmtDec(cg.total)}</span>
             {onApply && <button className="btn btn-primary btn-sm" onClick={() => onApply(Math.round(cg.total * 100) / 100)}>
               ✅ Appliquer
             </button>}
@@ -2263,7 +2263,10 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
             </summary>
             <div style={{ padding: "12px 14px", borderTop: "1px solid var(--border2)" }}>
               <CarteGriseCalc
-                vehicleData={form.vehicle_data}
+                vehicleData={(() => {
+                  const fv = form.vehicle_id && vehicles ? vehicles.find(vh => vh.id === form.vehicle_id) : null;
+                  return fv || form.vehicle_data;
+                })()}
                 clientAddress={form.client?.address}
                 onApply={(total) => set("carte_grise", total)}
               />
