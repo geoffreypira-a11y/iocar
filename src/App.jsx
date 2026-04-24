@@ -3914,8 +3914,8 @@ function CrmPage({ clients, setClients, orders, viewMode }) {
 
   return (
     <div className="page">
-      {modal && <CrmModal client={modal === "add" ? null : modal} onSave={save} onClose={() => setModal(null)} />}
       {fiche && <CrmFiche client={fiche} orders={clientOrders(fiche.id)} onEdit={() => setModal(fiche)} onClose={() => setFiche(null)} onSave={save} />}
+      {modal && <CrmModal client={modal === "add" ? null : modal} onSave={save} onClose={() => setModal(null)} />}
       {pendingDelete && (
         <ConfirmModal
           title="Supprimer le contact"
