@@ -779,17 +779,27 @@ function calcCarteGrise({ cv, energie, region, genre, dateMEC }) {
   const tarifs = isCTTE ? TARIFS_CTTE_2026 : TARIFS_REGIONS_2026;
   const tarifCV = tarifs[region] || 46;
   const isElec = /[eé]lectrique/i.test(energie || "");
-  // Âge du véhicule : si >= 10 ans, tarif divisé par 2
-  let age = 0;
+  // Âge du véhicule au jour près : si >= 10 ans exactement, tarif divisé par 2
+  let ageOver10 = false;
   if (dateMEC) {
-    const parts = String(dateMEC);
-    let year = 0;
-    if (parts.includes("/")) { const s = parts.split("/"); year = parseInt(s[s.length - 1]); }
-    else if (parts.includes("-")) { year = parseInt(parts.substring(0, 4)); }
-    else if (/^\d{4}$/.test(parts)) { year = parseInt(parts); }
-    if (year > 0) age = new Date().getFullYear() - year;
+    const s = String(dateMEC);
+    let mecDate = null;
+    if (s.includes("/")) {
+      // Format DD/MM/YYYY
+      const p = s.split("/");
+      if (p.length === 3) mecDate = new Date(parseInt(p[2]), parseInt(p[1]) - 1, parseInt(p[0]));
+    } else if (s.includes("-")) {
+      // Format YYYY-MM-DD
+      mecDate = new Date(s);
+    }
+    if (mecDate && !isNaN(mecDate.getTime())) {
+      const now = new Date();
+      const diff = now.getTime() - mecDate.getTime();
+      const tenYearsMs = 10 * 365.25 * 24 * 60 * 60 * 1000;
+      ageOver10 = diff >= tenYearsMs;
+    }
   }
-  const coefAge = age >= 10 ? 0.5 : 1;
+  const coefAge = ageOver10 ? 0.5 : 1;
   // Y1 : taxe régionale
   let exoElec = 0;
   if (isElec) {
@@ -2561,6 +2571,7 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
                   <>
                     <div className="pdoc-trow"><span>Montant HT</span><span>{fmtDec(c.ht)}</span></div>
                     <div className="pdoc-trow"><span>TVA {c.tvaPct || 20}%</span><span>{fmtDec(c.tvaAmt)}</span></div>
+                    {c.remAmt > 0 && <div className="pdoc-trow" style={{ color: "#e5973c" }}><span>Remise</span><span>- {fmtDec(c.remAmt)}</span></div>}
                     {c.carteGrise > 0 && <div className="pdoc-trow"><span>Carte grise (hors TVA)</span><span>{fmtDec(c.carteGrise)}</span></div>}
                     <div className="pdoc-trow big"><span>TOTAL TTC</span><span>{fmtDec(c.ttc)}</span></div>
                   </>
@@ -2568,6 +2579,7 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
                   <>
                     <div className="pdoc-trow"><span>Montant TTC</span><span>{fmtDec(c.baseTotal)}</span></div>
                     <div className="pdoc-trow" style={{ fontSize: 10, color: "#aaa" }}><span>TVA non applicable</span><span>Art. 297A CGI</span></div>
+                    {c.remAmt > 0 && <div className="pdoc-trow" style={{ color: "#e5973c" }}><span>Remise</span><span>- {fmtDec(c.remAmt)}</span></div>}
                     {c.carteGrise > 0 && <div className="pdoc-trow"><span>Carte grise</span><span>{fmtDec(c.carteGrise)}</span></div>}
                     <div className="pdoc-trow big"><span>TOTAL TTC</span><span>{fmtDec(c.ttc)}</span></div>
                   </>
