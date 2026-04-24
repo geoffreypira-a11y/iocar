@@ -1420,7 +1420,7 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
               ["couleur", "Couleur ext."], ["couleur_int", "Couleur int."], ["kilometrage", "Kilométrage", "number"],
               ["vin", "N° VIN"], ["numero_formule", "N° de formule"], ["date_entree", "Date d'entrée (achat)"], ["carburant", "Carburant"]].map(([k, label, type]) => (
                 <div className="form-group" key={k}>
-                  <label className="form-label">{label}</label>
+                  <label className="form-label" style={k === "numero_formule" ? { color: "var(--gold)" } : undefined}>{label}</label>
                   <input className="form-input" type={type || "text"} value={form[k] || ""} onChange={e => set(k, e.target.value)} />
                 </div>
               ))}
@@ -2789,6 +2789,9 @@ function CessionDoc({ order, dealer, vehicles, clients, onClose }) {
         setText(p("txt_GenreNational"), v.genre || "VP");
         setText(p("txt_DénominationCommerciale"), v.modele);
         setText(p("num_KilométrageCompteur"), v.kilometrage ? String(Number(v.kilometrage).toLocaleString("fr-FR")).replace(/\u202f/g, " ").replace(/\u00a0/g, " ") : "");
+
+        // Numéro de formule du certificat d'immatriculation
+        setText(p("num_Formule"), v.numero_formule);
 
         // Certificat immatriculation : OUI
         setRadio(p("Groupe_de_boutons_radio1"), "1");
