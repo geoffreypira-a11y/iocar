@@ -913,8 +913,8 @@ function CarteGriseCalc({ vehicleData, clientAddress, onApply }) {
 function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUsage, livrePolice }) {
   const fleet = vehicles.length;
   const dispo = vehicles.filter(v => v.statut === "disponible").length;
-  // Compter les véhicules réellement sortis du livret de police (livrés)
-  const vendu = (livrePolice || []).filter(e => e.date_sortie).length;
+  // Compter les véhicules réellement vendus (sortis du livret, hors annulations/rétractations)
+  const vendu = (livrePolice || []).filter(e => e.date_sortie && (!e.motif_sortie || e.motif_sortie === "vente")).length;
 
   const allTtc = orders.reduce((s, o) => s + calcOrder(o).ttc, 0);
   const encaisse = orders.reduce((s, o) => s + calcOrder(o).encaisse, 0);
@@ -1831,7 +1831,11 @@ function FleetPage({ vehicles, setVehicles, orders, apiKey, usage, setUsage, liv
                         </button>
                       )}
                       <button className="btn btn-ghost btn-xs" onClick={() => setModal(v)}>✏️</button>
-                      <button className="btn btn-danger btn-xs" onClick={() => setPendingDelete({ id: v.id, label: `${v.marque} ${v.modele} ${v.plate ? `(${v.plate})` : ""}` })}>🗑</button>
+                      {v.statut === "vendu" ? (
+                        <button className="btn btn-danger btn-xs" style={{ opacity: 0.3, cursor: "not-allowed" }} onClick={() => alert("Impossible de supprimer un véhicule vendu non livré.\nPassez-le en « Livré » d'abord.")}>🗑</button>
+                      ) : (
+                        <button className="btn btn-danger btn-xs" onClick={() => setPendingDelete({ id: v.id, label: `${v.marque} ${v.modele} ${v.plate ? `(${v.plate})` : ""}` })}>🗑</button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -2359,11 +2363,11 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
           </div>
 
           {/* Mentions obligatoires 2026 — uniquement pour factures et avoirs */}
-          {(form.type === "facture" || form.type === "avoir") && (
-            <div style={{ marginBottom: 16, padding: "12px 14px", background: "rgba(212,168,67,.06)", border: "1px solid var(--border)", borderRadius: 8 }}>
-              <div style={{ fontFamily: "Syne", fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "var(--gold)", textTransform: "uppercase", marginBottom: 10 }}>
-                📋 Mentions obligatoires 2026
-              </div>
+          {/* Mentions obligatoires — sur tous les documents pour qu'elles soient reportées lors de la conversion BC→Facture */}
+          <div style={{ marginBottom: 16, padding: "12px 14px", background: "rgba(212,168,67,.06)", border: "1px solid var(--border)", borderRadius: 8 }}>
+            <div style={{ fontFamily: "Syne", fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "var(--gold)", textTransform: "uppercase", marginBottom: 10 }}>
+              📋 Mentions obligatoires
+            </div>
               <div className="form-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
                 <div className="form-group">
                   <label className="form-label">Catégorie de l'opération *</label>
@@ -2394,7 +2398,6 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
                 )}
               </div>
             </div>
-          )}
 
           <div className="form-group">
             <label className="form-label">Notes / Conditions</label>
@@ -2963,7 +2966,15 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
   };
 
   const toFacture = (o) => {
-    const updated = { ...o, type: "facture", ref: nextRef(orders, "facture"), date_creation: today() };
+    const updated = {
+      ...o,
+      type: "facture",
+      ref: nextRef(orders, "facture"),
+      date_creation: today(),
+      // Mentions obligatoires 2026 par défaut si pas déjà définies
+      categorie_operation: o.categorie_operation || "livraison_biens",
+      tva_sur_debits: o.tva_sur_debits || false,
+    };
     setOrders(orders.map(x => x.id === o.id ? updated : x));
 
     // Passer le véhicule lié en "vendu" automatiquement
@@ -3599,7 +3610,16 @@ function LivreDePolice({ vehicles, livrePolice, setLivrePolice, dealer, viewMode
                   <div style={{ fontSize: 11, color: "var(--muted)" }}>{e.vendeur_type === "pro" ? "🏢 Pro" : "👤 Particulier"} · {e.vendeur_piece_id}</div>
                 </td>
                 <td style={{ fontFamily: "DM Mono", color: "var(--red)" }}>{e.prix_achat ? fmt(e.prix_achat) : "—"}</td>
-                <td style={{ fontSize: 12, color: e.date_sortie ? "var(--green)" : "var(--muted)" }}>{e.date_sortie || "En stock"}</td>
+                <td style={{ fontSize: 12, color: e.date_sortie ? "var(--green)" : "var(--muted)" }}>
+                  {e.date_sortie || "En stock"}
+                  {e.date_sortie && e.motif_sortie && e.motif_sortie !== "vente" && (
+                    <div style={{ fontSize: 9, marginTop: 2, padding: "1px 6px", borderRadius: 4, display: "inline-block",
+                      background: e.motif_sortie === "annulation" || e.motif_sortie === "retractation" ? "rgba(229,80,80,.15)" : "rgba(229,151,60,.12)",
+                      color: e.motif_sortie === "annulation" || e.motif_sortie === "retractation" ? "var(--red)" : "var(--orange)" }}>
+                      {e.motif_sortie === "annulation" ? "Annulé" : e.motif_sortie === "retractation" ? "Rétracté" : e.motif_sortie === "retour_vendeur" ? "Retour vendeur" : e.motif_sortie === "destruction" ? "VHU" : e.motif_sortie}
+                    </div>
+                  )}
+                </td>
                 <td style={{ fontSize: 12 }}>{e.acheteur_nom || "—"}</td>
                 <td>
                   <div style={{ display: "flex", gap: 4 }}>
@@ -3744,8 +3764,19 @@ function LivrePoliceModal({ entry, nextNum, vehicles, onSave, onClose }) {
           </div>
 
           {/* Section sortie */}
-          <div style={{ fontFamily: "Syne", fontSize: 12, fontWeight: 700, letterSpacing: 1, color: "var(--green)", textTransform: "uppercase", marginBottom: 10 }}>🏷 Sortie du parc (vente)</div>
+          <div style={{ fontFamily: "Syne", fontSize: 12, fontWeight: 700, letterSpacing: 1, color: "var(--green)", textTransform: "uppercase", marginBottom: 10 }}>🏷 Sortie du parc</div>
           <div className="form-grid" style={{ marginBottom: 16 }}>
+            <div className="form-group">
+              <label className="form-label">Motif de sortie</label>
+              <select className="form-input" value={form.motif_sortie || "vente"} onChange={e => set("motif_sortie", e.target.value)}>
+                <option value="vente">Vente</option>
+                <option value="annulation">Annulation achat</option>
+                <option value="retractation">Rétractation</option>
+                <option value="retour_vendeur">Retour au vendeur</option>
+                <option value="destruction">Destruction (VHU)</option>
+                <option value="autre">Autre</option>
+              </select>
+            </div>
             <div className="form-group">
               <label className="form-label">Date de sortie</label>
               <input className="form-input" value={form.date_sortie||""} onChange={e => set("date_sortie", e.target.value)} placeholder="jj/mm/aaaa" />
