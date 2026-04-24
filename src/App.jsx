@@ -567,7 +567,7 @@ async function aiLookupPlate(plate, apiKey) {
     finition:                 v.AWN_label_moteur        || v.AWN_version || "",
     annee:                    annee                     || "",
     motorisation:             v.AWN_code_moteur         || "",
-    carburant:                mapCarburant(v.AWN_energie || ""),
+    carburant:                mapCarburant(v.AWN_energie || "") !== "—" ? mapCarburant(v.AWN_energie || "") : (/kwh/i.test(v.AWN_label_moteur || v.AWN_version || "") ? "Électrique" : "Essence"),
     puissance_cv:             v.AWN_puissance_chevaux   || "",
     puissance_fiscale:        v.AWN_puissance_fiscale   || "",
     puissance_kw:             v.AWN_puissance_KW        || "",
@@ -1390,19 +1390,13 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
             {[["marque", "Marque *"], ["modele", "Modèle *"], ["finition", "Finition"], ["genre", "Genre national"], ["date_mise_en_circulation", "Date 1ère MEC"],
               ["motorisation", "Motorisation"], ["puissance_cv", "Puissance (ch)", "number"], ["puissance_fiscale", "Puissance fiscale (CV)", "number"], ["co2", "CO₂ (g/km)", "number"], ["boite", "Boîte"],
               ["couleur", "Couleur ext."], ["couleur_int", "Couleur int."], ["kilometrage", "Kilométrage", "number"],
-              ["vin", "N° VIN"], ["date_entree", "Date d'entrée (achat)"]].map(([k, label, type]) => (
+              ["vin", "N° VIN"], ["date_entree", "Date d'entrée (achat)"], ["carburant", "Carburant"]].map(([k, label, type]) => (
                 <div className="form-group" key={k}>
                   <label className="form-label">{label}</label>
                   <input className="form-input" type={type || "text"} value={form[k] || ""} onChange={e => set(k, e.target.value)} />
                 </div>
               ))}
 
-            <div className="form-group">
-              <label className="form-label">Carburant</label>
-              <select className="form-input" value={form.carburant} onChange={e => set("carburant", e.target.value)}>
-                {["Essence", "Diesel", "Hybride", "Hybride rechargeable", "Électrique", "GPL"].map(c => <option key={c}>{c}</option>)}
-              </select>
-            </div>
             <div className="form-group">
               <label className="form-label">Transmission</label>
               <select className="form-input" value={form.transmission} onChange={e => set("transmission", e.target.value)}>
