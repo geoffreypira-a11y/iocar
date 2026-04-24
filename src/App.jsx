@@ -1967,7 +1967,7 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
   const [clientSearch, setClientSearch] = useState("");
   const [showClientDropdown, setShowClientDropdown] = useState(false);
   const [showCreateClient, setShowCreateClient] = useState(false);
-  const [newClientForm, setNewClientForm] = useState({ civilite: "", nom: "", prenom: "", email: "", phone: "", adresse: "", code_postal: "", ville: "", pays: "France" });
+  const [newClientForm, setNewClientForm] = useState({ nom: "", prenom: "", email: "", phone: "", adresse: "", code_postal: "", ville: "", pays: "France" });
 
   const filteredClients = (clients || []).filter(c =>
     !clientSearch || `${c.prenom} ${c.nom} ${c.email} ${c.phone}`.toLowerCase().includes(clientSearch.toLowerCase())
@@ -1983,7 +1983,6 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
         address: fullAddr || c.adresse || "",
         phone: c.phone || "",
         email: c.email || "",
-        civilite: c.civilite || "",
       }
     }));
     setClientSearch("");
@@ -2003,7 +2002,7 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
     if (setClients) setClients([newClient, ...(clients || [])]);
     selectClientFromCrm(newClient);
     setShowCreateClient(false);
-    setNewClientForm({ civilite: "", nom: "", prenom: "", email: "", phone: "", adresse: "", code_postal: "", ville: "", pays: "France" });
+    setNewClientForm({ nom: "", prenom: "", email: "", phone: "", adresse: "", code_postal: "", ville: "", pays: "France" });
   };
 
   const linkedClient = form.client_id ? (clients || []).find(c => c.id === form.client_id) : null;
@@ -2136,14 +2135,6 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
                 Créer un nouveau client
               </div>
               <div className="form-grid" style={{ gridTemplateColumns: "1fr 1fr", marginBottom: 10 }}>
-                <div className="form-group" style={{ gridColumn: "1/-1" }}>
-                  <label className="form-label">Civilité</label>
-                  <select className="form-input" value={newClientForm.civilite} onChange={e => setNewClientForm(f => ({ ...f, civilite: e.target.value }))}>
-                    <option value="">—</option>
-                    <option value="M">M.</option>
-                    <option value="F">Mme</option>
-                  </select>
-                </div>
                 {[["prenom", "Prénom"], ["nom", "Nom *"], ["email", "Email"], ["phone", "Téléphone"]].map(([k, l]) => (
                   <div className="form-group" key={k}>
                     <label className="form-label">{l}</label>
@@ -2654,7 +2645,7 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
    DÉCLARATION DE CESSION (Cerfa 15776*02)
    Pré-remplie avec les données véhicule + client + garage
 ═══════════════════════════════════════════════════════════════ */
-function CessionDoc({ order, dealer, vehicles, clients, onClose }) {
+function CessionDoc({ order, dealer, vehicles, onClose }) {
   // Récupérer les données fraîches du véhicule si vehicle_data est vide/incomplet
   const freshVehicle = order.vehicle_id && vehicles ? vehicles.find(vh => vh.id === order.vehicle_id) : null;
   const v = (order.vehicle_data && order.vehicle_data.marque) ? order.vehicle_data : (freshVehicle ? {
@@ -2663,12 +2654,7 @@ function CessionDoc({ order, dealer, vehicles, clients, onClose }) {
     date_mise_en_circulation: freshVehicle.date_mise_en_circulation,
     kilometrage: freshVehicle.kilometrage, carburant: freshVehicle.carburant,
   } : (order.vehicle_data || {}));
-  // Récupérer la civilité depuis le client CRM si pas dans la commande
-  const crmClient = order.client_id && clients ? clients.find(c => c.id === order.client_id) : null;
-  const client = {
-    ...(order.client || {}),
-    civilite: order.client?.civilite || crmClient?.civilite || "",
-  };
+  const client = order.client || {};
   const [loading, setLoading] = useState(false);
   const [pdfUrl, setPdfUrl] = useState(null);
 
@@ -2690,14 +2676,11 @@ function CessionDoc({ order, dealer, vehicles, clients, onClose }) {
       const pdfDoc = await PDFDocument.load(pdfBytes);
       const form = pdfDoc.getForm();
 
-      // ── Helpers ──
+      // ── Helpers ultra-simples — exactement comme le test console qui marche ──
       const setText = (name, value) => {
         if (!value) return;
-        try {
-          const field = form.getTextField(name);
-          field.setFontSize(9);
-          field.setText(String(value));
-        } catch(e) { console.warn("Champ:", name, e.message); }
+        try { form.getTextField(name).setText(String(value)); }
+        catch(e) { console.warn("Champ:", name, e.message); }
       };
       const setCheck = (name) => {
         try { form.getCheckBox(name).check(); }
@@ -2782,9 +2765,6 @@ function CessionDoc({ order, dealer, vehicles, clients, onClose }) {
 
         // NOUVEAU PROPRIÉTAIRE
         setRadio(p("Groupe_de_boutons_radio5"), "2");  // Personne physique
-        // Sexe : radio6 — "1" = M, "2" = F
-        if (client.civilite === "M") setRadio(p("Groupe_de_boutons_radio6"), "1");
-        if (client.civilite === "F") setRadio(p("Groupe_de_boutons_radio6"), "2");
         setText(p("txt_IdentitéAcheteur"), client.name);
         if (client.siren) setText(p("num_SiretAcheteur"), client.siren);
         setText(p("num_VoieAdresseAcheteur"), cA.num);
@@ -2984,7 +2964,7 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
     <div className="page">
       {modal && <OrderForm order={modal === "new" ? null : modal} vehicles={vehicles} onSave={save} onClose={() => setModal(null)} apiKey={apiKey} clients={clients} setClients={setClients} orders={orders} viewMode={viewMode} />}
       {print && <PrintDoc order={print} dealer={dealer} onClose={() => setPrint(null)} viewMode={viewMode} />}
-      {cession && <CessionDoc order={cession} dealer={dealer} vehicles={vehicles} clients={clients} onClose={() => setCession(null)} />}
+      {cession && <CessionDoc order={cession} dealer={dealer} vehicles={vehicles} onClose={() => setCession(null)} />}
       {viewMode === "trial" && showDemoLimit && <DemoLimitModal type="orders" onClose={() => setShowDemoLimit(false)} />}
       {payment && <PaymentModal order={payment} onSave={o => { setOrders(orders.map(x => x.id === o.id ? o : x)); setPayment(null); }} onClose={() => setPayment(null)} />}
       {pendingDelete && (
