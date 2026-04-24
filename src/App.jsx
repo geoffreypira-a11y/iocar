@@ -2790,8 +2790,8 @@ function CessionDoc({ order, dealer, vehicles, clients, onClose }) {
         setText(p("txt_DénominationCommerciale"), v.modele);
         setText(p("num_KilométrageCompteur"), v.kilometrage ? String(Number(v.kilometrage).toLocaleString("fr-FR")).replace(/\u202f/g, " ").replace(/\u00a0/g, " ") : "");
 
-        // Numéro de formule du certificat d'immatriculation
-        setText(p("num_Formule"), v.numero_formule);
+        // Numéro de formule du certificat d'immatriculation (préfixé par "20" sur le Cerfa)
+        if (v.numero_formule) setText(p("num_Formule"), v.numero_formule);
 
         // Certificat immatriculation : OUI
         setRadio(p("Groupe_de_boutons_radio1"), "1");
