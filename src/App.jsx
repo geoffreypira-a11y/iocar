@@ -2587,7 +2587,14 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
                               annee: form.reprise_annee || "",
                               vin: form.reprise_vin || "",
                               kilometrage: form.reprise_km || "",
-                              prix_achat: parseFloat(form.reprise_valeur) || 0,
+                              // La reprise n'est PAS une sortie de trésorerie : aucun cash n'a été décaissé.
+                              // On garde la valeur dans valeur_reprise pour historique/marge future,
+                              // mais prix_achat=0 et includeTreso=false pour exclure du total achats.
+                              prix_achat: 0,
+                              includeTreso: false,
+                              valeur_reprise: parseFloat(form.reprise_valeur) || 0,
+                              origine: "reprise",
+                              origine_ref: form.ref || "",
                               prix_vente: "",
                               statut: "disponible",
                               date_entree: today(),
@@ -2608,13 +2615,13 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
                               carrosserie: d.carrosserie || "",
                               date_mise_en_circulation: d.date_mise_en_circulation || "",
                               documents: [],
-                              notes: `Véhicule repris lors de la vente ${form.ref || ""}`.trim(),
+                              notes: `Véhicule repris lors de la vente ${form.ref || ""} · Valeur de reprise : ${fmt(parseFloat(form.reprise_valeur) || 0)}`.trim(),
                             };
                             setVehiclesRaw(prev => [newVehicle, ...(prev || [])]);
                             set("reprise_ajoutee_flotte", true);
                           }}
                         >
-                          ➕ Ajouter ce véhicule à ma flotte (prix d'achat : {fmt(parseFloat(form.reprise_valeur) || 0)})
+                          ➕ Ajouter ce véhicule à ma flotte (valeur reprise : {fmt(parseFloat(form.reprise_valeur) || 0)} · hors trésorerie)
                         </button>
                       )}
                     </div>
@@ -3252,9 +3259,10 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
   const [avoirPartiel, setAvoirPartiel] = useState(null); // { order, totalTtc } | null
 
   const save = (o) => {
-    // Sauvegarder le document
+    // Sauvegarder le document — ajoute un timestamp de création à la 1re sauvegarde
     const exists = orders.find(x => x.id === o.id);
-    const next = exists ? orders.map(x => x.id === o.id ? o : x) : [o, ...orders];
+    const oWithTs = exists || o.created_at ? o : { ...o, created_at: new Date().toISOString() };
+    const next = exists ? orders.map(x => x.id === o.id ? oWithTs : x) : [oWithTs, ...orders];
     setOrders(next);
 
     // BC créé → véhicule passe en "réservé"
@@ -3381,15 +3389,21 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
     const matchS = !search || `${o.ref} ${o.client?.name} ${o.vehicle_label} ${o.vehicle_plate}`.toLowerCase().includes(search.toLowerCase());
     return matchT && matchS;
   }).sort((a, b) => {
-    // 1) Date la plus récente en haut
+    // 1) Priorité : timestamp de création précis (created_at) — le plus récent en haut
+    if (a.created_at && b.created_at) {
+      return b.created_at.localeCompare(a.created_at);
+    }
+    // Si un seul a un created_at, il est considéré comme plus récent
+    if (a.created_at && !b.created_at) return -1;
+    if (!a.created_at && b.created_at) return 1;
+    // 2) Fallback pour les anciens documents sans timestamp : date de création (format fr)
     const dateCmp = (b.date_creation || "").localeCompare(a.date_creation || "");
     if (dateCmp !== 0) return dateCmp;
-    // 2) À date égale : numéro séquentiel de la ref le plus élevé en haut
-    //    (ex : AV-2026-0004 et FAC-2026-0004 → même groupe "0004")
+    // 3) À date égale : numéro séquentiel de la ref le plus élevé en haut
     const numA = parseInt((a.ref || "").match(/(\d+)$/)?.[1] || "0", 10);
     const numB = parseInt((b.ref || "").match(/(\d+)$/)?.[1] || "0", 10);
     if (numA !== numB) return numB - numA;
-    // 3) Si même numéro : la facture d'abord, puis son avoir juste après
+    // 4) Si même numéro : la facture d'abord, puis son avoir juste après
     if (a.type === "facture" && b.type === "avoir") return -1;
     if (a.type === "avoir" && b.type === "facture") return 1;
     return 0;
@@ -3421,6 +3435,7 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
               ...o, id: uid(), type: "avoir",
               ref: nextRef(orders, "avoir"),
               date_creation: today(),
+              created_at: new Date().toISOString(),
               facture_origine: o.ref,
               paiements: [],
               statut: null,
@@ -3451,6 +3466,7 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
               ...o, id: uid(), type: "avoir",
               ref: nextRef(orders, "avoir"),
               date_creation: today(),
+              created_at: new Date().toISOString(),
               facture_origine: o.ref,
               paiements: [],
               statut: null,
