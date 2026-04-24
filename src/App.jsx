@@ -2737,11 +2737,8 @@ function CessionDoc({ order, dealer, vehicles, clients, onClose }) {
       // ── Helpers ultra-simples — exactement comme le test console qui marche ──
       const setText = (name, value) => {
         if (!value) return;
-        try {
-          const field = form.getTextField(name);
-          field.setMaxLength(undefined);
-          field.setText(String(value));
-        } catch(e) { console.warn("Champ:", name, e.message); }
+        try { form.getTextField(name).setText(String(value)); }
+        catch(e) { console.warn("Champ:", name, e.message); }
       };
       const setCheck = (name) => {
         try { form.getCheckBox(name).check(); }
