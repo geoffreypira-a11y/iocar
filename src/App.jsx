@@ -823,13 +823,13 @@ function CarteGriseCalc({ vehicleData, clientAddress, onApply }) {
   const [cv, setCv] = useState(parseInt(vehicleData?.puissance_fiscale) || parseInt(vehicleData?.puissance_cv) || 5);
   const detectedRegion = getRegionFromPostal(clientAddress);
   const [region, setRegion] = useState(detectedRegion || "Provence-Alpes-Côte d'Azur");
-  const [energie, setEnergie] = useState(vehicleData?.carburant?.toLowerCase() || "essence");
+  const [energie, setEnergie] = useState(vehicleData?.carburant || "Essence");
   const [genre, setGenre] = useState(vehicleData?.genre || "VP");
 
   React.useEffect(() => {
     if (vehicleData?.puissance_fiscale) setCv(parseInt(vehicleData.puissance_fiscale) || 5);
     else if (vehicleData?.puissance_cv) setCv(parseInt(vehicleData.puissance_cv) || 5);
-    if (vehicleData?.carburant) setEnergie(vehicleData.carburant.toLowerCase());
+    if (vehicleData?.carburant) setEnergie(vehicleData.carburant);
     if (vehicleData?.genre) setGenre(vehicleData.genre);
   }, [vehicleData?.puissance_fiscale, vehicleData?.puissance_cv, vehicleData?.carburant, vehicleData?.genre]);
 
@@ -855,13 +855,8 @@ function CarteGriseCalc({ vehicleData, clientAddress, onApply }) {
           <input className="form-input" type="number" min={1} max={100} value={cv} onChange={e => setCv(parseInt(e.target.value) || 1)} />
         </div>
         <div className="form-group">
-          <label className="form-label">Énergie</label>
-          <select className="form-input" value={energie} onChange={e => setEnergie(e.target.value)} style={{ fontSize: 11 }}>
-            <option value="essence">Essence</option>
-            <option value="diesel">Diesel</option>
-            <option value="hybride">Hybride</option>
-            <option value="electrique">Électrique</option>
-          </select>
+          <label className="form-label">Énergie {vehicleData?.carburant && <span style={{ fontSize: 9, color: "var(--green)" }}>✓ auto</span>}</label>
+          <input className="form-input" value={energie} onChange={e => setEnergie(e.target.value)} style={{ fontSize: 11 }} placeholder="Essence, Diesel, Électrique..." />
         </div>
         <div className="form-group">
           <label className="form-label">Genre {vehicleData?.genre && <span style={{ fontSize: 9, color: "var(--green)" }}>✓ auto</span>}</label>
@@ -2793,7 +2788,7 @@ function CessionDoc({ order, dealer, vehicles, clients, onClose }) {
         setText(p("txt_TypeVarianteVersionVéhicule"), v.finition);
         setText(p("txt_GenreNational"), v.genre || "VP");
         setText(p("txt_DénominationCommerciale"), v.modele);
-        setText(p("num_KilométrageCompteur"), v.kilometrage ? Number(v.kilometrage).toLocaleString("fr-FR") : "");
+        setText(p("num_KilométrageCompteur"), v.kilometrage ? String(Number(v.kilometrage).toLocaleString("fr-FR")).replace(/\u202f/g, " ").replace(/\u00a0/g, " ") : "");
 
         // Certificat immatriculation : OUI
         setRadio(p("Groupe_de_boutons_radio1"), "1");
