@@ -921,8 +921,18 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
   const vendu = (livrePolice || []).filter(e => e.date_sortie && (!e.motif_sortie || e.motif_sortie === "vente")).length;
 
   const allTtc = orders.reduce((s, o) => s + calcOrder(o).ttc, 0);
-  const encaisse = orders.reduce((s, o) => s + calcOrder(o).encaisse, 0);
-  const aEncaisser = orders.reduce((s, o) => s + Math.max(0, calcOrder(o).reste), 0);
+  // Pour un avoir : encaisse (remboursé) doit être négatif dans la tréso,
+  // et le reste à rembourser ne compte PAS comme "à encaisser".
+  const encaisse = orders.reduce((s, o) => {
+    const c = calcOrder(o);
+    const sign = o.type === "avoir" ? -1 : 1;
+    return s + c.encaisse * sign;
+  }, 0);
+  const aEncaisser = orders.reduce((s, o) => {
+    // Les avoirs non remboursés sont des dettes envers le client, pas des encaissements à venir
+    if (o.type === "avoir") return s;
+    return s + Math.max(0, calcOrder(o).reste);
+  }, 0);
   const nbBC = orders.filter(o => o.type === "bc").length;
   const recent = [...orders].sort((a, b) => (b.date_creation || "").localeCompare(a.date_creation || "")).slice(0, 6);
 
