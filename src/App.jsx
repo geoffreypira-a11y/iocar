@@ -3170,6 +3170,11 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
       || (tab === "solde" && c.reste <= 0.01 && c.ttc > 0);
     const matchS = !search || `${o.ref} ${o.client?.name} ${o.vehicle_label} ${o.vehicle_plate}`.toLowerCase().includes(search.toLowerCase());
     return matchT && matchS;
+  }).sort((a, b) => {
+    // Plus récent en haut : d'abord par date de création, puis par référence
+    const dateCmp = (b.date_creation || "").localeCompare(a.date_creation || "");
+    if (dateCmp !== 0) return dateCmp;
+    return (b.ref || "").localeCompare(a.ref || "");
   });
 
   return (
