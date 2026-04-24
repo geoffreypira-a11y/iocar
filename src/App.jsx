@@ -3151,6 +3151,9 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
                       {o.type === "facture" && c.reste > 0.01 && viewMode !== "trial" && (
                         <button className="btn btn-ghost btn-xs" style={{ color: "var(--green)" }} onClick={() => setPayment(o)}>💳</button>
                       )}
+                      {o.type === "avoir" && Math.abs(c.reste) > 0.01 && viewMode !== "trial" && (
+                        <button className="btn btn-ghost btn-xs" style={{ color: "var(--red)" }} onClick={() => setPayment(o)} title="Enregistrer le remboursement">💸</button>
+                      )}
                       {/* Modifier : bloqué sur les factures sauf admin */}
                       {(o.type !== "facture" || viewMode === "admin") && (
                         <button className="btn btn-ghost btn-xs" onClick={() => setModal(o)}>✏️</button>
