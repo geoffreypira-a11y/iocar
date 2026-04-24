@@ -2457,179 +2457,177 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
           </details>
 
           {/* ═══ REPRISE VÉHICULE ═══ */}
-          <details
-            open={form.reprise_active}
-            style={{ marginBottom: 20, background: "var(--card2)", borderRadius: 10, border: `1px solid ${form.reprise_active ? "rgba(212,168,67,.4)" : "var(--border2)"}`, padding: "0" }}
-          >
-            <summary style={{ padding: "10px 14px", cursor: "pointer", fontSize: 12, fontWeight: 600, color: "var(--gold)", listStyle: "none", display: "flex", alignItems: "center", gap: 8 }}>
-              🔄 Reprise véhicule
-              {form.reprise_active && (parseFloat(form.reprise_valeur) || 0) > 0 && (
-                <span style={{ fontSize: 10, color: "var(--green)", fontWeight: 400 }}>
-                  — {fmt(parseFloat(form.reprise_valeur))} déduits du total
-                </span>
-              )}
-            </summary>
-            <div style={{ padding: "12px 14px", borderTop: "1px solid var(--border2)" }}>
-              {/* Toggle d'activation */}
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: form.reprise_active ? 14 : 0, padding: "8px 12px", background: "var(--card)", borderRadius: 8, border: "1px solid var(--border2)" }}>
-                <div style={{ fontSize: 12, fontWeight: 500 }}>Le client a un véhicule à reprendre</div>
-                <div style={{
-                  width: 40, height: 22, borderRadius: 11, cursor: "pointer",
-                  background: form.reprise_active ? "var(--gold)" : "var(--card2)",
-                  border: "1px solid var(--border2)", position: "relative", transition: "background .2s", flexShrink: 0
-                }} onClick={() => set("reprise_active", !form.reprise_active)}>
-                  <div style={{
-                    position: "absolute", top: 2, left: form.reprise_active ? 20 : 2,
-                    width: 16, height: 16, borderRadius: "50%", background: "#fff", transition: "left .2s"
-                  }} />
+          <div style={{ fontFamily: "Syne", fontSize: 13, fontWeight: 700, letterSpacing: 1, color: "var(--gold)", marginBottom: 10, textTransform: "uppercase" }}>REPRISE VÉHICULE</div>
+
+          {/* Toggle d'activation (même style que le toggle TVA) */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, padding: "10px 14px", background: "var(--card2)", borderRadius: 8, border: "1px solid var(--border2)" }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>Le client a un véhicule à reprendre</div>
+              <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+                {form.reprise_active
+                  ? ((parseFloat(form.reprise_valeur) || 0) > 0
+                      ? `Valeur ${fmt(parseFloat(form.reprise_valeur))} déduite du total TTC`
+                      : "Saisissez la valeur de reprise ci-dessous")
+                  : "Aucune reprise — la vente est un achat simple"}
+              </div>
+            </div>
+            <div style={{
+              width: 44, height: 24, borderRadius: 12, cursor: "pointer",
+              background: form.reprise_active ? "var(--gold)" : "var(--card)",
+              border: "1px solid var(--border2)", position: "relative", transition: "background .2s", flexShrink: 0
+            }} onClick={() => set("reprise_active", !form.reprise_active)}>
+              <div style={{
+                width: 18, height: 18, borderRadius: "50%", background: "#fff",
+                position: "absolute", top: 2,
+                left: form.reprise_active ? 23 : 3,
+                transition: "left .2s", boxShadow: "0 1px 3px rgba(0,0,0,.3)"
+              }} />
+            </div>
+          </div>
+
+          {form.reprise_active && (
+            <div style={{ marginBottom: 20, padding: "16px", background: "var(--card2)", borderRadius: 10, border: "1px solid rgba(212,168,67,.3)" }}>
+              {/* Ligne recherche plaque */}
+              <div style={{ display: "flex", gap: 8, marginBottom: 10, alignItems: "flex-end" }}>
+                <div style={{ flex: 1 }}>
+                  <label className="form-label">Plaque d'immatriculation</label>
+                  <input
+                    className="form-input"
+                    value={form.reprise_plate || ""}
+                    onChange={e => set("reprise_plate", e.target.value.toUpperCase())}
+                    placeholder="AB-123-CD"
+                  />
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  style={{ height: 40 }}
+                  disabled={repriseSearching || !(form.reprise_plate || "").trim()}
+                  onClick={async () => {
+                    const plate = (form.reprise_plate || "").trim().toUpperCase().replace(/\s/g, "");
+                    if (!plate) return;
+                    setRepriseSearching(true);
+                    try {
+                      const data = await aiLookupPlate(plate, apiKey);
+                      setForm(f => ({
+                        ...f,
+                        reprise_plate: plate,
+                        reprise_marque: data.marque || f.reprise_marque,
+                        reprise_modele: data.modele || f.reprise_modele,
+                        reprise_annee: data.annee || f.reprise_annee,
+                        reprise_vin: data.vin || f.reprise_vin,
+                        reprise_data: data, // on garde les données complètes pour la flotte
+                      }));
+                    } catch (err) {
+                      alert(`Erreur recherche plaque : ${err.message}`);
+                    } finally {
+                      setRepriseSearching(false);
+                    }
+                  }}
+                >
+                  {repriseSearching ? "…" : "🔍 Rechercher"}
+                </button>
+              </div>
+
+              {/* Champs véhicule */}
+              <div className="form-grid" style={{ marginBottom: 10 }}>
+                <div className="form-group">
+                  <label className="form-label">Marque</label>
+                  <input className="form-input" value={form.reprise_marque || ""} onChange={e => set("reprise_marque", e.target.value)} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Modèle</label>
+                  <input className="form-input" value={form.reprise_modele || ""} onChange={e => set("reprise_modele", e.target.value)} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Année</label>
+                  <input className="form-input" value={form.reprise_annee || ""} onChange={e => set("reprise_annee", e.target.value)} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Kilométrage</label>
+                  <input className="form-input" type="number" value={form.reprise_km || ""} onChange={e => set("reprise_km", e.target.value)} placeholder="km" />
+                </div>
+                <div className="form-group full">
+                  <label className="form-label">N° de série (VIN)</label>
+                  <input className="form-input" value={form.reprise_vin || ""} onChange={e => set("reprise_vin", e.target.value)} placeholder="17 caractères" />
+                </div>
+                <div className="form-group full">
+                  <label className="form-label" style={{ color: "var(--gold)" }}>Valeur de reprise TTC (€) · déduite du total</label>
+                  <input
+                    className="form-input"
+                    type="number"
+                    step="0.01"
+                    value={form.reprise_valeur || ""}
+                    onChange={e => set("reprise_valeur", parseFloat(e.target.value) || 0)}
+                    placeholder="0.00"
+                    style={{ fontSize: 15, fontWeight: 600 }}
+                  />
                 </div>
               </div>
 
-              {form.reprise_active && (
-                <>
-                  {/* Ligne recherche plaque */}
-                  <div style={{ display: "flex", gap: 8, marginBottom: 10, alignItems: "flex-end" }}>
-                    <div style={{ flex: 1 }}>
-                      <label className="form-label">Plaque d'immatriculation</label>
-                      <input
-                        className="form-input"
-                        value={form.reprise_plate || ""}
-                        onChange={e => set("reprise_plate", e.target.value.toUpperCase())}
-                        placeholder="AB-123-CD"
-                      />
+              {/* Bouton ajouter à la flotte */}
+              {setVehiclesRaw && (parseFloat(form.reprise_valeur) || 0) > 0 && (form.reprise_plate || "").trim() && (form.reprise_marque || "").trim() && (
+                <div style={{ paddingTop: 10, borderTop: "1px solid var(--border2)" }}>
+                  {form.reprise_ajoutee_flotte ? (
+                    <div style={{ fontSize: 12, color: "var(--green)", textAlign: "center", padding: "8px" }}>
+                      ✅ Véhicule ajouté à la flotte
                     </div>
+                  ) : (
                     <button
                       type="button"
-                      className="btn btn-primary btn-sm"
-                      style={{ height: 40 }}
-                      disabled={repriseSearching || !(form.reprise_plate || "").trim()}
-                      onClick={async () => {
-                        const plate = (form.reprise_plate || "").trim().toUpperCase().replace(/\s/g, "");
-                        if (!plate) return;
-                        setRepriseSearching(true);
-                        try {
-                          const data = await aiLookupPlate(plate, apiKey);
-                          setForm(f => ({
-                            ...f,
-                            reprise_plate: plate,
-                            reprise_marque: data.marque || f.reprise_marque,
-                            reprise_modele: data.modele || f.reprise_modele,
-                            reprise_annee: data.annee || f.reprise_annee,
-                            reprise_vin: data.vin || f.reprise_vin,
-                            reprise_data: data, // on garde les données complètes pour la flotte
-                          }));
-                        } catch (err) {
-                          alert(`Erreur recherche plaque : ${err.message}`);
-                        } finally {
-                          setRepriseSearching(false);
-                        }
+                      className="btn btn-ghost btn-sm"
+                      style={{ width: "100%" }}
+                      onClick={() => {
+                        const d = form.reprise_data || {};
+                        const newVehicle = {
+                          id: uid(),
+                          plate: (form.reprise_plate || "").toUpperCase().replace(/\s/g, ""),
+                          marque: form.reprise_marque || "",
+                          modele: form.reprise_modele || "",
+                          annee: form.reprise_annee || "",
+                          vin: form.reprise_vin || "",
+                          kilometrage: form.reprise_km || "",
+                          // La reprise n'est PAS une sortie de trésorerie : aucun cash n'a été décaissé.
+                          // On garde la valeur dans valeur_reprise pour historique/marge future,
+                          // mais prix_achat=0 et includeTreso=false pour exclure du total achats.
+                          prix_achat: 0,
+                          includeTreso: false,
+                          valeur_reprise: parseFloat(form.reprise_valeur) || 0,
+                          origine: "reprise",
+                          origine_ref: form.ref || "",
+                          prix_vente: "",
+                          statut: "disponible",
+                          date_entree: today(),
+                          // Données additionnelles si issues de la recherche
+                          finition: d.finition || "",
+                          motorisation: d.motorisation || "",
+                          carburant: d.carburant || "",
+                          puissance_cv: d.puissance_cv || "",
+                          puissance_fiscale: d.puissance_fiscale || "",
+                          puissance_kw: d.puissance_kw || "",
+                          co2: d.co2 || "",
+                          boite: d.boite || "",
+                          transmission: d.transmission || "",
+                          couleur: d.couleur || "",
+                          nb_portes: d.nb_portes || "",
+                          nb_places: d.nb_places || "",
+                          genre: d.genre || "VP",
+                          carrosserie: d.carrosserie || "",
+                          date_mise_en_circulation: d.date_mise_en_circulation || "",
+                          documents: [],
+                          notes: `Véhicule repris lors de la vente ${form.ref || ""} · Valeur de reprise : ${fmt(parseFloat(form.reprise_valeur) || 0)}`.trim(),
+                        };
+                        setVehiclesRaw(prev => [newVehicle, ...(prev || [])]);
+                        set("reprise_ajoutee_flotte", true);
                       }}
                     >
-                      {repriseSearching ? "…" : "🔍 Rechercher"}
+                      ➕ Ajouter ce véhicule à ma flotte (valeur reprise : {fmt(parseFloat(form.reprise_valeur) || 0)} · hors trésorerie)
                     </button>
-                  </div>
-
-                  {/* Champs véhicule */}
-                  <div className="form-grid" style={{ marginBottom: 10 }}>
-                    <div className="form-group">
-                      <label className="form-label">Marque</label>
-                      <input className="form-input" value={form.reprise_marque || ""} onChange={e => set("reprise_marque", e.target.value)} />
-                    </div>
-                    <div className="form-group">
-                      <label className="form-label">Modèle</label>
-                      <input className="form-input" value={form.reprise_modele || ""} onChange={e => set("reprise_modele", e.target.value)} />
-                    </div>
-                    <div className="form-group">
-                      <label className="form-label">Année</label>
-                      <input className="form-input" value={form.reprise_annee || ""} onChange={e => set("reprise_annee", e.target.value)} />
-                    </div>
-                    <div className="form-group">
-                      <label className="form-label">Kilométrage</label>
-                      <input className="form-input" type="number" value={form.reprise_km || ""} onChange={e => set("reprise_km", e.target.value)} placeholder="km" />
-                    </div>
-                    <div className="form-group full">
-                      <label className="form-label">N° de série (VIN)</label>
-                      <input className="form-input" value={form.reprise_vin || ""} onChange={e => set("reprise_vin", e.target.value)} placeholder="17 caractères" />
-                    </div>
-                    <div className="form-group full">
-                      <label className="form-label" style={{ color: "var(--gold)" }}>Valeur de reprise TTC (€) · déduite du total</label>
-                      <input
-                        className="form-input"
-                        type="number"
-                        step="0.01"
-                        value={form.reprise_valeur || ""}
-                        onChange={e => set("reprise_valeur", parseFloat(e.target.value) || 0)}
-                        placeholder="0.00"
-                        style={{ fontSize: 15, fontWeight: 600 }}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Bouton ajouter à la flotte */}
-                  {setVehiclesRaw && (parseFloat(form.reprise_valeur) || 0) > 0 && (form.reprise_plate || "").trim() && (form.reprise_marque || "").trim() && (
-                    <div style={{ paddingTop: 10, borderTop: "1px solid var(--border2)" }}>
-                      {form.reprise_ajoutee_flotte ? (
-                        <div style={{ fontSize: 12, color: "var(--green)", textAlign: "center", padding: "8px" }}>
-                          ✅ Véhicule ajouté à la flotte
-                        </div>
-                      ) : (
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-sm"
-                          style={{ width: "100%" }}
-                          onClick={() => {
-                            const d = form.reprise_data || {};
-                            const newVehicle = {
-                              id: uid(),
-                              plate: (form.reprise_plate || "").toUpperCase().replace(/\s/g, ""),
-                              marque: form.reprise_marque || "",
-                              modele: form.reprise_modele || "",
-                              annee: form.reprise_annee || "",
-                              vin: form.reprise_vin || "",
-                              kilometrage: form.reprise_km || "",
-                              // La reprise n'est PAS une sortie de trésorerie : aucun cash n'a été décaissé.
-                              // On garde la valeur dans valeur_reprise pour historique/marge future,
-                              // mais prix_achat=0 et includeTreso=false pour exclure du total achats.
-                              prix_achat: 0,
-                              includeTreso: false,
-                              valeur_reprise: parseFloat(form.reprise_valeur) || 0,
-                              origine: "reprise",
-                              origine_ref: form.ref || "",
-                              prix_vente: "",
-                              statut: "disponible",
-                              date_entree: today(),
-                              // Données additionnelles si issues de la recherche
-                              finition: d.finition || "",
-                              motorisation: d.motorisation || "",
-                              carburant: d.carburant || "",
-                              puissance_cv: d.puissance_cv || "",
-                              puissance_fiscale: d.puissance_fiscale || "",
-                              puissance_kw: d.puissance_kw || "",
-                              co2: d.co2 || "",
-                              boite: d.boite || "",
-                              transmission: d.transmission || "",
-                              couleur: d.couleur || "",
-                              nb_portes: d.nb_portes || "",
-                              nb_places: d.nb_places || "",
-                              genre: d.genre || "VP",
-                              carrosserie: d.carrosserie || "",
-                              date_mise_en_circulation: d.date_mise_en_circulation || "",
-                              documents: [],
-                              notes: `Véhicule repris lors de la vente ${form.ref || ""} · Valeur de reprise : ${fmt(parseFloat(form.reprise_valeur) || 0)}`.trim(),
-                            };
-                            setVehiclesRaw(prev => [newVehicle, ...(prev || [])]);
-                            set("reprise_ajoutee_flotte", true);
-                          }}
-                        >
-                          ➕ Ajouter ce véhicule à ma flotte (valeur reprise : {fmt(parseFloat(form.reprise_valeur) || 0)} · hors trésorerie)
-                        </button>
-                      )}
-                    </div>
                   )}
-                </>
+                </div>
               )}
             </div>
-          </details>
+          )}
 
           <div style={{ fontFamily: "Syne", fontSize: 13, fontWeight: 700, letterSpacing: 1, color: "var(--gold)", marginBottom: 10, textTransform: "uppercase" }}>TARIFICATION</div>
 
