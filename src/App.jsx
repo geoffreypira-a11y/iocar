@@ -5193,7 +5193,9 @@ function useSupabaseTable(token, garageId, table) {
    ÉCRAN CONNEXION
 ═══════════════════════════════════════════════════════════════ */
 // ── STRIPE CONFIG ─────────────────────────────────────────────
-const STRIPE_PK = "pk_live_SDF3fQvD7xz2CEka6zTxl0pv00q59HC4w7";
+// Note : depuis qu'on utilise un endpoint serveur pour Checkout, la clé
+// publique Stripe n'est plus nécessaire côté front. Tout passe par
+// /api/create-checkout-session qui utilise STRIPE_SECRET_KEY côté serveur.
 const STRIPE_PLANS = {
   monthly: {
     priceId: "price_1TQx0FGHGXxR2PvGSH36mGP3",
@@ -5212,23 +5214,32 @@ const STRIPE_PLANS = {
 };
 
 async function redirectToStripe(priceId, email) {
-  // Charge Stripe.js dynamiquement
-  if (!window.Stripe) {
-    await new Promise((res, rej) => {
-      const s = document.createElement("script");
-      s.src = "https://js.stripe.com/v3/";
-      s.onload = res; s.onerror = rej;
-      document.head.appendChild(s);
-    });
-  }
-  const stripe = window.Stripe(STRIPE_PK);
-  await stripe.redirectToCheckout({
-    lineItems: [{ price: priceId, quantity: 1 }],
-    mode: "subscription",
-    customerEmail: email,
-    successUrl: window.location.href + "?subscribed=1",
-    cancelUrl:  window.location.href + "?canceled=1",
+  // Appel à notre endpoint serveur qui crée la session Stripe Checkout.
+  // Avantage : la STRIPE_SECRET_KEY reste 100 % côté serveur, et on est
+  // compatible avec tous les comptes Stripe (pas besoin de l'option
+  // "client-only" qui n'existe plus pour les nouveaux comptes).
+  const res = await fetch("/api/create-checkout-session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      priceId,
+      email,
+      successUrl: window.location.origin + "/?subscribed=1",
+      cancelUrl:  window.location.origin + "/?canceled=1",
+    }),
   });
+
+  if (!res.ok) {
+    let msg = `Erreur ${res.status}`;
+    try { const j = await res.json(); msg = j.error || msg; } catch(e) {}
+    throw new Error(msg);
+  }
+
+  const { url } = await res.json();
+  if (!url) throw new Error("URL Checkout manquante");
+
+  // Redirection vers la page Stripe Checkout hébergée
+  window.location.href = url;
 }
 
 function LoginScreen({ onLogin }) {
