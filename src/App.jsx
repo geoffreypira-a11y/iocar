@@ -5929,19 +5929,55 @@ export default function App() {
   const [livrePolice, setLivrePolice, lpReady]   = useSupabaseTable(token, garageId, "livre_police");
 
   // Charger le profil garage (Supabase uniquement)
+  // ⚠ ÉGALEMENT vérification au démarrage que le token JWT est encore valide.
+  // Sinon on se retrouve avec un compte fantôme (token expiré + user supprimé)
+  // qui s'affiche en mode "connecté" alors qu'aucune donnée ne peut être lue.
   useEffect(() => {
     if (isRealDemo) { setGarage(null); setGarageReady(true); setAppLoading(false); setIsRealAdmin(false); return; }
     if (!token || !userId) { setAppLoading(false); setGarageReady(true); setIsRealAdmin(false); return; }
-    sb.getGarage(token, userId)
-      .then(g => {
+
+    let cancelled = false;
+
+    (async () => {
+      // 1. Vérifier que le token est encore valide auprès de Supabase
+      try {
+        const u = await sb.getUser(token);
+        // Supabase renvoie soit un user (avec id, email, etc.) soit une erreur
+        // (code 401, msg "invalid JWT", "User not found", etc.)
+        if (!u || !u.id || u.code || u.error || u.error_code || u.msg) {
+          console.warn("[auth] Token invalide/expiré ou user supprimé — déconnexion");
+          if (!cancelled) {
+            clearSession();
+            setToken(null); setUser(null); setGarage(null); setGarageId(null); setIsRealAdmin(false);
+            setAppLoading(false); setGarageReady(true);
+          }
+          return;
+        }
+      } catch (e) {
+        // Erreur réseau : on n'invalide PAS la session (pas la peine de déconnecter
+        // l'utilisateur s'il a juste perdu le wifi 2 secondes), mais on remonte le souci
+        console.warn("[auth] Impossible de vérifier le token (réseau) :", e?.message);
+        if (!cancelled) { setAppLoading(false); setGarageReady(true); }
+        return;
+      }
+
+      // 2. Charger le garage de l'utilisateur
+      try {
+        const g = await sb.getGarage(token, userId);
+        if (cancelled) return;
         setGarage(g);
         setGarageId(g?.id || null);
-        // Source de vérité : la colonne is_admin en DB (protégée par RLS)
         setIsRealAdmin(g?.is_admin === true);
         setGarageReady(true);
-      })
-      .catch(() => setGarageReady(true))
-      .finally(() => setAppLoading(false));
+      } catch (e) {
+        if (cancelled) return;
+        setGarageReady(true);
+      } finally {
+        if (!cancelled) setAppLoading(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
   }, [token, userId, isRealDemo]);
 
   const handleLogin = (tk, u) => {
