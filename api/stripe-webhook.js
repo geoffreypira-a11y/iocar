@@ -44,7 +44,8 @@ export default async function handler(req, res) {
         const email = s.customer_details?.email || s.customer_email;
         if (!email) break;
 
-        // Détection du plan par montant (24,99 € HT mensuel vs 274,89 € annuel)
+        // Détection du plan par montant (34,99 € HT mensuel vs 349,90 € HT annuel)
+        // Seuil à 10 000 centimes = 100 € : tout ce qui est au-dessus = annuel
         const plan = (s.amount_total || 0) > 10000 ? 'annual' : 'monthly';
 
         const { error } = await supabase
