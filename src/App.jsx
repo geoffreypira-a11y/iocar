@@ -2063,7 +2063,7 @@ function DemoLimitModal({ type, onClose }) {
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <button className="btn btn-primary" style={{ justifyContent: "center", padding: "12px" }}
               onClick={() => { onClose(); window.dispatchEvent(new CustomEvent("iocar_goto_register")); }}>
-              🚀 S'abonner — 24,99€/mois
+              🚀 S'abonner — 34,99€/mois
             </button>
             <button className="btn btn-ghost btn-sm" style={{ justifyContent: "center" }} onClick={onClose}>
               Continuer en démo
@@ -5196,18 +5196,18 @@ function useSupabaseTable(token, garageId, table) {
 const STRIPE_PK = "pk_live_SDF3fQvD7xz2CEka6zTxl0pv00q59HC4w7";
 const STRIPE_PLANS = {
   monthly: {
-    priceId: "price_1TODbBGHGXxR2PvGx242HQBI",
+    priceId: "price_1TQx0FGHGXxR2PvGSH36mGP3",
     label:   "Mensuel",
-    price:   "24,99€",
+    price:   "34,99€",
     period:  "/ mois HT",
     badge:   null,
   },
   annual: {
-    priceId: "price_1TODbBGHGXxR2PvGDH10euYl",
+    priceId: "price_1TQx1cGHGXxR2PvGpO3iWLS4",
     label:   "Annuel",
-    price:   "274,89€",
+    price:   "349,90€",
     period:  "/ an HT",
-    badge:   "1 mois offert",
+    badge:   "2 mois offerts",
   },
 };
 
@@ -5585,7 +5585,7 @@ function AdminPage({ token }) {
   };
 
   // MRR = abonnements + marge plaques supplémentaires (0,10€/plaque)
-  const mrrAbos = (stats.monthly * 24.99) + (stats.annual * (274.89 / 12));
+  const mrrAbos = (stats.monthly * 34.99) + (stats.annual * (349.90 / 12));
   const mrrPlaques = totalPlaquesSupp * 0.10;
   const mrr = mrrAbos + mrrPlaques;
 
@@ -6096,7 +6096,7 @@ export default function App() {
           <span>{isRealAdmin ? "👁 Prévisualisation — Mode Essai" : `🚀 Mode démo — Limité à ${DEMO_LIMITS.vehicles} véhicules · ${DEMO_LIMITS.orders} documents · ${DEMO_LIMITS.clients} clients`}</span>
           {!isRealAdmin && (
             <button style={{ background: "#0b0c10", color: "var(--gold)", border: "none", borderRadius: 6, padding: "4px 12px", cursor: "pointer", fontWeight: 700, fontSize: 11 }}
-              onClick={handleLogout}>S'abonner — 24,99€/mois →</button>
+              onClick={handleLogout}>S'abonner — 34,99€/mois →</button>
           )}
           {isRealAdmin && (
             <button className="btn btn-ghost btn-sm" onClick={() => setViewMode("admin")}>← Retour Admin</button>
@@ -6250,7 +6250,7 @@ export default function App() {
                 <div style={{ fontSize: 48, marginBottom: 16 }}>📋</div>
                 <div style={{ fontFamily: "Syne", fontSize: 20, fontWeight: 700, marginBottom: 10 }}>Livre de Police</div>
                 <div style={{ fontSize: 14, color: "var(--muted)", marginBottom: 24 }}>Disponible avec un abonnement IO Car.</div>
-                <button className="btn btn-primary" onClick={handleLogout}>🚀 S'abonner — 24,99€/mois</button>
+                <button className="btn btn-primary" onClick={handleLogout}>🚀 S'abonner — 34,99€/mois</button>
               </div>
             ) : <LivreDePolice vehicles={activeVehicles} livrePolice={activeLivrePolice} setLivrePolice={setLivrePoliceRaw} dealer={dealer} viewMode={viewMode} />)}
             {tab === "settings"    && <SettingsPage dealer={dealer} setDealer={setDealerRaw} usage={usage} isRealAdmin={isRealAdmin} />}
