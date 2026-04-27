@@ -117,6 +117,45 @@ function clearSession() {
 }
 
 /* ═══════════════════════════════════════════════════════════════
+   STORAGE HELPERS — upload images via /api (jamais directement)
+═══════════════════════════════════════════════════════════════ */
+// Upload une dataURL vers le bucket approprié et retourne { path, signedUrl }.
+// Le backend vérifie l'auth, valide le MIME, range le fichier sous garage_<uuid>/.
+async function uploadImageToStorage({ kind, dataUrl, filename }) {
+  const token = loadSession().token;
+  if (!token || token === "demo") {
+    // Mode démo : on renvoie la dataURL telle quelle (pas de storage)
+    return { path: null, signedUrl: dataUrl, demo: true };
+  }
+  const res = await fetch("/api/upload-image", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+    body: JSON.stringify({ kind, dataUrl, filename }),
+  });
+  if (!res.ok) {
+    let msg = `Upload error ${res.status}`;
+    try { const j = await res.json(); msg = j.error || msg; } catch(e) {}
+    throw new Error(msg);
+  }
+  return res.json();
+}
+
+// Régénère une URL signée pour un fichier Storage privé
+async function getImageSignedUrl({ bucket, path }) {
+  const token = loadSession().token;
+  if (!token || token === "demo" || !path) return null;
+  const res = await fetch("/api/get-image-url", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+    body: JSON.stringify({ bucket, path }),
+  });
+  if (!res.ok) return null;
+  const j = await res.json();
+  return j.signedUrl || null;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
    STYLES
 ═══════════════════════════════════════════════════════════════ */
 const STYLE = `
@@ -551,71 +590,30 @@ function getYear(v) {
   return s;
 }
 
-async function aiLookupPlate(plate, apiKey) {
-  const key = apiKey || "9a05402107mshffd01f995575592p162c8djsn2cf79c109e41";
-  const host = "api-de-plaque-d-immatriculation-france.p.rapidapi.com";
-  const url = `https://${host}/?plaque=${encodeURIComponent(plate)}`;
+// Appel côté serveur : la clé RapidAPI N'EST PLUS dans le bundle JS.
+// L'endpoint /api/lookup-plate s'occupe du quota, du report Stripe metered
+// et de la normalisation des données. Le front reçoit directement un objet véhicule prêt à l'emploi.
+async function aiLookupPlate(plate, _apiKey /* ignoré — la clé reste côté serveur */) {
+  const token = loadSession().token;
+  if (!token) throw new Error("Non authentifié");
 
-  const res = await fetch(url, {
-    method: "GET",
+  const res = await fetch("/api/lookup-plate", {
+    method: "POST",
     headers: {
-      "X-RapidAPI-Key": key,
-      "X-RapidAPI-Host": host,
       "Content-Type": "application/json",
-      "plaque": plate,
+      "Authorization": `Bearer ${token}`,
     },
+    body: JSON.stringify({ plate }),
   });
 
-  if (!res.ok) throw new Error(`API error ${res.status}`);
-  const d = await res.json();
-  const v = d.data || d; // les données sont dans d.data
-
-  // Debug : log les champs clés de la réponse API
-  console.log("IO Car API →", { puissance: v.AWN_puissance_chevaux, fiscale: v.AWN_puissance_fiscale, co2: v.AWN_emission_co_2, kw: v.AWN_puissance_KW });
-
-  // Date de première mise en circulation : "20-06-2019" → annee = 2019, date complète conservée
-  const dateMEC = v.AWN_date_mise_en_circulation || "";
-  const dateMEC_us = v.AWN_date_mise_en_circulation_us || ""; // format "2019-06-20"
-  // Extraire l'année depuis la date MEC (format DD-MM-YYYY ou YYYY-MM-DD)
-  let annee = "";
-  if (dateMEC_us) {
-    annee = parseInt(dateMEC_us.substring(0, 4)) || "";
-  } else if (dateMEC && dateMEC.length >= 10) {
-    annee = parseInt(dateMEC.substring(6, 10)) || "";
-  }
-  // Formater la date MEC en format français lisible DD/MM/YYYY
-  let dateMEC_fr = "";
-  if (dateMEC_us) {
-    const [y, m, d] = dateMEC_us.split("-");
-    dateMEC_fr = `${d}/${m}/${y}`;
-  } else if (dateMEC) {
-    dateMEC_fr = dateMEC.replace(/-/g, "/");
+  if (!res.ok) {
+    let msg = `API error ${res.status}`;
+    try { const j = await res.json(); msg = j.error || msg; } catch(e) {}
+    throw new Error(msg);
   }
 
-  return {
-    marque:                   v.AWN_marque              || "",
-    modele:                   v.AWN_modele              || v.AWN_modele_prf || "",
-    finition:                 v.AWN_label_moteur        || v.AWN_version || "",
-    annee:                    annee                     || "",
-    motorisation:             v.AWN_code_moteur         || "",
-    carburant:                mapCarburant(v.AWN_energie || "") !== "—" ? mapCarburant(v.AWN_energie || "") : (/kwh/i.test(v.AWN_label_moteur || v.AWN_version || "") ? "Électrique" : "Essence"),
-    puissance_cv:             v.AWN_puissance_chevaux   || "",
-    puissance_fiscale:        v.AWN_puissance_fiscale   || "",
-    puissance_kw:             v.AWN_puissance_KW        || "",
-    co2:                      v.AWN_emission_co_2       || "",
-    boite:                    v.AWN_type_boite_vites    || "",
-    transmission:             v.AWN_propulsion          || "",
-    couleur:                  v.AWN_couleur             || "",
-    couleur_int:              "",
-    nb_portes:                v.AWN_nbr_portes          || "",
-    nb_places:                v.AWN_nbr_de_places       || "",
-    kilometrage:              "",
-    vin:                      v.AWN_VIN                 || "",
-    genre:                    v.AWN_genre               || "VP",
-    carrosserie:              v.AWN_carrosserie         || "",
-    date_mise_en_circulation: dateMEC_fr                || "",
-    options:                  [],
-  };
+  const { vehicle /*, quota */ } = await res.json();
+  return vehicle;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -708,17 +706,37 @@ function SignaturePad({ label, onSave, savedImg }) {
     if (onSave) onSave(null);
   };
 
-  const save = () => {
+  const save = async () => {
     if (!hasDrawn) return;
     const dataUrl = canvasRef.current.toDataURL("image/png");
-    if (onSave) onSave(dataUrl);
+    // Upload vers Storage privé — on renvoie { path, signedUrl } pour que
+    // la facture/bon de commande garde le PATH (immuable) et puisse
+    // régénérer une signedUrl au moment de l'affichage/impression.
+    try {
+      const up = await uploadImageToStorage({
+        kind: "signature",
+        dataUrl,
+        filename: `sig-${Date.now()}`,
+      });
+      if (onSave) onSave({
+        path: up.path,
+        url:  up.signedUrl || dataUrl,
+        demo: up.demo,
+      });
+    } catch(err) {
+      // Fallback : on garde la dataURL en local si le serveur est indisponible
+      console.warn("Upload signature échoué, fallback local :", err.message);
+      if (onSave) onSave({ path: null, url: dataUrl, demo: true });
+    }
   };
 
   if (savedImg) {
+    // savedImg peut être soit une dataURL (legacy) soit un objet { path, url }
+    const imgSrc = typeof savedImg === "string" ? savedImg : (savedImg.url || "");
     return (
       <div style={{ textAlign: "center" }}>
         <div style={{ fontSize: 9, letterSpacing: 1, textTransform: "uppercase", color: "var(--muted)", marginBottom: 6 }}>{label}</div>
-        <img src={savedImg} alt="Signature" style={{ maxWidth: 240, maxHeight: 80, border: "1px solid var(--border2)", borderRadius: 6, background: "#fff" }} />
+        <img src={imgSrc} alt="Signature" style={{ maxWidth: 240, maxHeight: 80, border: "1px solid var(--border2)", borderRadius: 6, background: "#fff" }} />
         <div style={{ marginTop: 6 }}>
           <button className="btn btn-ghost btn-xs" onClick={() => onSave(null)}>✕ Effacer</button>
         </div>
@@ -1310,22 +1328,15 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
 
     setLoading(true);
     try {
+      // Appel serveur : le quota est incrémenté atomiquement en DB et le
+      // report Stripe metered est fait côté serveur si overage.
       const data = await aiLookupPlate(form.plate.toUpperCase().replace(/\s/g, ""), apiKey);
       setForm(f => ({ ...f, ...data, options: Array.isArray(data.options) ? data.options.join(", ") : "" }));
-      // Incrémenter le compteur mensuel
+      // Mise à jour optimiste du compteur local (le serveur fait déjà l'incrément DB)
       const newUsage = { ...usage, [monthKey]: usedThisMonth + 1 };
       setUsage(newUsage);
-
-      // Si quota dépassé → reporter à Stripe (metered billing)
-      if (!isFree && viewMode !== "admin" && garageId) {
-        fetch("/api/report-plate-usage", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ garageId, quantity: 1 })
-        }).catch(() => {}); // silencieux, ne bloque pas l'UX
-      }
     } catch (e) {
-      alert(`Erreur de récupération : ${e.message}\n\nVérifiez votre clé API dans les Paramètres.`);
+      alert(`Erreur de récupération : ${e.message}`);
     } finally {
       setLoading(false);
     }
@@ -3764,27 +3775,13 @@ function TicketSystem({ dealer }) {
   );
 }
 
-function SettingsPage({ dealer, setDealer, usage }) {
+function SettingsPage({ dealer, setDealer, usage, isRealAdmin }) {
   const [form, setForm] = useState(dealer);
-  const [adminUnlocked, setAdminUnlocked] = useState(false);
-  const [adminInput, setAdminInput] = useState("");
-  const [adminError, setAdminError] = useState(false);
+  const [showKey, setShowKey] = useState(false);
   const fileRef = useRef();
 
-  const ADMIN_CODE = "RAPIDAPI";
   const monthKey = new Date().toISOString().slice(0, 7);
   const usedThisMonth = usage?.[monthKey] || 0;
-
-  const tryUnlock = () => {
-    if (adminInput.trim().toUpperCase() === ADMIN_CODE) {
-      setAdminUnlocked(true);
-      setAdminError(false);
-      setAdminInput("");
-    } else {
-      setAdminError(true);
-      setAdminInput("");
-    }
-  };
 
   // ─── PERSISTANCE LOCALE DU LOGO ──────────────────────────
   // Le logo est stocké en base64 et peut être lourd. On sauvegarde en local
@@ -3866,9 +3863,26 @@ function SettingsPage({ dealer, setDealer, usage }) {
       } catch (err) {
         console.warn("Compression échouée, on garde l'original", err);
       }
+
+      // Upload vers Supabase Storage via endpoint sécurisé
+      let logoPath = null;
+      let signedUrl = finalDataUrl; // fallback en cas d'échec réseau
+      try {
+        const up = await uploadImageToStorage({
+          kind: "logo",
+          dataUrl: finalDataUrl,
+          filename: "logo",
+        });
+        logoPath = up.path;
+        signedUrl = up.signedUrl || finalDataUrl;
+      } catch(err) {
+        console.warn("Upload Storage échoué, stockage local temporaire :", err.message);
+      }
+
       saveLogoEverywhere({
-        logo: finalDataUrl,
-        logo_original: finalDataUrl,
+        logo: signedUrl,               // URL signée (ou dataURL fallback) pour l'affichage
+        logo_path: logoPath,           // chemin Storage pour régénérer l'URL plus tard
+        logo_original: signedUrl,
         logoBlend: "normal",
         logoInvert: false,
       });
@@ -3913,13 +3927,30 @@ function SettingsPage({ dealer, setDealer, usage }) {
         }
         ctx.putImageData(imageData, 0, 0);
         const dataUrl = canvas.toDataURL("image/png");
-        // Sauvegarde immédiate (local + Supabase)
-        saveLogoEverywhere({
-          logo: dataUrl,
-          logo_original: form.logo_original || src,
-          logoBlend: "normal",
-          logoInvert: false,
-        });
+
+        // Upload du logo détouré vers Storage (async)
+        (async () => {
+          let logoPath = form.logo_path || null;
+          let signedUrl = dataUrl;
+          try {
+            const up = await uploadImageToStorage({
+              kind: "logo",
+              dataUrl,
+              filename: "logo-detoure",
+            });
+            logoPath = up.path;
+            signedUrl = up.signedUrl || dataUrl;
+          } catch(err) {
+            console.warn("Upload Storage échoué :", err.message);
+          }
+          saveLogoEverywhere({
+            logo: signedUrl,
+            logo_path: logoPath,
+            logo_original: form.logo_original || src,
+            logoBlend: "normal",
+            logoInvert: false,
+          });
+        })();
       } catch (err) {
         alert("Impossible de détourer ce logo. Essayez avec une autre image.");
         console.error(err);
@@ -4106,52 +4137,41 @@ function SettingsPage({ dealer, setDealer, usage }) {
               </div>
             </div>
 
-            {!adminUnlocked ? (
-              /* Verrou admin */
-              <div style={{ background: "rgba(212,168,67,.06)", border: "1px solid var(--border)", borderRadius: 10, padding: "20px 20px" }}>
-                <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-                  <span style={{ fontSize: 28 }}>🔒</span>
-                  <div>
-                    <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>Zone administrateur</div>
-                    <div style={{ fontSize: 12, color: "var(--muted)" }}>Entrez le code admin pour modifier la clé API</div>
+            {!isRealAdmin ? (
+              /* Utilisateur normal : simple info, pas d'édition */
+              <div style={{ background: "rgba(212,168,67,.06)", border: "1px solid var(--border)", borderRadius: 10, padding: "16px 20px" }}>
+                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                  <span style={{ fontSize: 22 }}>ℹ️</span>
+                  <div style={{ fontSize: 12, color: "var(--muted2)", lineHeight: 1.6 }}>
+                    La clé de recherche par plaque est gérée de manière sécurisée côté serveur.
+                    Vous bénéficiez automatiquement de <strong style={{ color: "var(--text)" }}>10 recherches gratuites par mois</strong>,
+                    puis 0,20 € par recherche supplémentaire facturée sur votre abonnement.
                   </div>
                 </div>
-                <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-                  <input
-                    className="form-input"
-                    type="password"
-                    placeholder="Code administrateur"
-                    value={adminInput}
-                    onChange={e => { setAdminInput(e.target.value); setAdminError(false); }}
-                    onKeyDown={e => e.key === "Enter" && tryUnlock()}
-                    style={{ fontFamily: "DM Mono", letterSpacing: 3, maxWidth: 240 }}
-                  />
-                  <button className="btn btn-primary" onClick={tryUnlock}>Déverrouiller</button>
-                </div>
-                {adminError && (
-                  <div style={{ marginTop: 8, fontSize: 12, color: "var(--red)" }}>❌ Code incorrect</div>
-                )}
               </div>
             ) : (
-              /* Clé visible après déverrouillage */
+              /* Zone admin réelle (is_admin en DB) — peut saisir la clé globale du garage */
               <div style={{ background: "rgba(62,207,122,.05)", border: "1px solid rgba(62,207,122,.2)", borderRadius: 10, padding: "16px 20px" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                  <div style={{ fontSize: 12, color: "var(--green)", fontWeight: 600 }}>🔓 Zone admin déverrouillée</div>
-                  <button className="btn btn-ghost btn-xs" onClick={() => setAdminUnlocked(false)}>🔒 Verrouiller</button>
+                  <div style={{ fontSize: 12, color: "var(--green)", fontWeight: 600 }}>🛡 Zone admin (authentifié en DB)</div>
+                  <button className="btn btn-ghost btn-xs" onClick={() => setShowKey(s => !s)}>
+                    {showKey ? "🙈 Masquer" : "👁 Afficher"}
+                  </button>
                 </div>
                 <div className="form-group">
-                  <label className="form-label">Clé RapidAPI (api-plaque.com)</label>
+                  <label className="form-label">Clé RapidAPI de ce garage (optionnelle — sinon clé globale serveur)</label>
                   <input
                     className="form-input"
-                    type="text"
+                    type={showKey ? "text" : "password"}
                     value={form.rapidapi_key || ""}
                     onChange={e => setForm(f => ({ ...f, rapidapi_key: e.target.value }))}
-                    placeholder="Coller votre clé X-RapidAPI-Key ici"
+                    placeholder="Laissez vide pour utiliser la clé globale"
                     style={{ fontFamily: "DM Mono", fontSize: 12 }}
                   />
                 </div>
                 <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 8 }}>
-                  Clé stockée localement · <a href="https://rapidapi.com" target="_blank" rel="noreferrer" style={{ color: "var(--gold)" }}>RapidAPI →</a>
+                  La clé n'est jamais renvoyée au front pour les utilisateurs non-admin.
+                  Pour modifier la clé d'un autre garage, utilisez le panneau Admin.
                 </div>
               </div>
             )}
@@ -5410,72 +5430,66 @@ function AdminPage({ token }) {
   const [exporting, setExporting] = useState(false);
   const [backupInfo, setBackupInfo] = useState(null);
   const [backupLoading, setBackupLoading] = useState(false);
-  const [expandedGarage, setExpandedGarage] = useState(null); // garage id pour voir les données
-  const [garageData, setGarageData] = useState(null); // { vehicles, orders, clients, livre_police }
+  const [expandedGarage, setExpandedGarage] = useState(null);
+  const [garageData, setGarageData] = useState(null);
+
+  // Helper : appel générique à l'endpoint admin sécurisé
+  const adminCall = async (action, payload, opts = {}) => {
+    const res = await fetch("/api/admin", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+      body: JSON.stringify({ action, payload }),
+    });
+    if (opts.raw) return res;
+    if (!res.ok) {
+      let msg = `Erreur ${res.status}`;
+      try { const j = await res.json(); msg = j.error || msg; } catch(e) {}
+      throw new Error(msg);
+    }
+    return res.json();
+  };
 
   useEffect(() => {
-    fetch(`${SUPABASE_URL}/rest/v1/garages?order=created_at.desc`, {
-      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}`, "Content-Type": "application/json" }
-    })
-      .then(r => r.json())
-      .then(data => { setGarages(Array.isArray(data) ? data : []); setLoading(false); })
+    adminCall("list")
+      .then(({ garages }) => { setGarages(garages || []); setLoading(false); })
       .catch(() => setLoading(false));
     checkBackup();
   }, [token]);
 
-  // Charger les données d'un garage
   const loadGarageData = async (garageId) => {
     if (expandedGarage === garageId) { setExpandedGarage(null); setGarageData(null); return; }
     setExpandedGarage(garageId);
-    const tables = ["vehicles", "orders", "clients", "livre_police"];
-    const data = {};
-    for (const table of tables) {
-      const r = await fetch(
-        `${SUPABASE_URL}/rest/v1/${table}?garage_id=eq.${garageId}&order=created_at.desc`,
-        { headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}` } }
-      );
-      data[table] = r.ok ? await r.json() : [];
+    try {
+      const { data } = await adminCall("garage_data", { garageId });
+      setGarageData(data);
+    } catch(e) {
+      setGarageData({ vehicles: [], orders: [], clients: [], livre_police: [] });
     }
-    setGarageData(data);
   };
 
-  // Supprimer une entrée d'un garage
   const deleteEntry = async (table, id) => {
     if (!window.confirm("Supprimer cette entrée ? Irréversible.")) return;
-    await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${id}`, {
-      method: "DELETE",
-      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}` }
-    });
-    setGarageData(prev => ({
-      ...prev,
-      [table]: prev[table].filter(x => x.id !== id)
-    }));
+    try {
+      await adminCall("delete_entry", { table, id });
+      setGarageData(prev => ({ ...prev, [table]: prev[table].filter(x => x.id !== id) }));
+    } catch(e) {
+      alert("Erreur : " + e.message);
+    }
   };
 
   const checkBackup = async () => {
     try {
-      // Lister les fichiers du bucket backups
-      const r = await fetch(`${SUPABASE_URL}/storage/v1/object/list/backups`, {
-        method: "POST",
-        headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ prefix: "", limit: 10 })
-      });
-      if (r.ok) {
-        const files = await r.json();
-        const backup = files.find(f => f.name === "backup_latest.json");
-        if (backup) setBackupInfo(backup);
-      }
+      const { backup } = await adminCall("backup_info");
+      if (backup) setBackupInfo(backup);
     } catch(e) {}
   };
 
   const downloadBackup = async () => {
     setBackupLoading(true);
     try {
-      const r = await fetch(`${SUPABASE_URL}/storage/v1/object/authenticated/backups/backup_latest.json`, {
-        headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}` }
-      });
-      if (!r.ok) throw new Error("Backup introuvable");
-      const blob = await r.blob();
+      const res = await adminCall("backup_download", null, { raw: true });
+      if (!res.ok) throw new Error("Backup introuvable");
+      const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -5488,34 +5502,15 @@ function AdminPage({ token }) {
     setBackupLoading(false);
   };
 
-  // ── Export complet de toutes les données ──────────────────
   const exportAllData = async () => {
     setExporting(true);
     try {
-      const tables = ["vehicles", "orders", "clients", "livre_police"];
-      const backup = {
-        exported_at: new Date().toISOString(),
-        garages: [],
-      };
-
-      for (const garage of garages) {
-        const garageData = { ...garage, data: {} };
-        for (const table of tables) {
-          const r = await fetch(
-            `${SUPABASE_URL}/rest/v1/${table}?garage_id=eq.${garage.id}&order=created_at.asc`,
-            { headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}` } }
-          );
-          garageData.data[table] = r.ok ? await r.json() : [];
-        }
-        backup.garages.push(garageData);
-      }
-
-      // Télécharger le JSON
+      const backup = await adminCall("export_all");
       const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `iocar_backup_${new Date().toISOString().slice(0,10)}.json`;
+      a.download = `iocar_export_${new Date().toISOString().slice(0,10)}.json`;
       a.click();
       URL.revokeObjectURL(url);
     } catch(e) {
@@ -5529,41 +5524,9 @@ function AdminPage({ token }) {
   const runBackup = async () => {
     setSavingBackup(true);
     try {
-      const tables = ["vehicles", "orders", "clients", "livre_police"];
-      const headers = { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}` };
-      const backup = {
-        version: "1.0",
-        backup_date: new Date().toISOString(),
-        backup_type: "manual",
-        total_garages: garages.length,
-        garages: []
-      };
-
-      for (const garage of garages) {
-        const garageData = {
-          id: garage.id, name: garage.name, email: garage.email,
-          siret: garage.siret, plan: garage.plan, is_active: garage.is_active,
-          created_at: garage.created_at, data: {}
-        };
-        for (const table of tables) {
-          const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}?garage_id=eq.${garage.id}&order=created_at.asc`, { headers });
-          garageData.data[table] = r.ok ? await r.json() : [];
-        }
-        backup.garages.push(garageData);
-      }
-
-      const backupJson = JSON.stringify(backup);
-
-      // Upload dans Supabase Storage — écrase backup_latest.json
-      await fetch(`${SUPABASE_URL}/storage/v1/object/backups/backup_latest.json`, {
-        method: "POST",
-        headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}`, "Content-Type": "application/json", "x-upsert": "true" },
-        body: backupJson
-      });
-
-      // Rafraîchir l'info backup
+      const r = await adminCall("backup_save");
       await checkBackup();
-      alert(`✅ Sauvegarde créée — ${garages.length} garages — ${Math.round(backupJson.length / 1024)} KB`);
+      alert(`✅ Sauvegarde créée — ${r.total_garages} garages — ${r.size_kb} KB`);
     } catch(e) {
       alert("Erreur sauvegarde : " + e.message);
     }
@@ -5573,29 +5536,29 @@ function AdminPage({ token }) {
   const toggleActive = async (g) => {
     setUpdating(g.id);
     const newVal = !g.is_active;
-    const updated_at = new Date().toISOString();
-    await fetch(`${SUPABASE_URL}/rest/v1/garages?id=eq.${g.id}`, {
-      method: "PATCH",
-      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}`, "Content-Type": "application/json", "Prefer": "return=minimal" },
-      body: JSON.stringify({ is_active: newVal, updated_at })
-    });
-    setGarages(garages.map(x => x.id === g.id ? { ...x, is_active: newVal, updated_at } : x));
+    try {
+      await adminCall("toggle_active", { garageId: g.id, value: newVal });
+      setGarages(garages.map(x => x.id === g.id ? { ...x, is_active: newVal, updated_at: new Date().toISOString() } : x));
+    } catch(e) {
+      alert("Erreur : " + e.message);
+    }
     setUpdating(null);
   };
 
   const setPlan = async (g, plan) => {
     setUpdating(g.id);
-    const updated_at = new Date().toISOString();
-    await fetch(`${SUPABASE_URL}/rest/v1/garages?id=eq.${g.id}`, {
-      method: "PATCH",
-      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}`, "Content-Type": "application/json", "Prefer": "return=minimal" },
-      body: JSON.stringify({ plan, updated_at })
-    });
-    setGarages(garages.map(x => x.id === g.id ? { ...x, plan, updated_at } : x));
+    try {
+      await adminCall("set_plan", { garageId: g.id, plan });
+      setGarages(garages.map(x => x.id === g.id ? { ...x, plan, updated_at: new Date().toISOString() } : x));
+    } catch(e) {
+      alert("Erreur : " + e.message);
+    }
     setUpdating(null);
   };
 
-  const ADMIN_LIST = ["johnyjoowls@gmail.com"];
+  // Liste purement esthétique pour afficher un badge "ADMIN" à côté de votre email.
+  // N'apporte AUCUN contrôle de sécurité — la vraie protection est en DB + RLS.
+  const ADMIN_LIST = garages.filter(g => g.is_admin).map(g => g.email);
 
   const filtered = garages.filter(g =>
     !search || `${g.name} ${g.email} ${g.siret}`.toLowerCase().includes(search.toLowerCase())
@@ -5738,16 +5701,16 @@ function AdminPage({ token }) {
                         style={{ padding: "3px 8px", fontSize: 10, fontFamily: "DM Mono", width: 160 }}
                         defaultValue={g.rapidapi_key || ""}
                         placeholder="Clé RapidAPI..."
+                        type="password"
                         onBlur={async e => {
                           const val = e.target.value.trim();
                           if (val === (g.rapidapi_key || "")) return;
-                          const updated_at = new Date().toISOString();
-                          await fetch(`${SUPABASE_URL}/rest/v1/garages?id=eq.${g.id}`, {
-                            method: "PATCH",
-                            headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}`, "Content-Type": "application/json", "Prefer": "return=minimal" },
-                            body: JSON.stringify({ rapidapi_key: val, updated_at })
-                          });
-                          setGarages(garages.map(x => x.id === g.id ? { ...x, rapidapi_key: val, updated_at } : x));
+                          try {
+                            await adminCall("update_rapidapi", { garageId: g.id, rapidapi_key: val });
+                            setGarages(garages.map(x => x.id === g.id ? { ...x, rapidapi_key: val, updated_at: new Date().toISOString() } : x));
+                          } catch(err) {
+                            alert("Erreur : " + err.message);
+                          }
                         }}
                       />
                       {g.rapidapi_key && <span style={{ color: "var(--green)", fontSize: 10 }}>✓</span>}
@@ -5829,22 +5792,19 @@ function AdminPage({ token }) {
                         style={{ fontSize: 11 }}
                         title={`Exporter les données de ${g.name || g.email}`}
                         onClick={async () => {
-                          const tables = ["vehicles", "orders", "clients", "livre_police"];
-                          const garageData = { ...g, data: {} };
-                          for (const table of tables) {
-                            const r = await fetch(
-                              `${SUPABASE_URL}/rest/v1/${table}?garage_id=eq.${g.id}&order=created_at.asc`,
-                              { headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}` } }
-                            );
-                            garageData.data[table] = r.ok ? await r.json() : [];
+                          try {
+                            const { data } = await adminCall("garage_data", { garageId: g.id });
+                            const payload = { exported_at: new Date().toISOString(), garage: { ...g, data } };
+                            const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement("a");
+                            a.href = url;
+                            a.download = `iocar_backup_${(g.name || g.email || g.id).replace(/\s/g,"_")}_${new Date().toISOString().slice(0,10)}.json`;
+                            a.click();
+                            URL.revokeObjectURL(url);
+                          } catch(err) {
+                            alert("Erreur export : " + err.message);
                           }
-                          const blob = new Blob([JSON.stringify({ exported_at: new Date().toISOString(), garage: garageData }, null, 2)], { type: "application/json" });
-                          const url = URL.createObjectURL(blob);
-                          const a = document.createElement("a");
-                          a.href = url;
-                          a.download = `iocar_backup_${(g.name || g.email || g.id).replace(/\s/g,"_")}_${new Date().toISOString().slice(0,10)}.json`;
-                          a.click();
-                          URL.revokeObjectURL(url);
                         }}
                       >
                         💾
@@ -5929,14 +5889,14 @@ export default function App() {
 
   const isRealDemo = token === "demo";
 
-  // ADMIN_EMAILS doit être défini avant les hooks
-  const ADMIN_EMAILS = ["johnyjoowls@gmail.com"];
-  const isRealAdmin = ADMIN_EMAILS.includes(user?.email);
+  // Le statut admin est lu depuis la colonne garages.is_admin (DB),
+  // initialisé à false et réaffecté dès que le garage est chargé.
+  // Aucune liste d'emails n'est plus hardcodée dans le bundle — le front n'est
+  // qu'un miroir esthétique, les vraies permissions sont appliquées par les RLS Postgres.
+  const [isRealAdmin, setIsRealAdmin] = useState(false);
 
   // viewMode DOIT être déclaré ici avant tout return conditionnel
-  const [viewMode, setViewMode] = useState(
-    token === "demo" ? "trial" : ADMIN_EMAILS.includes(loadSession().user?.email) ? "admin" : "subscriber"
-  );
+  const [viewMode, setViewMode] = useState(token === "demo" ? "trial" : "subscriber");
 
   // ── Mode DÉMO : données locales via useStored ─────────────
   const [demoVehicles,    setDemoVehicles,    dvReady]   = useStored("autodeskFleet", []);
@@ -5959,12 +5919,14 @@ export default function App() {
 
   // Charger le profil garage (Supabase uniquement)
   useEffect(() => {
-    if (isRealDemo) { setGarage(null); setGarageReady(true); setAppLoading(false); return; }
-    if (!token || !userId) { setAppLoading(false); setGarageReady(true); return; }
+    if (isRealDemo) { setGarage(null); setGarageReady(true); setAppLoading(false); setIsRealAdmin(false); return; }
+    if (!token || !userId) { setAppLoading(false); setGarageReady(true); setIsRealAdmin(false); return; }
     sb.getGarage(token, userId)
       .then(g => {
         setGarage(g);
         setGarageId(g?.id || null);
+        // Source de vérité : la colonne is_admin en DB (protégée par RLS)
+        setIsRealAdmin(g?.is_admin === true);
         setGarageReady(true);
       })
       .catch(() => setGarageReady(true))
@@ -5979,7 +5941,7 @@ export default function App() {
   const handleLogout = async () => {
     if (token && !isRealDemo) await sb.signOut(token).catch(() => {});
     clearSession();
-    setToken(null); setUser(null); setGarage(null); setGarageId(null);
+    setToken(null); setUser(null); setGarage(null); setGarageId(null); setIsRealAdmin(false);
   };
 
   // Déconnexion auto du mode Essai quand on quitte/ferme la page
@@ -6291,7 +6253,7 @@ export default function App() {
                 <button className="btn btn-primary" onClick={handleLogout}>🚀 S'abonner — 24,99€/mois</button>
               </div>
             ) : <LivreDePolice vehicles={activeVehicles} livrePolice={activeLivrePolice} setLivrePolice={setLivrePoliceRaw} dealer={dealer} viewMode={viewMode} />)}
-            {tab === "settings"    && <SettingsPage dealer={dealer} setDealer={setDealerRaw} usage={usage} />}
+            {tab === "settings"    && <SettingsPage dealer={dealer} setDealer={setDealerRaw} usage={usage} isRealAdmin={isRealAdmin} />}
           </main>
         </div>
       )}
