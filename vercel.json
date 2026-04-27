@@ -2,12 +2,6 @@
   "framework": "vite",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
-  "functions": {
-    "api/**/*.js": {
-      "runtime": "@vercel/node@3",
-      "maxDuration": 30
-    }
-  },
   "headers": [
     {
       "source": "/(.*)",
