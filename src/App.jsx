@@ -5962,19 +5962,40 @@ export default function App() {
       }
 
       // 2. Charger le garage de l'utilisateur
+      let g = null;
       try {
-        const g = await sb.getGarage(token, userId);
-        if (cancelled) return;
-        setGarage(g);
-        setGarageId(g?.id || null);
-        setIsRealAdmin(g?.is_admin === true);
-        setGarageReady(true);
+        g = await sb.getGarage(token, userId);
       } catch (e) {
+        // Erreur réseau au chargement du garage : on ne fait rien d'agressif
         if (cancelled) return;
-        setGarageReady(true);
-      } finally {
-        if (!cancelled) setAppLoading(false);
+        setGarageReady(true); setAppLoading(false);
+        return;
       }
+
+      if (cancelled) return;
+
+      // ⚠ Cas du COMPTE FANTÔME : auth.users existe mais aucun garage en DB
+      // (exemple : inscription interrompue avant paiement, garage supprimé
+      // manuellement, etc.). Sans cette protection, l'utilisateur tombe sur
+      // un dashboard "Ma Concession" complètement vide et ne comprend pas.
+      if (!g || !g.id) {
+        console.warn("[auth] Token valide mais aucun garage trouvé — déconnexion");
+        clearSession();
+        setToken(null); setUser(null); setGarage(null); setGarageId(null); setIsRealAdmin(false);
+        setAppLoading(false); setGarageReady(true);
+        // On affiche un message bref à l'utilisateur
+        setTimeout(() => {
+          alert("Votre compte n'a pas de concession associée.\nVeuillez vous réinscrire ou contacter le support à contact@iocar.online.");
+        }, 100);
+        return;
+      }
+
+      setGarage(g);
+      setGarageId(g.id);
+      // Source de vérité : la colonne is_admin en DB (protégée par RLS)
+      setIsRealAdmin(g.is_admin === true);
+      setGarageReady(true);
+      setAppLoading(false);
     })();
 
     return () => { cancelled = true; };
