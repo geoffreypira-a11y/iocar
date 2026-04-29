@@ -6172,7 +6172,7 @@ const STATUTS_CLIENT = {
   inactif:     { label: "Inactif",        cls: "badge-muted",   icon: "💤" },
 };
 
-function CrmPage({ clients, setClients, orders, viewMode }) {
+function CrmPage({ clients, setClients, orders, viewMode, dealer }) {
   const [search, setSearch]         = useState("");
   const [filterStatut, setFilter]   = useState("all");
   const [modal, setModal]           = useState(null);
@@ -6203,7 +6203,7 @@ function CrmPage({ clients, setClients, orders, viewMode }) {
 
   return (
     <div className="page">
-      {fiche && <CrmFiche client={fiche} orders={clientOrders(fiche.id)} onEdit={() => setModal(fiche)} onClose={() => setFiche(null)} onSave={save} />}
+      {fiche && <CrmFiche client={fiche} orders={clientOrders(fiche.id)} onEdit={() => setModal(fiche)} onClose={() => setFiche(null)} onSave={save} dealer={dealer} viewMode={viewMode} />}
       {modal && <CrmModal client={modal === "add" ? null : modal} onSave={save} onClose={() => setModal(null)} />}
       {pendingDelete && (
         <ConfirmModal
@@ -6295,10 +6295,11 @@ function CrmPage({ clients, setClients, orders, viewMode }) {
 }
 
 /* ── Fiche détail client ── */
-function CrmFiche({ client, orders, onEdit, onClose, onSave }) {
+function CrmFiche({ client, orders, onEdit, onClose, onSave, dealer, viewMode }) {
   const [newAnnot, setNewAnnot] = useState("");
   const [annotMode, setAnnotMode] = useState(false);
   const [pendingDeleteAnnot, setPendingDeleteAnnot] = useState(null);
+  const [print, setPrint] = useState(null); // aperçu PDF d'un document cliqué
 
   const addAnnotation = () => {
     if (!newAnnot.trim()) return;
@@ -6324,6 +6325,9 @@ function CrmFiche({ client, orders, onEdit, onClose, onSave }) {
           onCancel={() => setPendingDeleteAnnot(null)}
         />
       )}
+      {/* Aperçu PDF du document cliqué (BC / Facture / Avoir).
+          Se superpose à la fiche client — la fermeture revient à la fiche. */}
+      {print && <PrintDoc order={print} dealer={dealer} onClose={() => setPrint(null)} viewMode={viewMode} />}
       <div className="modal modal-lg" style={{ display: "flex", flexDirection: "column", maxHeight: "92vh" }}>
         <div className="modal-hd" style={{ flexShrink: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -6376,17 +6380,37 @@ function CrmFiche({ client, orders, onEdit, onClose, onSave }) {
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                   {orders.map(o => {
                     const c2 = calcOrder(o);
+                    // Badge selon type : facture (or), BC (bleu), avoir (rouge)
+                    const badgeInfo = o.type === "facture"
+                      ? { cls: "badge-gold", label: "🧾 Facture" }
+                      : o.type === "avoir"
+                      ? { cls: "badge-red", label: "↩️ Avoir" }
+                      : { cls: "badge-blue", label: "📝 BC" };
                     return (
-                      <div key={o.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 10px", background: "var(--card2)", borderRadius: 6 }}>
+                      <div
+                        key={o.id}
+                        onClick={() => setPrint(o)}
+                        onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--gold)"; e.currentTarget.style.background = "rgba(212,168,67,.05)"; }}
+                        onMouseLeave={e => { e.currentTarget.style.borderColor = "transparent"; e.currentTarget.style.background = "var(--card2)"; }}
+                        style={{
+                          display: "flex", justifyContent: "space-between", alignItems: "center",
+                          padding: "8px 10px", background: "var(--card2)", borderRadius: 6,
+                          border: "1px solid transparent", cursor: "pointer", transition: "all .15s",
+                        }}
+                        title="Cliquer pour voir l'aperçu"
+                      >
                         <div>
                           <div style={{ fontSize: 12, fontWeight: 600, fontFamily: "DM Mono" }}>{o.ref}</div>
                           <div style={{ fontSize: 11, color: "var(--muted)" }}>{o.date_creation} · {o.vehicle_label}</div>
                         </div>
-                        <div style={{ textAlign: "right" }}>
-                          <div style={{ fontSize: 13, fontWeight: 700 }}>{fmtDec(c2.ttc)}</div>
-                          <span className={`badge ${o.type === "facture" ? "badge-gold" : "badge-blue"}`} style={{ fontSize: 10 }}>
-                            {o.type === "facture" ? "🧾 Facture" : "📝 BC"}
-                          </span>
+                        <div style={{ textAlign: "right", display: "flex", alignItems: "center", gap: 10 }}>
+                          <div>
+                            <div style={{ fontSize: 13, fontWeight: 700 }}>{fmtDec(c2.ttc)}</div>
+                            <span className={`badge ${badgeInfo.cls}`} style={{ fontSize: 10 }}>
+                              {badgeInfo.label}
+                            </span>
+                          </div>
+                          <span style={{ fontSize: 14, color: "var(--muted)" }}>👁</span>
                         </div>
                       </div>
                     );
@@ -8047,7 +8071,7 @@ export default function App() {
             {tab === "dashboard"   && <Dashboard vehicles={activeVehicles} setVehicles={setVehiclesRaw} orders={activeOrders} setTab={setTab} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} livrePolice={livrePolice} dealer={dealer} setDealer={setDealerRaw} />}
             {tab === "fleet"       && <FleetPage vehicles={activeVehicles} setVehicles={setVehiclesRaw} orders={activeOrders} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} livrePolice={activeLivrePolice} setLivrePolice={setLivrePoliceRaw} viewMode={viewMode} garageId={garageId} dealer={dealer} />}
             {tab === "orders"      && <OrdersPage orders={activeOrders} setOrders={setOrdersRaw} vehicles={activeVehicles} setVehiclesRaw={setVehiclesRaw} dealer={dealer} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} clients={activeClients} setClients={setClientsRaw} viewMode={viewMode} />}
-            {tab === "crm"         && <CrmPage clients={activeClients} setClients={setClientsRaw} orders={activeOrders} viewMode={viewMode} />}
+            {tab === "crm"         && <CrmPage clients={activeClients} setClients={setClientsRaw} orders={activeOrders} viewMode={viewMode} dealer={dealer} />}
             {tab === "livrepolice" && (viewMode === "trial" ? (
               <div className="page" style={{ textAlign: "center", paddingTop: 80 }}>
                 <div style={{ fontSize: 48, marginBottom: 16 }}>📋</div>
