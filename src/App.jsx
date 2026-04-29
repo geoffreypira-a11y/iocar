@@ -3057,10 +3057,11 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
                   <div className="pdoc-trow" style={{ fontWeight: 700, color: "#0a0a0a", borderTop: "1px solid #e8e8e8", paddingTop: 6, marginTop: 4 }}><span>Reste à payer</span><span>{fmtDec(c.netApresAcompte)}</span></div>
                 </>}
                 {/* Encaissements ULTÉRIEURS (hors acompte signature, qui est déjà affiché ci-dessus).
-                    On utilise paiementsTotal pour ne pas compter l'acompte deux fois. */}
+                    On utilise paiementsTotal pour ne pas compter l'acompte deux fois.
+                    Pour un avoir, on parle de "remboursement" et non d'"encaissement". */}
                 {c.paiementsTotal > 0 && <>
-                  <div className="pdoc-trow" style={{ color: "#3ecf7a" }}><span>{c.acompteTtc > 0 ? "Encaissements ultérieurs" : "Encaissé"}</span><span>- {fmtDec(c.paiementsTotal)}</span></div>
-                  <div className="pdoc-trow" style={{ fontWeight: 700, color: c.reste <= 0 ? "#3ecf7a" : "#e5973c" }}><span>Solde restant</span><span>{fmtDec(c.reste)}</span></div>
+                  <div className="pdoc-trow" style={{ color: "#3ecf7a" }}><span>{order.type === "avoir" ? "Remboursé" : (c.acompteTtc > 0 ? "Encaissements ultérieurs" : "Encaissé")}</span><span>- {fmtDec(c.paiementsTotal)}</span></div>
+                  <div className="pdoc-trow" style={{ fontWeight: 700, color: c.reste <= 0 ? "#3ecf7a" : "#e5973c" }}><span>{order.type === "avoir" ? "Reste à rembourser" : "Solde restant"}</span><span>{fmtDec(c.reste)}</span></div>
                 </>}
               </div>
             </div>
