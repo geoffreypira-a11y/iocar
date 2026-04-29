@@ -6343,6 +6343,30 @@ function CrmFiche({ client, orders, onEdit, onClose, onSave, dealer, setDealer, 
     }
   };
 
+  // Mini toggle dans le coin d'une section. on=true → activé (or plein), on=false → grisé.
+  // Au clic, appelle toggleCrmModule. e.stopPropagation() pour que le clic ne déclenche pas
+  // un éventuel handler parent (ex. le clic sur la zone scrollable).
+  const MiniToggle = ({ on, onClick }) => (
+    <div
+      onClick={(e) => { e.stopPropagation(); onClick(); }}
+      style={{ display: "inline-flex", alignItems: "center", cursor: "pointer", userSelect: "none", flexShrink: 0 }}
+      title={on ? "Cliquer pour masquer cette section" : "Cliquer pour afficher cette section"}
+    >
+      <div style={{
+        width: 28, height: 16, borderRadius: 8,
+        background: on ? "var(--gold)" : "var(--card)",
+        border: "1px solid var(--border2)", position: "relative", transition: "background .2s",
+      }}>
+        <div style={{
+          width: 12, height: 12, borderRadius: "50%", background: "#fff",
+          position: "absolute", top: 1,
+          left: on ? 14 : 1,
+          transition: "left .2s", boxShadow: "0 1px 2px rgba(0,0,0,.3)"
+        }} />
+      </div>
+    </div>
+  );
+
   const addAnnotation = () => {
     if (!newAnnot.trim()) return;
     const annot = { id: uid(), texte: newAnnot.trim(), date: today(), heure: new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }) };
@@ -6393,51 +6417,9 @@ function CrmFiche({ client, orders, onEdit, onClose, onSave, dealer, setDealer, 
 
         <div style={{ flex: 1, overflowY: "auto", padding: 24 }}>
 
-          {/* Panneau de toggles modules — persisté dans dealer.ui_prefs.crm_modules */}
-          <div style={{
-            background: "var(--card2)", border: "1px solid var(--border2)",
-            borderRadius: 10, padding: "10px 14px", marginBottom: 20,
-            display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap"
-          }}>
-            <div style={{ fontSize: 10, letterSpacing: 1.5, textTransform: "uppercase", color: "var(--muted)", flexShrink: 0 }}>
-              🎛 Modules
-            </div>
-            {[
-              { key: "documents", label: "Factures & BC" },
-              { key: "reprises", label: "Reprises" },
-              { key: "annotations", label: "Annotations" },
-            ].map(m => {
-              const on = !!crmVisible[m.key];
-              return (
-                <div
-                  key={m.key}
-                  onClick={() => toggleCrmModule(m.key)}
-                  style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none" }}
-                  title={on ? "Cliquer pour masquer" : "Cliquer pour afficher"}
-                >
-                  <div style={{
-                    width: 32, height: 18, borderRadius: 9,
-                    background: on ? "var(--gold)" : "var(--card)",
-                    border: "1px solid var(--border2)", position: "relative", transition: "background .2s", flexShrink: 0
-                  }}>
-                    <div style={{
-                      width: 14, height: 14, borderRadius: "50%", background: "#fff",
-                      position: "absolute", top: 1,
-                      left: on ? 16 : 1,
-                      transition: "left .2s", boxShadow: "0 1px 2px rgba(0,0,0,.3)"
-                    }} />
-                  </div>
-                  <span style={{ fontSize: 12, color: on ? "var(--text)" : "var(--muted)", fontWeight: on ? 600 : 400 }}>
-                    {m.label}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-
           <div style={{
             display: "grid",
-            gridTemplateColumns: crmVisible.documents ? "1fr 1fr" : "1fr",
+            gridTemplateColumns: "1fr 1fr",
             gap: 20, marginBottom: 24
           }}>
 
@@ -6458,74 +6440,86 @@ function CrmFiche({ client, orders, onEdit, onClose, onSave, dealer, setDealer, 
               )}
             </div>
 
-            {/* Documents rattachés */}
-            {crmVisible.documents && (
+            {/* Documents rattachés — toggleable depuis le coin du header.
+                Si désactivé : seul le header reste visible avec le toggle pour réactiver. */}
             <div className="card card-pad">
-              <div style={{ fontFamily: "Syne", fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "var(--gold)", textTransform: "uppercase", marginBottom: 12 }}>
-                Factures & Bons de commande ({orders.length})
-              </div>
-              {orders.length === 0 ? (
-                <div style={{ fontSize: 12, color: "var(--muted)" }}>Aucun document lié</div>
-              ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  {orders.map(o => {
-                    const c2 = calcOrder(o);
-                    // Badge selon type : facture (or), BC (bleu), avoir (rouge)
-                    const badgeInfo = o.type === "facture"
-                      ? { cls: "badge-gold", label: "🧾 Facture" }
-                      : o.type === "avoir"
-                      ? { cls: "badge-red", label: "↩️ Avoir" }
-                      : { cls: "badge-blue", label: "📝 BC" };
-                    return (
-                      <div
-                        key={o.id}
-                        onClick={() => setPrint(o)}
-                        onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--gold)"; e.currentTarget.style.background = "rgba(212,168,67,.05)"; }}
-                        onMouseLeave={e => { e.currentTarget.style.borderColor = "transparent"; e.currentTarget.style.background = "var(--card2)"; }}
-                        style={{
-                          display: "flex", justifyContent: "space-between", alignItems: "center",
-                          padding: "8px 10px", background: "var(--card2)", borderRadius: 6,
-                          border: "1px solid transparent", cursor: "pointer", transition: "all .15s",
-                        }}
-                        title="Cliquer pour voir l'aperçu"
-                      >
-                        <div>
-                          <div style={{ fontSize: 12, fontWeight: 600, fontFamily: "DM Mono" }}>{o.ref}</div>
-                          <div style={{ fontSize: 11, color: "var(--muted)" }}>{o.date_creation} · {o.vehicle_label}</div>
-                        </div>
-                        <div style={{ textAlign: "right", display: "flex", alignItems: "center", gap: 10 }}>
-                          <div>
-                            <div style={{ fontSize: 13, fontWeight: 700 }}>{fmtDec(c2.ttc)}</div>
-                            <span className={`badge ${badgeInfo.cls}`} style={{ fontSize: 10 }}>
-                              {badgeInfo.label}
-                            </span>
-                          </div>
-                          <span style={{ fontSize: 14, color: "var(--muted)" }}>👁</span>
-                        </div>
-                      </div>
-                    );
-                  })}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: crmVisible.documents ? 12 : 0 }}>
+                <div style={{ fontFamily: "Syne", fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: crmVisible.documents ? "var(--gold)" : "var(--muted)", textTransform: "uppercase" }}>
+                  Factures & Bons de commande ({orders.length})
                 </div>
+                <MiniToggle on={crmVisible.documents} onClick={() => toggleCrmModule("documents")} />
+              </div>
+              {crmVisible.documents && (
+                orders.length === 0 ? (
+                  <div style={{ fontSize: 12, color: "var(--muted)" }}>Aucun document lié</div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {orders.map(o => {
+                      const c2 = calcOrder(o);
+                      // Badge selon type : facture (or), BC (bleu), avoir (rouge)
+                      const badgeInfo = o.type === "facture"
+                        ? { cls: "badge-gold", label: "🧾 Facture" }
+                        : o.type === "avoir"
+                        ? { cls: "badge-red", label: "↩️ Avoir" }
+                        : { cls: "badge-blue", label: "📝 BC" };
+                      return (
+                        <div
+                          key={o.id}
+                          onClick={() => setPrint(o)}
+                          onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--gold)"; e.currentTarget.style.background = "rgba(212,168,67,.05)"; }}
+                          onMouseLeave={e => { e.currentTarget.style.borderColor = "transparent"; e.currentTarget.style.background = "var(--card2)"; }}
+                          style={{
+                            display: "flex", justifyContent: "space-between", alignItems: "center",
+                            padding: "8px 10px", background: "var(--card2)", borderRadius: 6,
+                            border: "1px solid transparent", cursor: "pointer", transition: "all .15s",
+                          }}
+                          title="Cliquer pour voir l'aperçu"
+                        >
+                          <div>
+                            <div style={{ fontSize: 12, fontWeight: 600, fontFamily: "DM Mono" }}>{o.ref}</div>
+                            <div style={{ fontSize: 11, color: "var(--muted)" }}>{o.date_creation} · {o.vehicle_label}</div>
+                          </div>
+                          <div style={{ textAlign: "right", display: "flex", alignItems: "center", gap: 10 }}>
+                            <div>
+                              <div style={{ fontSize: 13, fontWeight: 700 }}>{fmtDec(c2.ttc)}</div>
+                              <span className={`badge ${badgeInfo.cls}`} style={{ fontSize: 10 }}>
+                                {badgeInfo.label}
+                              </span>
+                            </div>
+                            <span style={{ fontSize: 14, color: "var(--muted)" }}>👁</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )
               )}
             </div>
-            )}
           </div>
 
-          {/* Reprises véhicules — calculé à partir des ordres du client */}
-          {crmVisible.reprises && (() => {
+          {/* Reprises véhicules — calculé à partir des ordres du client.
+              Toggleable depuis le coin du header. Si aucune reprise → on n'affiche rien
+              (sinon c'est du bruit visuel). */}
+          {(() => {
             const reprises = orders.filter(o => o.reprise_active && (parseFloat(o.reprise_valeur) || 0) > 0);
             if (reprises.length === 0) return null;
             const totalReprise = reprises.reduce((s, o) => s + (parseFloat(o.reprise_valeur) || 0), 0);
             return (
               <div className="card card-pad" style={{ marginBottom: 24, border: "1px solid rgba(212,168,67,.3)" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                  <div style={{ fontFamily: "Syne", fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "var(--gold)", textTransform: "uppercase" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: crmVisible.reprises ? 12 : 0, gap: 12 }}>
+                  <div style={{ fontFamily: "Syne", fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: crmVisible.reprises ? "var(--gold)" : "var(--muted)", textTransform: "uppercase" }}>
                     🔄 Reprises véhicules ({reprises.length})
                   </div>
-                  <div style={{ fontSize: 12, color: "var(--muted)" }}>
-                    Total repris : <strong style={{ color: "var(--gold)" }}>{fmt(totalReprise)}</strong>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    {crmVisible.reprises && (
+                      <div style={{ fontSize: 12, color: "var(--muted)" }}>
+                        Total repris : <strong style={{ color: "var(--gold)" }}>{fmt(totalReprise)}</strong>
+                      </div>
+                    )}
+                    <MiniToggle on={crmVisible.reprises} onClick={() => toggleCrmModule("reprises")} />
                   </div>
                 </div>
+                {crmVisible.reprises && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   {reprises.map(o => {
                     const modele = [o.reprise_marque, o.reprise_modele].filter(Boolean).join(" ") || "Véhicule";
@@ -6552,23 +6546,30 @@ function CrmFiche({ client, orders, onEdit, onClose, onSave, dealer, setDealer, 
                     );
                   })}
                 </div>
+                )}
               </div>
             );
           })()}
 
           {/* Annotations */}
-          {crmVisible.annotations && (
+          {/* Annotations — toggleable depuis le coin du header.
+              Si désactivé : seul le header reste visible avec le toggle pour réactiver. */}
           <div className="card">
-            <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--border2)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div style={{ fontFamily: "Syne", fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "var(--gold)", textTransform: "uppercase" }}>
+            <div style={{ padding: "14px 20px", borderBottom: crmVisible.annotations ? "1px solid var(--border2)" : "none", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+              <div style={{ fontFamily: "Syne", fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: crmVisible.annotations ? "var(--gold)" : "var(--muted)", textTransform: "uppercase" }}>
                 📝 Annotations & Suivi ({(client.annotations || []).length})
               </div>
-              <button className="btn btn-ghost btn-sm" onClick={() => setAnnotMode(!annotMode)}>
-                {annotMode ? "Annuler" : "+ Ajouter une note"}
-              </button>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                {crmVisible.annotations && (
+                  <button className="btn btn-ghost btn-sm" onClick={() => setAnnotMode(!annotMode)}>
+                    {annotMode ? "Annuler" : "+ Ajouter une note"}
+                  </button>
+                )}
+                <MiniToggle on={crmVisible.annotations} onClick={() => toggleCrmModule("annotations")} />
+              </div>
             </div>
 
-            {annotMode && (
+            {crmVisible.annotations && annotMode && (
               <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--border2)", background: "var(--card2)" }}>
                 <textarea
                   className="form-input"
@@ -6586,6 +6587,7 @@ function CrmFiche({ client, orders, onEdit, onClose, onSave, dealer, setDealer, 
               </div>
             )}
 
+            {crmVisible.annotations && (
             <div style={{ maxHeight: 320, overflowY: "auto" }}>
               {(client.annotations || []).length === 0 ? (
                 <div style={{ padding: "20px", fontSize: 12, color: "var(--muted)", textAlign: "center" }}>
@@ -6604,8 +6606,8 @@ function CrmFiche({ client, orders, onEdit, onClose, onSave, dealer, setDealer, 
                 ))
               )}
             </div>
+            )}
           </div>
-          )}
         </div>
       </div>
     </div>
