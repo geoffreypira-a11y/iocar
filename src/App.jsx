@@ -547,10 +547,17 @@ function calcOrder(o) {
   const encaisse = (o.paiements || []).reduce((s, p) => s + (parseFloat(p.montant) || 0), 0);
   const reste = ttc - encaisse;
 
+  // Acompte versé à la signature (TTC, par défaut 0).
+  // Le reste à payer après acompte est juste informatif sur le document
+  // — il ne remplace pas le système de paiements (encaisse/reste) qui sert
+  // au suivi de trésorerie.
+  const acompteTtc = parseFloat(o.acompte_ttc) || 0;
+  const netApresAcompte = ttc - acompteTtc;
+
   // Les avoirs : le signe négatif est appliqué sur ttc/ht/tva pour le dashboard
   // Mais encaisse et reste restent en valeur absolue pour la logique de paiement
   const sign = o.type === "avoir" ? -1 : 1;
-  return { ht: ht * sign, remAmt, base: prixApresRemise, fraisMiseDispo, carteGrise, repriseValeur, baseTotal: montantTTC_soumis, tvaAmt: tvaAmt * sign, ttc: ttc * sign, encaisse, reste, avecTva, tvaPct };
+  return { ht: ht * sign, remAmt, base: prixApresRemise, fraisMiseDispo, carteGrise, repriseValeur, baseTotal: montantTTC_soumis, tvaAmt: tvaAmt * sign, ttc: ttc * sign, encaisse, reste, avecTva, tvaPct, acompteTtc, netApresAcompte: netApresAcompte * sign };
 }
 
 // ─── NUMÉROTATION SÉQUENTIELLE ──────────────────────────────
@@ -2160,6 +2167,7 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
     frais_mise_dispo: 180, // frais de mise à disposition (par défaut 180€)
     garantie_mois: 3, // durée garantie : 3, 6 ou 12 mois
     carte_grise: 0, // frais carte grise
+    acompte_ttc: 0, // acompte versé à la signature (en TTC, par défaut 0)
     // Reprise véhicule (optionnelle)
     reprise_active: false,
     reprise_plate: "",
@@ -2487,6 +2495,26 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
               />
             </div>
           </details>
+
+          {/* ═══ ACOMPTE VERSÉ À LA SIGNATURE ═══ */}
+          <div className="form-row" style={{ marginBottom: 20 }}>
+            <div className="form-group">
+              <label className="form-label">
+                💰 Acompte versé à la signature (€ TTC)
+                <span style={{ fontSize: 10, color: "var(--muted)", marginLeft: 8, fontWeight: 400 }}>
+                  Laisser à 0 si pas d'acompte
+                </span>
+              </label>
+              <input
+                className="form-input"
+                type="number"
+                step="0.01"
+                min="0"
+                value={form.acompte_ttc ?? 0}
+                onChange={e => set("acompte_ttc", parseFloat(e.target.value) || 0)}
+              />
+            </div>
+          </div>
 
           {/* ═══ REPRISE VÉHICULE ═══ */}
           <div style={{ fontFamily: "Syne", fontSize: 13, fontWeight: 700, letterSpacing: 1, color: "var(--gold)", marginBottom: 10, textTransform: "uppercase" }}>REPRISE VÉHICULE</div>
@@ -2995,6 +3023,10 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
                     <div className="pdoc-trow big"><span>TOTAL TTC</span><span>{fmtDec(c.ttc)}</span></div>
                   </>
                 )}
+                {c.acompteTtc > 0 && <>
+                  <div className="pdoc-trow" style={{ color: "#3ecf7a" }}><span>Acompte versé à la signature</span><span>- {fmtDec(c.acompteTtc)}</span></div>
+                  <div className="pdoc-trow" style={{ fontWeight: 700, color: "#0a0a0a", borderTop: "1px solid #e8e8e8", paddingTop: 6, marginTop: 4 }}><span>Reste à payer</span><span>{fmtDec(c.netApresAcompte)}</span></div>
+                </>}
                 {c.encaisse > 0 && <>
                   <div className="pdoc-trow" style={{ color: "#3ecf7a" }}><span>Encaissé</span><span>- {fmtDec(c.encaisse)}</span></div>
                   <div className="pdoc-trow" style={{ fontWeight: 700, color: c.reste <= 0 ? "#3ecf7a" : "#e5973c" }}><span>Solde restant</span><span>{fmtDec(c.reste)}</span></div>
@@ -3321,6 +3353,201 @@ function CessionDoc({ order, dealer, vehicles, clients, onClose }) {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   PV DE LIVRAISON
+   Document attestant la remise du véhicule à l'acheteur.
+   Reprend les données du Livre de Police + signatures + annotation.
+   Imprimable et téléchargeable en PDF (via window.print).
+═══════════════════════════════════════════════════════════════ */
+function PVLivraisonDoc({ entry, dealer, onSave, onClose }) {
+  const [form, setForm] = useState({
+    pv_annotation: entry.pv_annotation || "",
+    pv_signature_garage: entry.pv_signature_garage || null,
+    pv_signature_acheteur: entry.pv_signature_acheteur || null,
+  });
+
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  const save = () => {
+    if (onSave) onSave({ ...entry, ...form });
+    onClose();
+  };
+
+  const handlePrint = () => {
+    // Sauvegarde silencieuse avant impression (pour conserver les signatures)
+    if (onSave) onSave({ ...entry, ...form });
+    setTimeout(() => window.print(), 200);
+  };
+
+  const sigGarage   = typeof form.pv_signature_garage   === "string" ? form.pv_signature_garage   : form.pv_signature_garage?.url;
+  const sigAcheteur = typeof form.pv_signature_acheteur === "string" ? form.pv_signature_acheteur : form.pv_signature_acheteur?.url;
+
+  // Nom et adresse du garage
+  const garageName    = dealer?.name    || "Concession";
+  const garageAddr    = dealer?.address || "";
+  const garageSiret   = dealer?.siret   || "";
+  const garageEmail   = dealer?.email   || "";
+  const garagePhone   = dealer?.phone   || "";
+  const dateLivraison = entry.date_sortie || today();
+
+  return (
+    <div className="modal-bg" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal" style={{ maxWidth: 900, width: "98vw", maxHeight: "92vh", display: "flex", flexDirection: "column" }}>
+        <div className="modal-hd" style={{ flexShrink: 0 }}>
+          <span className="modal-title">📜 PV de Livraison — N°{String(entry.num_ordre || 0).padStart(4, "0")} · {entry.immat || ""}</span>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn btn-ghost btn-sm" onClick={handlePrint}>🖨 Imprimer / PDF</button>
+            <button className="btn btn-primary btn-sm" onClick={save}>💾 Enregistrer</button>
+            <button className="close-btn" onClick={onClose}>×</button>
+          </div>
+        </div>
+
+        <div style={{ flex: 1, overflow: "auto", background: "#2a2a2a", padding: 20 }}>
+          {/* Document A4 imprimable */}
+          <div className="pdoc" id="pv-livraison-print" style={{ background: "#fff", color: "#222", padding: "32px 40px", maxWidth: 800, margin: "0 auto", fontFamily: "DM Sans, system-ui, sans-serif", fontSize: 12, lineHeight: 1.5 }}>
+
+            {/* En-tête */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24, paddingBottom: 16, borderBottom: "2px solid #d4a843" }}>
+              <div>
+                {dealer?.logo && <img src={dealer.logo} alt="logo" style={{ maxHeight: 60, marginBottom: 8 }} />}
+                <div style={{ fontSize: 16, fontWeight: 700, color: "#1a1a1a" }}>{garageName}</div>
+                {garageAddr && <div style={{ fontSize: 10, color: "#666", whiteSpace: "pre-line" }}>{garageAddr}</div>}
+                {garageSiret && <div style={{ fontSize: 10, color: "#666" }}>SIRET : {garageSiret}</div>}
+                <div style={{ fontSize: 10, color: "#666" }}>
+                  {garagePhone && <span>📞 {garagePhone}</span>}
+                  {garagePhone && garageEmail && <span> · </span>}
+                  {garageEmail && <span>✉ {garageEmail}</span>}
+                </div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontFamily: "Syne, sans-serif", fontSize: 22, fontWeight: 800, color: "#d4a843", letterSpacing: 1 }}>PV DE LIVRAISON</div>
+                <div style={{ fontSize: 10, color: "#888", marginTop: 4 }}>Procès-verbal de remise de véhicule</div>
+                <div style={{ fontSize: 11, marginTop: 8 }}>N°{String(entry.num_ordre || 0).padStart(4, "0")}</div>
+                <div style={{ fontSize: 11 }}>Date : <strong>{dateLivraison}</strong></div>
+              </div>
+            </div>
+
+            {/* Préambule */}
+            <div style={{ marginBottom: 20, fontSize: 11, color: "#444" }}>
+              Le présent procès-verbal atteste la remise du véhicule désigné ci-dessous par le vendeur à l'acheteur, à la date indiquée. Les deux parties reconnaissent que le véhicule a été livré conformément aux conditions contractuelles convenues et après vérifications mutuelles.
+            </div>
+
+            {/* Parties */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 20 }}>
+              <div style={{ padding: "12px 14px", background: "#f9f8f5", borderRadius: 6, border: "1px solid #e8e8e8" }}>
+                <div style={{ fontSize: 9, letterSpacing: 1.5, textTransform: "uppercase", color: "#888", marginBottom: 6, fontWeight: 700 }}>Le vendeur</div>
+                <div style={{ fontWeight: 700, fontSize: 12 }}>{garageName}</div>
+                {garageAddr && <div style={{ fontSize: 10, color: "#555", whiteSpace: "pre-line" }}>{garageAddr}</div>}
+                {garageSiret && <div style={{ fontSize: 10, color: "#555" }}>SIRET : {garageSiret}</div>}
+              </div>
+              <div style={{ padding: "12px 14px", background: "#f9f8f5", borderRadius: 6, border: "1px solid #e8e8e8" }}>
+                <div style={{ fontSize: 9, letterSpacing: 1.5, textTransform: "uppercase", color: "#888", marginBottom: 6, fontWeight: 700 }}>L'acheteur</div>
+                <div style={{ fontWeight: 700, fontSize: 12 }}>{entry.acheteur_nom || "—"}</div>
+                {entry.acheteur_adresse && <div style={{ fontSize: 10, color: "#555" }}>{entry.acheteur_adresse}</div>}
+              </div>
+            </div>
+
+            {/* Récapitulatif véhicule */}
+            <div style={{ fontSize: 9, letterSpacing: 1.5, textTransform: "uppercase", color: "#d4a843", marginBottom: 10, fontWeight: 700 }}>🚗 Véhicule livré</div>
+            <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 20, border: "1px solid #e8e8e8" }}>
+              <tbody>
+                {[
+                  ["Marque", entry.marque],
+                  ["Modèle", entry.modele],
+                  ["Année", entry.annee],
+                  ["Couleur", entry.couleur],
+                  ["Immatriculation", entry.immat],
+                  ["N° VIN / Châssis", entry.vin],
+                  ["Kilométrage à la livraison", entry.kilometrage ? `${entry.kilometrage} km` : ""],
+                  ["Pays d'origine", entry.pays_origine],
+                ].filter(([, v]) => v).map(([k, v]) => (
+                  <tr key={k} style={{ borderBottom: "1px solid #f0f0f0" }}>
+                    <td style={{ padding: "8px 12px", fontSize: 10, color: "#666", width: "35%", background: "#fafafa", fontWeight: 600 }}>{k}</td>
+                    <td style={{ padding: "8px 12px", fontSize: 11, fontWeight: 500 }}>{v}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            {/* Annotation */}
+            {form.pv_annotation && (
+              <>
+                <div style={{ fontSize: 9, letterSpacing: 1.5, textTransform: "uppercase", color: "#d4a843", marginBottom: 10, fontWeight: 700 }}>📝 Observations / accessoires remis</div>
+                <div style={{ padding: "12px 14px", background: "#fdf8ec", border: "1px solid #e8d9a8", borderRadius: 6, fontSize: 11, color: "#444", whiteSpace: "pre-wrap", marginBottom: 20 }}>
+                  {form.pv_annotation}
+                </div>
+              </>
+            )}
+
+            {/* Mention */}
+            <div style={{ fontSize: 10, color: "#666", marginBottom: 24, padding: "10px 14px", background: "#fafafa", border: "1px dashed #ddd", borderRadius: 6 }}>
+              Les soussignés reconnaissent que le véhicule désigné ci-dessus a été remis en bon état apparent à la date indiquée, accompagné de l'ensemble de ses documents et accessoires éventuellement listés ci-dessus.
+            </div>
+
+            {/* Signatures */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24, marginTop: 24 }}>
+              <div style={{ textAlign: "center" }}>
+                <div style={{ fontSize: 10, letterSpacing: 1, textTransform: "uppercase", color: "#888", marginBottom: 8, fontWeight: 600 }}>Signature du vendeur</div>
+                <div className="hide-on-print">
+                  <SignaturePad
+                    label=""
+                    savedImg={sigGarage}
+                    onSave={(s) => set("pv_signature_garage", s)}
+                  />
+                </div>
+                <div className="show-on-print" style={{ display: "none" }}>
+                  {sigGarage ? (
+                    <img src={sigGarage} alt="signature vendeur" style={{ maxHeight: 80, maxWidth: 240, border: "1px solid #ddd", padding: 4, background: "#fff" }} />
+                  ) : (
+                    <div style={{ height: 80, border: "1px dashed #aaa", borderRadius: 4 }} />
+                  )}
+                </div>
+                <div style={{ marginTop: 8, fontSize: 10, color: "#555", fontWeight: 600 }}>{garageName}</div>
+              </div>
+
+              <div style={{ textAlign: "center" }}>
+                <div style={{ fontSize: 10, letterSpacing: 1, textTransform: "uppercase", color: "#888", marginBottom: 8, fontWeight: 600 }}>Signature de l'acheteur</div>
+                <div className="hide-on-print">
+                  <SignaturePad
+                    label=""
+                    savedImg={sigAcheteur}
+                    onSave={(s) => set("pv_signature_acheteur", s)}
+                  />
+                </div>
+                <div className="show-on-print" style={{ display: "none" }}>
+                  {sigAcheteur ? (
+                    <img src={sigAcheteur} alt="signature acheteur" style={{ maxHeight: 80, maxWidth: 240, border: "1px solid #ddd", padding: 4, background: "#fff" }} />
+                  ) : (
+                    <div style={{ height: 80, border: "1px dashed #aaa", borderRadius: 4 }} />
+                  )}
+                </div>
+                <div style={{ marginTop: 8, fontSize: 10, color: "#555", fontWeight: 600 }}>{entry.acheteur_nom || "—"}</div>
+              </div>
+            </div>
+
+            {/* Pied de page */}
+            <div style={{ marginTop: 32, paddingTop: 12, borderTop: "1px solid #eee", fontSize: 9, color: "#999", textAlign: "center" }}>
+              Document généré le {today()} · {garageName} {garageSiret && `· SIRET ${garageSiret}`}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* CSS pour impression : on cache tout sauf le document */}
+      <style>{`
+        @media print {
+          body * { visibility: hidden !important; }
+          #pv-livraison-print, #pv-livraison-print * { visibility: visible !important; }
+          #pv-livraison-print { position: absolute; left: 0; top: 0; width: 100%; padding: 20px !important; }
+          .hide-on-print { display: none !important; }
+          .show-on-print { display: block !important; }
+          .modal-hd, .close-btn, .btn { display: none !important; }
+        }
+      `}</style>
     </div>
   );
 }
@@ -4201,6 +4428,7 @@ function LivreDePolice({ vehicles, livrePolice, setLivrePolice, dealer, viewMode
   const [search, setSearch] = useState("");
   const [printMode, setPrintMode] = useState(false);
   const [pendingDelete, setPendingDelete] = useState(null);
+  const [pvLivraison, setPvLivraison] = useState(null);
 
   const entries = livrePolice || [];
 
@@ -4221,11 +4449,19 @@ function LivreDePolice({ vehicles, livrePolice, setLivrePolice, dealer, viewMode
     setModal(null);
   };
 
+  // Sauvegarde silencieuse (depuis PVLivraisonDoc — sans fermer la modale livre)
+  const saveEntryFromPv = (entry) => {
+    const exists = entries.find(x => x.id === entry.id);
+    const next = exists ? entries.map(x => x.id === entry.id ? entry : x) : [...entries, entry];
+    setLivrePolice(next);
+  };
+
   const delEntry = (id) => { setLivrePolice(entries.filter(e => e.id !== id)); setPendingDelete(null); };
 
   return (
     <div className="page">
       {modal && <LivrePoliceModal entry={modal === "add" ? null : modal} nextNum={nextNum} vehicles={vehicles} onSave={saveEntry} onClose={() => setModal(null)} />}
+      {pvLivraison && <PVLivraisonDoc entry={pvLivraison} dealer={dealer} onSave={saveEntryFromPv} onClose={() => setPvLivraison(null)} />}
       {pendingDelete && (
         <ConfirmModal
           title="Supprimer l'entrée"
@@ -4326,6 +4562,14 @@ function LivreDePolice({ vehicles, livrePolice, setLivrePolice, dealer, viewMode
                 <td>
                   <div style={{ display: "flex", gap: 4 }}>
                     <button className="btn btn-ghost btn-xs" onClick={() => setModal(e)}>✏️</button>
+                    {e.date_sortie && (
+                      <button
+                        className="btn btn-ghost btn-xs"
+                        onClick={() => setPvLivraison(e)}
+                        title="PV de Livraison"
+                        style={{ color: "var(--gold)" }}
+                      >📜 PV</button>
+                    )}
                     {viewMode === "admin" && (
                       <button className="btn btn-danger btn-xs" onClick={() => setPendingDelete({ id: e.id, num: e.num_ordre, label: `${e.marque} ${e.modele} ${e.immat || ""}` })}>🗑</button>
                     )}
@@ -4497,6 +4741,27 @@ function LivrePoliceModal({ entry, nextNum, vehicles, onSave, onClose }) {
             <label className="form-label">Notes</label>
             <textarea className="form-input" rows={2} value={form.notes||""} onChange={e => set("notes", e.target.value)} />
           </div>
+
+          {/* ═══ PV DE LIVRAISON ═══
+              Apparaît dès qu'une date de sortie est saisie (= véhicule livré).
+              L'annotation est libre, modifiable plus tard. */}
+          {form.date_sortie && (
+            <div style={{ marginTop: 24, padding: "16px 18px", background: "rgba(212,168,67,.05)", border: "1px solid rgba(212,168,67,.2)", borderRadius: 10 }}>
+              <div style={{ fontFamily: "Syne", fontSize: 12, fontWeight: 700, letterSpacing: 1, color: "var(--gold)", textTransform: "uppercase", marginBottom: 12 }}>
+                📜 PV de Livraison — annotation
+              </div>
+              <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 8 }}>
+                Cette annotation apparaîtra sur le PV de livraison généré (téléchargeable depuis la liste).
+              </div>
+              <textarea
+                className="form-input"
+                rows={3}
+                value={form.pv_annotation || ""}
+                onChange={e => set("pv_annotation", e.target.value)}
+                placeholder="Ex : véhicule remis en bon état, contrôle technique fourni, 2 clés remises, manuel utilisateur, carte grise barrée..."
+              />
+            </div>
+          )}
         </div>
         <div className="modal-foot">
           <button className="btn btn-ghost" onClick={onClose}>Annuler</button>
