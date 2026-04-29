@@ -2857,7 +2857,11 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
               win.document.write('.pdoc-table th{padding:6px 14px!important}');
               win.document.write('.pdoc-totals{margin-bottom:14px!important}');
               win.document.write('.pdoc-trow{padding:5px 0!important}');
-              win.document.write('.pdoc-footer{margin-top:18px!important;padding-top:12px!important}');
+              win.document.write('.pdoc-footer{margin-top:10px!important;padding-top:8px!important}');
+              // Compaction drastique du bloc Mentions/Conditions/Infos qui sinon déborde sur une 2e page
+              win.document.write('.pdoc-footer *{line-height:1.35!important}');
+              win.document.write('.pdoc-footer > div:first-child{margin-bottom:6px!important;padding:6px 10px!important;font-size:9px!important}');
+              win.document.write('.pdoc-footer > div:last-child > div{font-size:8.5px!important;line-height:1.35!important}');
               win.document.write('.pdoc-paiements{margin-top:12px!important;padding:10px 14px!important}');
               // Filigrane — forcer l'impression des couleurs très claires
               win.document.write('.pdoc-watermark{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}');
@@ -2865,8 +2869,8 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
               win.document.write('.pdoc-table td{background:transparent!important}');
               // Anti-page-break sur le bloc final pour éviter qu'une seule ligne déborde sur une 2e page
               win.document.write('.pdoc-totals, .pdoc-footer, .pdoc-paiements{page-break-inside:avoid!important}');
-              // Marges A4 plus serrées pour gagner de la place et tenir sur 1 page
-              win.document.write('@page{size:A4 portrait;margin:6mm 8mm}');
+              // Marges A4 minimales et compaction globale du document pour tenir sur 1 page
+              win.document.write('@page{size:A4 portrait;margin:5mm 6mm}');
               win.document.write('@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}');
               win.document.write('</style>');
               win.document.write('</head><body>');
@@ -3437,12 +3441,24 @@ function PVLivraisonDoc({ entry, dealer, onSave, onClose }) {
     win.document.write('<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Syne:wght@700;800&display=swap" rel="stylesheet">');
     win.document.write('<style>');
     win.document.write('body{margin:0;padding:0;background:#fff;font-family:"DM Sans",sans-serif;color:#1a1a1a}');
-    win.document.write('#pv-livraison-print{max-width:800px;margin:0 auto;padding:20px 28px!important;color:#1a1a1a!important}');
+    win.document.write('#pv-livraison-print{max-width:none!important;margin:0 auto;padding:8mm 10mm!important;color:#1a1a1a!important;font-size:11px!important;line-height:1.4!important}');
     win.document.write('#pv-livraison-print *{color:inherit}');
+    // Compaction agressive pour tenir sur 1 page A4
+    win.document.write('#pv-livraison-print > div:first-child{margin-bottom:10px!important;padding-bottom:8px!important}');// en-tête
+    win.document.write('#pv-livraison-print table{margin-bottom:10px!important}');
+    win.document.write('#pv-livraison-print table td{padding:4px 10px!important;font-size:10.5px!important}');
+    win.document.write('#pv-livraison-print > div{margin-bottom:8px!important}');
+    win.document.write('#pv-livraison-print > div[style*="grid"]{gap:10px!important;margin-bottom:8px!important}');
+    win.document.write('#pv-livraison-print > div[style*="grid"] > div{padding:8px 10px!important}');
+    // Réduire la taille des images de signature pour gagner de la place verticale
+    win.document.write('#pv-livraison-print img[alt*="signature"]{max-height:60px!important;max-width:200px!important}');
+    win.document.write('#pv-livraison-print h1, #pv-livraison-print h2{margin:0!important}');
     win.document.write('.hide-on-print{display:none!important}');
     win.document.write('.only-on-print{display:block!important}');
     win.document.write('img{max-width:100%}');
-    win.document.write('@page{size:A4 portrait;margin:8mm}');
+    // Anti-saut de page sur les blocs critiques de fin
+    win.document.write('#pv-livraison-print > div[style*="grid-template-columns"]:last-of-type{page-break-inside:avoid!important;margin-top:14px!important}');
+    win.document.write('@page{size:A4 portrait;margin:6mm}');
     win.document.write('@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}');
     win.document.write('</style>');
     win.document.write('</head><body>');
