@@ -2867,24 +2867,15 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
               win.document.write('.pdoc-watermark{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}');
               win.document.write('.pdoc-watermark img{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}');
               win.document.write('.pdoc-table td{background:transparent!important}');
-              // Compaction agressive du bloc final pour éviter le débordement
-              // sur 1 ligne. On serre toutes les sections pré-mentions :
-              // garantie, reprise, opération/TVA, paiements.
+              // Anti-page-break sur les blocs critiques (totaux, footer mentions)
+              // Pour pdoc-paiements : on FORCE un saut de page AVANT le bloc historique
+              // de paiements. Comme ça la page 1 contient la facture complète et propre
+              // (table + totaux + mentions légales), et la page 2 contient l'historique
+              // des paiements bien rempli — au lieu d'avoir une page 1 à moitié vide
+              // avec le footer mentions poussé tout seul sur la page 2.
               win.document.write('.pdoc-totals, .pdoc-footer{page-break-inside:avoid!important}');
-              // Sections (garantie, reprise, opération) : padding et marge réduits
-              win.document.write('.pdoc-section{padding:5px 12px!important;margin-top:6px!important;font-size:9.5px!important}');
-              win.document.write('.pdoc-garantie{padding:5px 12px!important;font-size:10px!important}');
-              win.document.write('.pdoc-reprise{padding:6px 12px!important;font-size:9.5px!important}');
-              win.document.write('.pdoc-reprise > div:first-child{font-size:10px!important;margin-bottom:3px!important}');
-              win.document.write('.pdoc-operation{padding:5px 12px!important;font-size:9px!important;margin-bottom:6px!important}');
-              // Bloc paiements serré aussi
-              win.document.write('.pdoc-paiements{margin-top:8px!important;padding:8px 12px!important;font-size:10px!important}');
-              win.document.write('.pdoc-paiements-title{font-size:8px!important;margin-bottom:4px!important}');
-              // Mentions légales : interligne et taille réduits
-              win.document.write('.pdoc-footer{margin-top:8px!important;padding-top:6px!important}');
-              win.document.write('.pdoc-footer *{line-height:1.3!important;font-size:8.5px!important}');
-              win.document.write('.pdoc-footer h4, .pdoc-footer strong{font-size:8.5px!important}');
-              // Marges A4 minimales
+              win.document.write('.pdoc-paiements{page-break-before:always!important;break-before:page!important;margin-top:0!important;padding-top:14mm!important}');
+              // Marges A4 minimales et compaction globale du document pour tenir sur 1 page
               win.document.write('@page{size:A4 portrait;margin:5mm 6mm}');
               win.document.write('@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}');
               win.document.write('</style>');
@@ -6282,15 +6273,19 @@ function LoginScreen({ onLogin }) {
       <style>{STYLE}</style>
       <div className="auth-wrap">
         <div className="auth-box">
-          {/* Logo */}
+          {/* Logo — cliquable, retour au site vitrine */}
           <div style={{ textAlign: "center", marginBottom: 32 }}>
-            <div style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
+            <a
+              href="https://www.iocar.online"
+              title="Retour au site IO Car"
+              style={{ textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}
+            >
               <div style={{ width: 44, height: 44, borderRadius: 10, background: "var(--gold)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "Syne", fontWeight: 800, fontSize: 16, color: "#0b0c10" }}>IO</div>
               <div>
-                <div style={{ fontFamily: "Syne", fontWeight: 800, fontSize: 20, letterSpacing: 2 }}>IO <span style={{ color: "var(--gold)" }}>Car</span></div>
+                <div style={{ fontFamily: "Syne", fontWeight: 800, fontSize: 20, letterSpacing: 2, color: "var(--text)" }}>IO <span style={{ color: "var(--gold)" }}>Car</span></div>
                 <div style={{ fontSize: 9, letterSpacing: 2, color: "var(--muted)", textTransform: "uppercase" }}>by OWL'S INDUSTRY</div>
               </div>
-            </div>
+            </a>
           </div>
 
           <div style={{ fontFamily: "Syne", fontSize: 20, fontWeight: 700, textAlign: "center", marginBottom: 6 }}>
@@ -7415,7 +7410,12 @@ export default function App() {
         /* ══ MODE ABONNÉ / ESSAI — Interface normale avec sidebar ══ */
         <div className="shell">
           <aside className={`sidebar${sidebarOpen ? " open" : ""}${(viewMode === "trial" || viewMode === "subscriber") ? " demo-pushed" : ""}`}>
-            <div className="sidebar-logo">
+            <a
+              className="sidebar-logo"
+              href="https://www.iocar.online"
+              title="Retour au site IO Car"
+              style={{ textDecoration: "none", display: "block", cursor: "pointer" }}
+            >
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 <div style={{ width: 36, height: 36, borderRadius: 8, background: "var(--gold)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "Syne", fontWeight: 800, fontSize: 13, color: "#0b0c10", letterSpacing: 1, flexShrink: 0 }}>IO</div>
                 <div>
@@ -7423,7 +7423,7 @@ export default function App() {
                   <div style={{ fontSize: 8, letterSpacing: 2, color: "var(--muted)", textTransform: "uppercase", marginTop: 3 }}>by OWL'S INDUSTRY</div>
                 </div>
               </div>
-            </div>
+            </a>
 
             {/* Sélecteur vue preview (admin uniquement) */}
             {isRealAdmin && (
