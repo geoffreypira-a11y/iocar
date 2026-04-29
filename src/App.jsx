@@ -6557,6 +6557,36 @@ function AdminPage({ token }) {
     setUpdating(null);
   };
 
+  // Suppression définitive du garage (action irréversible).
+  // Demande une confirmation forte : taper le nom du garage pour valider.
+  const deleteGarage = async (g) => {
+    const expectedName = g.name || g.email || "GARAGE";
+    const confirmation = window.prompt(
+      `⚠️ SUPPRESSION DÉFINITIVE\n\n` +
+      `Vous êtes sur le point de supprimer pour TOUJOURS le compte :\n` +
+      `"${expectedName}"\n\n` +
+      `Cela effacera :\n` +
+      `• Tous les véhicules, factures, clients, livre de police\n` +
+      `• Le compte utilisateur (impossibilité de se reconnecter)\n\n` +
+      `Cette action est IRRÉVERSIBLE.\n\n` +
+      `Pour confirmer, tapez exactement le nom du garage :\n${expectedName}`
+    );
+    if (confirmation === null) return; // annulation
+    if (confirmation.trim() !== expectedName) {
+      alert("Confirmation incorrecte. Suppression annulée.");
+      return;
+    }
+    setUpdating(g.id);
+    try {
+      await adminCall("delete_garage", { garageId: g.id });
+      // On retire le garage de la liste localement
+      setGarages(garages.filter(x => x.id !== g.id));
+    } catch(e) {
+      alert("Erreur : " + e.message);
+    }
+    setUpdating(null);
+  };
+
   const setPlan = async (g, plan) => {
     setUpdating(g.id);
     try {
@@ -6822,6 +6852,20 @@ function AdminPage({ token }) {
                           title="Désarchiver le compte — le client devra se réabonner via Stripe"
                         >
                           🔄 Réactiver
+                        </button>
+                      )}
+
+                      {/* Suppression définitive — uniquement sur garages archivés
+                          pour éviter les drames. Action irréversible. */}
+                      {g._archived && (
+                        <button
+                          className="btn btn-danger btn-sm"
+                          onClick={() => deleteGarage(g)}
+                          disabled={updating === g.id}
+                          style={{ fontSize: 11 }}
+                          title="Supprimer définitivement le garage et toutes ses données (irréversible)"
+                        >
+                          🗑 Supprimer
                         </button>
                       )}
 
