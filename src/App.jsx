@@ -499,6 +499,38 @@ const today = () => new Date().toLocaleDateString("fr-FR");
 const fmt = (n) => Number(n || 0).toLocaleString("fr-FR", { style: "currency", currency: "EUR", maximumFractionDigits: 0 });
 const fmtDec = (n) => Number(n || 0).toLocaleString("fr-FR", { style: "currency", currency: "EUR" });
 
+// ─── DATES ──────────────────────────────────────────────────
+// Parse une date "DD/MM/YYYY" (format affiché partout dans l'app) en objet Date.
+// Retourne null si le format est invalide ou la chaîne vide.
+function parseFr(dateStr) {
+  if (!dateStr || typeof dateStr !== "string") return null;
+  const m = dateStr.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!m) return null;
+  const [, dd, mm, yyyy] = m;
+  const d = new Date(parseInt(yyyy), parseInt(mm) - 1, parseInt(dd));
+  return isNaN(d.getTime()) ? null : d;
+}
+
+// Renvoie true si dateStr (au format "DD/MM/YYYY") tombe dans la période demandée.
+// period ∈ {"day", "month", "year", "all"}. "all" → true sans regarder la date.
+// Une date invalide ou manquante renvoie false (sauf pour "all").
+function inPeriod(dateStr, period) {
+  if (period === "all") return true;
+  const d = parseFr(dateStr);
+  if (!d) return false;
+  const now = new Date();
+  if (period === "day") {
+    return d.getDate() === now.getDate() && d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+  }
+  if (period === "month") {
+    return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+  }
+  if (period === "year") {
+    return d.getFullYear() === now.getFullYear();
+  }
+  return true;
+}
+
 function getPayStatut(c, type) {
   if (type === "avoir") {
     if (c.reste <= 0.01) return { label: "✅ Remboursé", cls: "badge-green" };
@@ -968,31 +1000,69 @@ function CarteGriseCalc({ vehicleData, clientAddress, onApply }) {
    DASHBOARD
 ═══════════════════════════════════════════════════════════════ */
 function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUsage, livrePolice }) {
+  // ─── FILTRE PÉRIODE ─────────────────────────────────────────
+  // Le filtre s'applique UNIQUEMENT à : 🏷 Vendus et ✅ Encaissé.
+  // Les autres KPIs (stock, BC en cours, à encaisser, solde tréso, activité, suivi)
+  // restent des INSTANTANÉS — c'est-à-dire la photo de l'instant présent, indépendante
+  // de la période choisie.
+  const [period, setPeriod] = useState("month");
+
+  // STOCK : instantané (toujours à date du jour).
   const fleet = vehicles.length;
   const dispo = vehicles.filter(v => v.statut === "disponible").length;
-  // Compter les véhicules réellement vendus (sortis du livret, hors annulations/rétractations)
-  const vendu = (livrePolice || []).filter(e => e.date_sortie && (!e.motif_sortie || e.motif_sortie === "vente")).length;
 
+  // VENDUS — filtré par période (sur date_sortie du livre de police).
+  const vendu = (livrePolice || []).filter(e => {
+    if (!e.date_sortie) return false;
+    if (e.motif_sortie && e.motif_sortie !== "vente") return false;
+    return inPeriod(e.date_sortie, period);
+  }).length;
+
+  // BC EN COURS — instantané, tous les BC non convertis.
+  const nbBC = orders.filter(o => o.type === "bc").length;
+
+  // CA total et "À ENCAISSER" — instantanés, sur tous les orders.
   const allTtc = orders.reduce((s, o) => s + calcOrder(o).ttc, 0);
-  // Pour un avoir : encaisse (remboursé) doit être négatif dans la tréso,
-  // et le reste à rembourser ne compte PAS comme "à encaisser".
-  const encaisse = orders.reduce((s, o) => {
-    const c = calcOrder(o);
-    const sign = o.type === "avoir" ? -1 : 1;
-    return s + c.encaisse * sign;
-  }, 0);
   const aEncaisser = orders.reduce((s, o) => {
-    // Les avoirs non remboursés sont des dettes envers le client, pas des encaissements à venir
     if (o.type === "avoir") return s;
     return s + Math.max(0, calcOrder(o).reste);
   }, 0);
-  const nbBC = orders.filter(o => o.type === "bc").length;
-  const recent = [...orders].sort((a, b) => (b.date_creation || "").localeCompare(a.date_creation || "")).slice(0, 6);
 
+  // ENCAISSÉ — filtré par période (date des paiements, et date de création pour l'acompte).
+  // Pour un avoir, l'encaissement est en réalité un remboursement (donc négatif).
+  const encaisse = orders.reduce((s, o) => {
+    const sign = o.type === "avoir" ? -1 : 1;
+    let local = 0;
+    // Acompte signature : compte si la date de création de l'order est dans la période
+    // (les avoirs ont acompte_ttc forcé à 0, cf. calcOrder).
+    if (o.type !== "avoir") {
+      const acompte = parseFloat(o.acompte_ttc) || 0;
+      if (acompte > 0 && inPeriod(o.date_creation, period)) {
+        local += acompte;
+      }
+    }
+    // Paiements : chaque paiement compte à sa date.
+    for (const p of (o.paiements || [])) {
+      if (inPeriod(p.date, period)) {
+        local += parseFloat(p.montant) || 0;
+      }
+    }
+    return s + local * sign;
+  }, 0);
+
+  // ACHATS véhicules — instantané, tous les véhicules en stock + frais docs.
   const totalAchats = vehicles.reduce((s, v) => s + (parseFloat(v.prix_achat) || 0), 0);
   const totalFraisDocs = vehicles.reduce((s, v) => s + (v.documents || []).reduce((s2, d) => s2 + (parseFloat(d.montant) || 0), 0), 0);
+  // Solde tréso : encaissé (filtré par période) − achats (instantané)
+  // À noter : sur une période courte (ex. "Aujourd'hui"), le solde peut paraître très négatif
+  // car on compare l'encaissé du jour aux achats accumulés depuis toujours. Sur "Depuis le début"
+  // la valeur est exacte.
   const soldeTreso = encaisse - totalAchats - totalFraisDocs;
   const tresoPositive = soldeTreso >= 0;
+
+  // Activité récente — instantané, 6 derniers documents toutes périodes.
+  const recent = [...orders].sort((a, b) => (b.date_creation || "").localeCompare(a.date_creation || "")).slice(0, 6);
+
 
   // ─── RECHERCHE PLAQUE ────────────────────────────────────────
   const [searchPlate, setSearchPlate] = useState("");
@@ -1032,10 +1102,13 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
   };
 
   // Données camembert — on n'affiche que les parts > 0
-  const pieTotal = totalAchats + encaisse + aEncaisser;
+  // Note : si encaisse est négatif (cas extrême : plus de remboursements que d'encaissements
+  // dans la période), on le force à 0 dans le camembert pour ne pas afficher de tranche.
+  const pieEncaisse = Math.max(0, encaisse);
+  const pieTotal = totalAchats + pieEncaisse + aEncaisser;
   const pieData = [
     { name: "Avance tréso (achats)", value: totalAchats, color: "#e55c5c" },
-    { name: "Encaissé", value: encaisse, color: "#3ecf7a" },
+    { name: "Encaissé", value: pieEncaisse, color: "#3ecf7a" },
     { name: "À encaisser", value: aEncaisser, color: "#e5973c" },
   ].filter(d => d.value > 0);
 
@@ -1093,7 +1166,12 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
       <div className="page-header">
         <div>
           <div className="page-title">Tableau de bord</div>
-          <div className="page-sub">Vue d'ensemble de votre activité</div>
+          <div className="page-sub">Vue d'ensemble · {
+            period === "day" ? "ventes & encaissements du jour" :
+            period === "month" ? "ventes & encaissements du mois" :
+            period === "year" ? "ventes & encaissements de l'année" :
+            "ventes & encaissements depuis le début"
+          }</div>
         </div>
         {/* BARRE RECHERCHE PLAQUE */}
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -1143,17 +1221,60 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
         </div>
       </div>
 
+      {/* SÉLECTEUR DE PÉRIODE */}
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        gap: 12, marginBottom: 16, flexWrap: "wrap"
+      }}>
+        <div style={{ fontSize: 11, color: "var(--muted)", letterSpacing: 1.5, textTransform: "uppercase" }}>
+          📅 Période d'analyse
+        </div>
+        <div style={{
+          display: "inline-flex", background: "var(--card2)",
+          border: "1px solid var(--border2)", borderRadius: 8, padding: 3, gap: 2
+        }}>
+          {[
+            { key: "day", label: "Aujourd'hui" },
+            { key: "month", label: "Ce mois" },
+            { key: "year", label: "Cette année" },
+            { key: "all", label: "Depuis le début" },
+          ].map(opt => {
+            const active = period === opt.key;
+            return (
+              <button
+                key={opt.key}
+                onClick={() => setPeriod(opt.key)}
+                style={{
+                  padding: "6px 14px", fontSize: 12, fontWeight: 600,
+                  borderRadius: 6, border: "none", cursor: "pointer",
+                  background: active ? "var(--gold)" : "transparent",
+                  color: active ? "#0a0a0a" : "var(--muted)",
+                  transition: "all .15s",
+                }}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       {/* KPI CARDS */}
       <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))" }}>
         <div className="kpi" onClick={() => setTab("fleet")} style={{ cursor: "pointer" }}>
           <div className="kpi-label">🚗 En stock</div>
           <div className="kpi-val gold">{dispo}</div>
-          <div className="kpi-foot">{fleet} total · {vendu} vendus</div>
+          <div className="kpi-foot">{fleet} total · instantané</div>
         </div>
         <div className="kpi" onClick={() => setTab("fleet")} style={{ cursor: "pointer" }}>
           <div className="kpi-label">🏷 Vendus</div>
           <div className="kpi-val" style={{ color: "var(--muted2)" }}>{vendu}</div>
-          <div className="kpi-foot">véhicules cédés</div>
+          <div className="kpi-foot">{
+            period === "day" ? "aujourd'hui" :
+            period === "month" ? "ce mois" :
+            period === "year" ? "cette année" :
+            "depuis le début"
+          }</div>
         </div>
         <div className="kpi" onClick={() => setTab("orders")} style={{ cursor: "pointer" }}>
           <div className="kpi-label">📋 BC en cours</div>
@@ -1163,8 +1284,12 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
         <div className="kpi">
           <div className="kpi-label">✅ Encaissé</div>
           <div className="kpi-val green">{fmt(encaisse)}</div>
-          <div className="kpi-foot">{allTtc > 0 ? Math.round(encaisse / allTtc * 100) : 0}% du CA</div>
-          <div className="progress"><div className="progress-fill" style={{ width: allTtc > 0 ? `${Math.min(encaisse / allTtc * 100, 100)}%` : "0%", background: "var(--green)" }} /></div>
+          <div className="kpi-foot">{
+            period === "day" ? "aujourd'hui" :
+            period === "month" ? "ce mois" :
+            period === "year" ? "cette année" :
+            "depuis le début"
+          }</div>
         </div>
         <div className="kpi">
           <div className="kpi-label">⏳ À encaisser</div>
@@ -1225,6 +1350,7 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
         <div className="card">
           <div className="card-pad" style={{ borderBottom: "1px solid var(--border2)" }}>
             <div style={{ fontWeight: 700, fontSize: 14 }}>🕒 Activité récente</div>
+            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>6 derniers documents</div>
           </div>
           {recent.length === 0 ? (
             <div className="card-pad" style={{ color: "var(--muted)", fontSize: 13 }}>Aucune activité</div>
