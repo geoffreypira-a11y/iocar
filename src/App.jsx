@@ -2259,7 +2259,27 @@ function FleetPage({ vehicles, setVehicles, orders, apiKey, usage, setUsage, liv
           
           const nums = lpCopy.map(e => parseInt(e.num_ordre) || 0);
           const nextNum = nums.length > 0 ? Math.max(0, ...nums) + 1 : 1;
-          
+
+          // Si le véhicule provient d'une reprise, on utilise les infos du client
+          // qui a cédé le véhicule pour pré-remplir les champs vendeur du LP.
+          // Côté LP, ce client EST le vendeur/fournisseur (point de vue anti-recel).
+          // L'abonné devra quand même compléter la pièce d'identité (non capturée en facture).
+          const repriseClient = v.origine === "reprise" && v.reprise_client ? v.reprise_client : null;
+          const vendeurDefaults = repriseClient ? {
+            vendeur_type: repriseClient.type || "particulier",
+            vendeur_nom: repriseClient.name || "",
+            vendeur_prenom: "", // le client.name de la facture est consolidé, pas de séparation possible
+            vendeur_adresse: repriseClient.address || "",
+          } : {
+            vendeur_type: "particulier",
+            vendeur_nom: "",
+            vendeur_prenom: "",
+            vendeur_adresse: "",
+          };
+
+          // Une entrée auto-créée n'est "incomplete" que si la pièce d'identité ET le prix
+          // d'achat manquent. Pour une reprise : prix_achat = 0 (cf. logique reprise =
+          // pas de cash décaissé), donc l'entrée reste flagged jusqu'à saisie de la pièce.
           const newEntry = {
             id: crypto.randomUUID ? crypto.randomUUID() : `lp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
             vehicle_id: v.id,
@@ -2273,16 +2293,21 @@ function FleetPage({ vehicles, setVehicles, orders, apiKey, usage, setUsage, liv
             vin: v.vin || "",
             kilometrage: v.kilometrage || "",
             pays_origine: "France",
-            prix_achat: v.prix_achat || "",
-            vendeur_type: "particulier",
-            vendeur_nom: "", vendeur_prenom: "", vendeur_adresse: "",
+            // Pour une reprise : prix_achat = valeur de reprise (référence comptable interne).
+            // Pour un véhicule normal : prix_achat saisi par l'abonné.
+            prix_achat: v.origine === "reprise"
+              ? (parseFloat(v.valeur_reprise) || 0)
+              : (v.prix_achat || ""),
+            ...vendeurDefaults,
             vendeur_piece_type: "CNI", vendeur_piece_id: "", vendeur_piece_date: "", vendeur_piece_autorite: "",
-            mode_reglement: "Virement",
+            mode_reglement: v.origine === "reprise" ? "Reprise (compensation)" : "Virement",
             date_sortie: "", acheteur_nom: "", acheteur_adresse: "",
             // Champs CNI acheteur — OPTIONNELS (n'entrent pas dans isComplete).
             // Bonne pratique mais pas exigée par l'art. R.321-3 du Code pénal.
             acheteur_piece_type: "CNI", acheteur_piece_id: "", acheteur_piece_date: "", acheteur_piece_autorite: "",
-            notes: "Entrée créée automatiquement depuis la flotte — à compléter",
+            notes: v.origine === "reprise"
+              ? `Véhicule repris lors de la vente ${v.origine_ref || ""} · Cédé par ${repriseClient?.name || "client"} · Pièce d'identité à compléter`.trim()
+              : "Entrée créée automatiquement depuis la flotte — à compléter",
             _incomplete: true,
           };
           lpCopy.push(newEntry);
@@ -3236,6 +3261,10 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
                       style={{ width: "100%" }}
                       onClick={() => {
                         const d = form.reprise_data || {};
+                        // Récupération des infos client (qui cède son ancien véhicule au garage).
+                        // Du point de vue du LP, ce client EST le vendeur/fournisseur du véhicule repris.
+                        const client = form.client || {};
+                        const isClientPro = !!(client.siren && String(client.siren).trim());
                         const newVehicle = {
                           id: uid(),
                           plate: (form.reprise_plate || "").toUpperCase().replace(/\s/g, ""),
@@ -3252,6 +3281,17 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
                           valeur_reprise: parseFloat(form.reprise_valeur) || 0,
                           origine: "reprise",
                           origine_ref: form.ref || "",
+                          // Infos vendeur pré-remplies depuis le client de la facture.
+                          // Permet au LP auto-créé de se baser sur ces données au lieu d'avoir
+                          // tous les champs vides. L'abonné devra quand même compléter la pièce d'identité.
+                          reprise_client: {
+                            name: client.name || "",
+                            address: client.address || "",
+                            phone: client.phone || "",
+                            email: client.email || "",
+                            siren: client.siren || "",
+                            type: isClientPro ? "pro" : "particulier",
+                          },
                           prix_vente: "",
                           statut: "disponible",
                           date_entree: today(),
@@ -3272,7 +3312,7 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
                           carrosserie: d.carrosserie || "",
                           date_mise_en_circulation: d.date_mise_en_circulation || "",
                           documents: [],
-                          notes: `Véhicule repris lors de la vente ${form.ref || ""} · Valeur de reprise : ${fmt(parseFloat(form.reprise_valeur) || 0)}`.trim(),
+                          notes: `Véhicule repris lors de la vente ${form.ref || ""} · Valeur de reprise : ${fmt(parseFloat(form.reprise_valeur) || 0)} · Cédé par ${client.name || "—"}`.trim(),
                         };
                         setVehiclesRaw(prev => [newVehicle, ...(prev || [])]);
                         set("reprise_ajoutee_flotte", true);
@@ -5892,7 +5932,7 @@ function LivrePoliceModal({ entry, nextNum, vehicles, onSave, onClose }) {
   };
 
   const PIECES = ["CNI", "Passeport", "Permis de conduire", "Carte de séjour", "Extrait Kbis"];
-  const REGLEMENTS = ["Virement", "Chèque", "Espèces", "Financement"];
+  const REGLEMENTS = ["Virement", "Chèque", "Espèces", "Financement", "Reprise (compensation)"];
 
   return (
     <div className="modal-bg" onClick={e => e.target === e.currentTarget && onClose()}>
