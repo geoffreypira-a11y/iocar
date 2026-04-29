@@ -5446,20 +5446,24 @@ function LivreDePolice({ vehicles, livrePolice, setLivrePolice, dealer, viewMode
     acheteur_adresse: "Adresse acheteur",
   };
 
-  // Calcule les différences entre 2 versions de l'entrée
+  // Calcule les différences entre 2 versions de l'entrée.
+  // ⚠ Une transition "" → "valeur" = premier remplissage, pas une modification.
+  // On ne demande de justification QUE si on modifie une valeur déjà saisie.
+  // Cela évite de demander une "justification" la 1ère fois qu'on complète une
+  // entrée auto-créée depuis la flotte (où tous les champs vendeur sont vides).
   const computeDiff = (oldEntry, newEntry) => {
     const changes = {};
     for (const key of Object.keys(SENSITIVE_FIELDS)) {
-      const oldVal = oldEntry[key] ?? "";
-      const newVal = newEntry[key] ?? "";
-      // Comparaison en string pour gérer 8000 vs "8000"
-      if (String(oldVal).trim() !== String(newVal).trim()) {
-        changes[key] = {
-          label: SENSITIVE_FIELDS[key],
-          avant: String(oldVal),
-          apres: String(newVal),
-        };
-      }
+      const oldVal = String(oldEntry[key] ?? "").trim();
+      const newVal = String(newEntry[key] ?? "").trim();
+      if (oldVal === newVal) continue;          // pas de changement
+      if (oldVal === "" && newVal !== "") continue; // premier remplissage → ignoré
+      // Cas restants : modification réelle (valeur changée) ou suppression (valeur effacée)
+      changes[key] = {
+        label: SENSITIVE_FIELDS[key],
+        avant: String(oldEntry[key] ?? ""),
+        apres: String(newEntry[key] ?? ""),
+      };
     }
     return changes;
   };
@@ -5910,8 +5914,18 @@ function LivrePoliceModal({ entry, nextNum, vehicles, onSave, onClose }) {
             ))}
           </div>
 
-          {/* Section vendeur */}
-          <div style={{ fontFamily: "Syne", fontSize: 12, fontWeight: 700, letterSpacing: 1, color: "var(--blue)", textTransform: "uppercase", marginBottom: 10 }}>👤 Vendeur / Fournisseur</div>
+          {/* Section vendeur — c'est-à-dire la PROVENANCE du véhicule.
+              Légalement (art. R.321-3 Code pénal), le LP doit identifier la
+              personne qui a CÉDÉ le véhicule au garage (l'ancien propriétaire).
+              C'est sa pièce d'identité qu'il faut, pas celle de l'acheteur final. */}
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ fontFamily: "Syne", fontSize: 12, fontWeight: 700, letterSpacing: 1, color: "var(--blue)", textTransform: "uppercase" }}>
+              🔄 Provenance du véhicule
+            </div>
+            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4, lineHeight: 1.5 }}>
+              Identité de la personne qui vous a <strong style={{ color: "var(--text)" }}>cédé / vendu</strong> ce véhicule (ancien propriétaire). Sa pièce d'identité est obligatoire (art. R.321-3 du Code pénal).
+            </div>
+          </div>
           <div className="form-grid" style={{ marginBottom: 20 }}>
             <div className="form-group">
               <label className="form-label">Type</label>
@@ -5922,17 +5936,17 @@ function LivrePoliceModal({ entry, nextNum, vehicles, onSave, onClose }) {
             </div>
             <div className="form-group">
               <label className="form-label">Nom / Raison sociale *</label>
-              <input className="form-input" value={form.vendeur_nom||""} onChange={e => set("vendeur_nom", e.target.value)} />
+              <input className="form-input" value={form.vendeur_nom||""} onChange={e => set("vendeur_nom", e.target.value)} placeholder="ex: Dupont" />
             </div>
             {form.vendeur_type === "particulier" && (
               <div className="form-group">
                 <label className="form-label">Prénom</label>
-                <input className="form-input" value={form.vendeur_prenom||""} onChange={e => set("vendeur_prenom", e.target.value)} />
+                <input className="form-input" value={form.vendeur_prenom||""} onChange={e => set("vendeur_prenom", e.target.value)} placeholder="ex: Jean" />
               </div>
             )}
             <div className="form-group full">
               <label className="form-label">Adresse</label>
-              <input className="form-input" value={form.vendeur_adresse||""} onChange={e => set("vendeur_adresse", e.target.value)} />
+              <input className="form-input" value={form.vendeur_adresse||""} onChange={e => set("vendeur_adresse", e.target.value)} placeholder="adresse complète de l'ancien propriétaire" />
             </div>
             <div className="form-group">
               <label className="form-label">Type pièce d'identité *</label>
@@ -5942,7 +5956,7 @@ function LivrePoliceModal({ entry, nextNum, vehicles, onSave, onClose }) {
             </div>
             <div className="form-group">
               <label className="form-label">N° pièce d'identité *</label>
-              <input className="form-input" value={form.vendeur_piece_id||""} onChange={e => set("vendeur_piece_id", e.target.value)} />
+              <input className="form-input" value={form.vendeur_piece_id||""} onChange={e => set("vendeur_piece_id", e.target.value)} placeholder="N° de la CNI / passeport de l'ancien propriétaire" />
             </div>
             <div className="form-group">
               <label className="form-label">Date délivrance</label>
@@ -5964,8 +5978,15 @@ function LivrePoliceModal({ entry, nextNum, vehicles, onSave, onClose }) {
             </div>
           </div>
 
-          {/* Section sortie */}
-          <div style={{ fontFamily: "Syne", fontSize: 12, fontWeight: 700, letterSpacing: 1, color: "var(--green)", textTransform: "uppercase", marginBottom: 10 }}>🏷 Sortie du parc</div>
+          {/* Section sortie — l'acheteur, c'est le client final qui rachète au garage. */}
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ fontFamily: "Syne", fontSize: 12, fontWeight: 700, letterSpacing: 1, color: "var(--green)", textTransform: "uppercase" }}>
+              🏷 Sortie du parc
+            </div>
+            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4, lineHeight: 1.5 }}>
+              Identité du <strong style={{ color: "var(--text)" }}>nouveau propriétaire</strong> (votre client final qui rachète le véhicule). À compléter lors de la vente.
+            </div>
+          </div>
           <div className="form-grid" style={{ marginBottom: 16 }}>
             <div className="form-group">
               <label className="form-label">Motif de sortie</label>
@@ -5983,11 +6004,11 @@ function LivrePoliceModal({ entry, nextNum, vehicles, onSave, onClose }) {
               <input className="form-input" value={form.date_sortie||""} onChange={e => set("date_sortie", e.target.value)} placeholder="jj/mm/aaaa" />
             </div>
             <div className="form-group">
-              <label className="form-label">Nom acheteur</label>
-              <input className="form-input" value={form.acheteur_nom||""} onChange={e => set("acheteur_nom", e.target.value)} />
+              <label className="form-label">Nom de l'acheteur</label>
+              <input className="form-input" value={form.acheteur_nom||""} onChange={e => set("acheteur_nom", e.target.value)} placeholder="nouveau propriétaire" />
             </div>
             <div className="form-group full">
-              <label className="form-label">Adresse acheteur</label>
+              <label className="form-label">Adresse de l'acheteur</label>
               <input className="form-input" value={form.acheteur_adresse||""} onChange={e => set("acheteur_adresse", e.target.value)} />
             </div>
           </div>
