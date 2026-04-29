@@ -2867,15 +2867,24 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
               win.document.write('.pdoc-watermark{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}');
               win.document.write('.pdoc-watermark img{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}');
               win.document.write('.pdoc-table td{background:transparent!important}');
-              // Anti-page-break sur les blocs critiques (totaux, footer mentions)
-              // Pour pdoc-paiements : on FORCE un saut de page AVANT le bloc historique
-              // de paiements. Comme ça la page 1 contient la facture complète et propre
-              // (table + totaux + mentions légales), et la page 2 contient l'historique
-              // des paiements bien rempli — au lieu d'avoir une page 1 à moitié vide
-              // avec le footer mentions poussé tout seul sur la page 2.
+              // Compaction agressive du bloc final pour éviter le débordement
+              // sur 1 ligne. On serre toutes les sections pré-mentions :
+              // garantie, reprise, opération/TVA, paiements.
               win.document.write('.pdoc-totals, .pdoc-footer{page-break-inside:avoid!important}');
-              win.document.write('.pdoc-paiements{page-break-before:always!important;break-before:page!important;margin-top:0!important;padding-top:14mm!important}');
-              // Marges A4 minimales et compaction globale du document pour tenir sur 1 page
+              // Sections (garantie, reprise, opération) : padding et marge réduits
+              win.document.write('.pdoc-section{padding:5px 12px!important;margin-top:6px!important;font-size:9.5px!important}');
+              win.document.write('.pdoc-garantie{padding:5px 12px!important;font-size:10px!important}');
+              win.document.write('.pdoc-reprise{padding:6px 12px!important;font-size:9.5px!important}');
+              win.document.write('.pdoc-reprise > div:first-child{font-size:10px!important;margin-bottom:3px!important}');
+              win.document.write('.pdoc-operation{padding:5px 12px!important;font-size:9px!important;margin-bottom:6px!important}');
+              // Bloc paiements serré aussi
+              win.document.write('.pdoc-paiements{margin-top:8px!important;padding:8px 12px!important;font-size:10px!important}');
+              win.document.write('.pdoc-paiements-title{font-size:8px!important;margin-bottom:4px!important}');
+              // Mentions légales : interligne et taille réduits
+              win.document.write('.pdoc-footer{margin-top:8px!important;padding-top:6px!important}');
+              win.document.write('.pdoc-footer *{line-height:1.3!important;font-size:8.5px!important}');
+              win.document.write('.pdoc-footer h4, .pdoc-footer strong{font-size:8.5px!important}');
+              // Marges A4 minimales
               win.document.write('@page{size:A4 portrait;margin:5mm 6mm}');
               win.document.write('@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}');
               win.document.write('</style>');
@@ -3048,14 +3057,14 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
 
             {/* Garantie véhicule */}
             {(order.garantie_mois || 0) > 0 && (
-              <div style={{ marginTop: 12, padding: "8px 14px", background: "#f9f8f5", borderRadius: 6, fontSize: 11, color: "#555", border: "1px solid #e8e8e8" }}>
+              <div className="pdoc-section pdoc-garantie" style={{ marginTop: 12, padding: "8px 14px", background: "#f9f8f5", borderRadius: 6, fontSize: 11, color: "#555", border: "1px solid #e8e8e8" }}>
                 🛡 <strong>Garantie véhicule : {order.garantie_mois} mois</strong>
               </div>
             )}
 
             {/* Reprise véhicule */}
             {order.reprise_active && (parseFloat(order.reprise_valeur) || 0) > 0 && (
-              <div style={{ marginTop: 12, padding: "10px 14px", background: "#fdf8ec", borderRadius: 6, fontSize: 11, color: "#555", border: "1px solid #e8d9a8" }}>
+              <div className="pdoc-section pdoc-reprise" style={{ marginTop: 12, padding: "10px 14px", background: "#fdf8ec", borderRadius: 6, fontSize: 11, color: "#555", border: "1px solid #e8d9a8" }}>
                 <div style={{ fontWeight: 700, color: "#8a6a1a", marginBottom: 6, fontSize: 12 }}>🔄 Reprise véhicule</div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 16px", fontSize: 11 }}>
                   {(order.reprise_marque || order.reprise_modele) && (
@@ -3127,7 +3136,7 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
               /* FACTURE / AVOIR — mentions légales obligatoires 2026 */
               <div style={{ marginTop: 32, paddingTop: 16, borderTop: "2px solid #e8e8e8" }}>
                 {/* Mentions obligatoires 2026 — bande centrale */}
-                <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 12, padding: "8px 12px", background: "#f9f8f5", borderRadius: 6, fontSize: 10, color: "#888" }}>
+                <div className="pdoc-section pdoc-operation" style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 12, padding: "8px 12px", background: "#f9f8f5", borderRadius: 6, fontSize: 10, color: "#888" }}>
                   <span>📦 Opération : <strong style={{ color: "#555" }}>
                     {order.categorie_operation === "prestation_services" ? "Prestation de services"
                       : order.categorie_operation === "mixte" ? "Livraison de biens + Prestation de services"
