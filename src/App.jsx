@@ -2867,15 +2867,12 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
               win.document.write('.pdoc-watermark{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}');
               win.document.write('.pdoc-watermark img{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}');
               win.document.write('.pdoc-table td{background:transparent!important}');
-              // Anti-page-break sur les blocs critiques (totaux, footer mentions)
-              // Pour pdoc-paiements : on FORCE un saut de page AVANT le bloc historique
-              // de paiements. Comme ça la page 1 contient la facture complète et propre
-              // (table + totaux + mentions légales), et la page 2 contient l'historique
-              // des paiements bien rempli — au lieu d'avoir une page 1 à moitié vide
-              // avec le footer mentions poussé tout seul sur la page 2.
-              win.document.write('.pdoc-totals, .pdoc-footer{page-break-inside:avoid!important}');
-              win.document.write('.pdoc-paiements{page-break-before:always!important;break-before:page!important;margin-top:0!important;padding-top:14mm!important}');
-              // Marges A4 minimales et compaction globale du document pour tenir sur 1 page
+              // Anti-page-break sur les blocs critiques (totaux + footer mentions doivent rester en bloc).
+              // On NE FORCE PAS de saut de page : on laisse le navigateur poser le contenu naturellement.
+              // Si tout tient sur 1 page → tant mieux. Si ça déborde, le navigateur cassera proprement
+              // entre 2 sections (et grâce à page-break-inside:avoid, jamais au milieu d'un bloc important).
+              win.document.write('.pdoc-totals, .pdoc-footer, .pdoc-paiements{page-break-inside:avoid!important}');
+              // Marges A4 minimales
               win.document.write('@page{size:A4 portrait;margin:5mm 6mm}');
               win.document.write('@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}');
               win.document.write('</style>');
