@@ -564,6 +564,36 @@ function daysSince(dateStr) {
   return Math.floor(ms / 86400000);
 }
 
+// ─── QUOTA RECHERCHE PLAQUE ──────────────────────────────────
+// Constantes partagées par TOUS les points de recherche plaque (dashboard,
+// formulaire véhicule, reprise dans facture). Une seule source de vérité.
+const QUOTA_FREE = 10;            // recherches gratuites par mois
+const COST_EXTRA = 0.20;          // € HT par recherche au-delà du quota
+
+// Renvoie l'état du quota pour un usage donné :
+//   { used, remaining, isFree, payantes, montantHT, color, text }
+// "text" est prêt à afficher sous un bouton (ex: "7/10 gratuites" ou "12/10 · 0,40 € à facturer").
+function getQuotaStatus(usage) {
+  const monthKey = new Date().toISOString().slice(0, 7);
+  const used = usage?.[monthKey] || 0;
+  const isFree = used < QUOTA_FREE;
+  const remaining = Math.max(0, QUOTA_FREE - used);
+  const payantes = Math.max(0, used - QUOTA_FREE);
+  const montantHT = payantes * COST_EXTRA;
+  let text, color;
+  if (isFree) {
+    // Format : "7/10 gratuites" (vert si reste >= 3, orange si reste 1-2)
+    text = `${used}/${QUOTA_FREE} gratuites`;
+    color = remaining >= 3 ? "var(--green)" : "var(--orange)";
+  } else {
+    // Format : "12/10 · 0,40 € à facturer" (rouge)
+    text = `${used}/${QUOTA_FREE} · ${montantHT.toFixed(2)} € HT à facturer`;
+    color = "var(--red)";
+  }
+  return { used, remaining, isFree, payantes, montantHT, color, text };
+}
+
+
 function getPayStatut(c, type) {
   if (type === "avoir") {
     if (c.reste <= 0.01) return { label: "✅ Remboursé", cls: "badge-green" };
@@ -1379,9 +1409,21 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
             >
               {searching ? "⏳ Recherche..." : isFree ? "🔍 Identifier" : "💳 Identifier (0,20€)"}
             </button>
-            <div style={{ fontSize: 10, textAlign: "right", color: isFree ? "var(--green)" : "var(--orange)", letterSpacing: .5 }}>
-              {isFree ? `${Math.max(0, 10 - usedThisMonth)} gratuite${10 - usedThisMonth > 1 ? "s" : ""} restante${10 - usedThisMonth > 1 ? "s" : ""}` : "Quota mensuel atteint"}
-            </div>
+            {(() => {
+              const q = getQuotaStatus(usage);
+              return (
+                <>
+                  <div style={{ fontSize: 10, textAlign: "right", color: q.color, letterSpacing: .5, fontWeight: 600 }}>
+                    {q.text}
+                  </div>
+                  {!q.isFree && (
+                    <div style={{ fontSize: 9, textAlign: "right", color: "var(--muted)", letterSpacing: .5 }}>
+                      {COST_EXTRA.toFixed(2)} € HT / recherche supplémentaire
+                    </div>
+                  )}
+                </>
+              );
+            })()}
           </div>
         </div>
       </div>
@@ -1834,12 +1876,12 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
   // ─── QUOTA MENSUEL ────────────────────────────────────────────
-  const QUOTA_FREE = 10;
-  const COST_EXTRA = 0.20;
+  // Utilise les constantes globales (QUOTA_FREE, COST_EXTRA) et le helper getQuotaStatus.
   const monthKey = new Date().toISOString().slice(0, 7); // "2026-04"
   const usedThisMonth = usage?.[monthKey] || 0;
-  const isFree = usedThisMonth < QUOTA_FREE;
-  const remaining = Math.max(0, QUOTA_FREE - usedThisMonth);
+  const quotaStatus = getQuotaStatus(usage);
+  const isFree = quotaStatus.isFree;
+  const remaining = quotaStatus.remaining;
 
   const handleAI = async () => {
     if (!form.plate) return;
@@ -1900,11 +1942,14 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
                 style={!isFree ? { borderColor: "var(--orange)", color: "var(--orange)" } : {}}>
                 {loading ? "⏳" : isFree ? "🔍" : "💳"} {loading ? "Recherche..." : "Identifier la plaque"}
               </button>
-              <div style={{ fontSize: 10, color: isFree ? "var(--green)" : "var(--orange)", letterSpacing: 1 }}>
-                {isFree
-                  ? `${remaining} recherche${remaining !== 1 ? "s" : ""} gratuite${remaining !== 1 ? "s" : ""} restante${remaining !== 1 ? "s" : ""}`
-                  : `Quota atteint · 0,20 € / recherche`}
+              <div style={{ fontSize: 10, color: quotaStatus.color, letterSpacing: 1, fontWeight: 600 }}>
+                {quotaStatus.text}
               </div>
+              {!isFree && (
+                <div style={{ fontSize: 9, color: "var(--muted)", letterSpacing: .5 }}>
+                  {COST_EXTRA.toFixed(2)} € HT par recherche supplémentaire
+                </div>
+              )}
             </div>
           </div>
 
@@ -3103,10 +3148,10 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
                     // pour éviter les factures surprise.
                     const monthKey = new Date().toISOString().slice(0, 7);
                     const usedThisMonth = usage?.[monthKey] || 0;
-                    const isFree = usedThisMonth < 10;
+                    const isFree = usedThisMonth < QUOTA_FREE;
                     if (!isFree) {
                       const ok = window.confirm(
-                        `⚠️ Quota mensuel atteint (${usedThisMonth} recherches ce mois)\n\nCette recherche est payante : 0,20 €\n\nConfirmer ?`
+                        `⚠️ Quota mensuel atteint (${usedThisMonth} recherches ce mois)\n\nCette recherche est payante : ${COST_EXTRA.toFixed(2)} €\n\nConfirmer ?`
                       );
                       if (!ok) return;
                     }
@@ -3137,6 +3182,23 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
                   {repriseSearching ? "…" : "🔍 Rechercher"}
                 </button>
               </div>
+
+              {/* Compteur quota mensuel — visible en permanence pour que l'abonné
+                  sache combien de recherches gratuites il lui reste, et le montant
+                  qui sera facturé s'il dépasse. */}
+              {(() => {
+                const q = getQuotaStatus(usage);
+                return (
+                  <div style={{ marginBottom: 10, fontSize: 11, color: q.color, fontWeight: 600, letterSpacing: .3 }}>
+                    {q.text}
+                    {!q.isFree && (
+                      <span style={{ display: "block", fontSize: 10, color: "var(--muted)", fontWeight: 400, marginTop: 2 }}>
+                        {COST_EXTRA.toFixed(2)} € HT par recherche supplémentaire
+                      </span>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* Champs véhicule */}
               <div className="form-grid" style={{ marginBottom: 10 }}>
