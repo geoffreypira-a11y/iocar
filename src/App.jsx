@@ -2867,8 +2867,12 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
               win.document.write('.pdoc-watermark{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}');
               win.document.write('.pdoc-watermark img{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}');
               win.document.write('.pdoc-table td{background:transparent!important}');
-              // Anti-page-break sur le bloc final pour éviter qu'une seule ligne déborde sur une 2e page
-              win.document.write('.pdoc-totals, .pdoc-footer, .pdoc-paiements{page-break-inside:avoid!important}');
+              // Anti-page-break sur les blocs critiques (totaux, footer mentions)
+              // Pour pdoc-paiements, on AUTORISE la coupure : si le bloc Historique
+              // de paiements ne tient pas, il bascule proprement sur une page 2
+              // (plutôt que de pousser le footer mentions sur p2 et laisser p1 à moitié vide).
+              win.document.write('.pdoc-totals, .pdoc-footer{page-break-inside:avoid!important}');
+              win.document.write('.pdoc-paiements{page-break-before:auto!important;break-inside:auto!important}');
               // Marges A4 minimales et compaction globale du document pour tenir sur 1 page
               win.document.write('@page{size:A4 portrait;margin:5mm 6mm}');
               win.document.write('@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}');
@@ -3441,8 +3445,11 @@ function PVLivraisonDoc({ entry, dealer, onSave, onClose }) {
     win.document.write('<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Syne:wght@700;800&display=swap" rel="stylesheet">');
     win.document.write('<style>');
     win.document.write('body{margin:0;padding:0;background:#fff;font-family:"DM Sans",sans-serif;color:#1a1a1a}');
-    win.document.write('#pv-livraison-print{max-width:none!important;margin:0 auto;padding:8mm 10mm!important;color:#1a1a1a!important;font-size:11px!important;line-height:1.4!important}');
+    win.document.write('#pv-livraison-print{max-width:none!important;margin:0 auto;padding:8mm 10mm!important;color:#1a1a1a!important;font-size:11px!important;line-height:1.4!important;position:relative!important;overflow:hidden!important}');
     win.document.write('#pv-livraison-print *{color:inherit}');
+    // Filigrane — forcer l'impression des couleurs très claires (sinon les navigateurs n'impriment pas les fonds)
+    win.document.write('.pdoc-watermark{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}');
+    win.document.write('.pdoc-watermark img{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}');
     // Compaction agressive pour tenir sur 1 page A4
     win.document.write('#pv-livraison-print > div:first-child{margin-bottom:10px!important;padding-bottom:8px!important}');// en-tête
     win.document.write('#pv-livraison-print table{margin-bottom:10px!important}');
@@ -3494,7 +3501,34 @@ function PVLivraisonDoc({ entry, dealer, onSave, onClose }) {
 
         <div style={{ flex: 1, overflow: "auto", background: "#2a2a2a", padding: 20 }}>
           {/* Document A4 imprimable */}
-          <div className="pdoc" id="pv-livraison-print" style={{ background: "#fff", color: "#1a1a1a", padding: "32px 40px", maxWidth: 800, margin: "0 auto", fontFamily: "DM Sans, system-ui, sans-serif", fontSize: 12, lineHeight: 1.5 }}>
+          <div className="pdoc" id="pv-livraison-print" style={{ position: "relative", overflow: "hidden", background: "#fff", color: "#1a1a1a", padding: "32px 40px", maxWidth: 800, margin: "0 auto", fontFamily: "DM Sans, system-ui, sans-serif", fontSize: 12, lineHeight: 1.5 }}>
+
+            {/* ── FILIGRANE DIAGONAL : logo du garage en travers, en très transparent ── */}
+            {dealer?.logo && (
+              <div className="pdoc-watermark" aria-hidden="true" style={{
+                position: "absolute",
+                top: 0, left: 0, right: 0, bottom: 0,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                pointerEvents: "none",
+                zIndex: 0,
+                overflow: "hidden",
+              }}>
+                <img src={dealer.logo} alt="" style={{
+                  width: "75%",
+                  maxWidth: 600,
+                  opacity: 0.06,
+                  transform: "rotate(-28deg)",
+                  filter: dealer.logoInvert ? "invert(1)" : "none",
+                  mixBlendMode: dealer.logoBlend || "normal",
+                  objectFit: "contain",
+                }} />
+              </div>
+            )}
+
+            {/* Contenu au-dessus du filigrane */}
+            <div style={{ position: "relative", zIndex: 1 }}>
 
             {/* En-tête */}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24, paddingBottom: 16, borderBottom: "2px solid #d4a843" }}>
@@ -3613,6 +3647,7 @@ function PVLivraisonDoc({ entry, dealer, onSave, onClose }) {
             <div style={{ marginTop: 32, paddingTop: 12, borderTop: "1px solid #eee", fontSize: 10, color: "#666", textAlign: "center" }}>
               Document généré le {today()} · {garageName} {garageSiret && `· SIRET ${garageSiret}`}
             </div>
+            </div>{/* /position:relative wrapper */}
           </div>
         </div>
       </div>
