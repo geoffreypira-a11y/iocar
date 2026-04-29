@@ -2839,8 +2839,11 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
               document.querySelectorAll('style').forEach(s => win.document.write(s.textContent));
               // Forcer le layout A4 et le footer en bas
               win.document.write('body{margin:0;padding:0;background:#fff;font-family:"DM Sans",sans-serif}');
-              win.document.write('.print-doc{min-height:auto;display:flex;flex-direction:column;padding:14px 18px}');
-              win.document.write('.print-doc-content{flex:1}');
+              // Le print-doc occupe TOUTE la hauteur de la page A4 (≈ 287mm utiles avec marges 5mm).
+              // Avec display:flex + flex-direction:column + flex:1 sur le content, le footer
+              // est PHYSIQUEMENT collé en bas de page 1, peu importe la taille du contenu.
+              win.document.write('.print-doc{min-height:287mm!important;display:flex;flex-direction:column;padding:14px 18px}');
+              win.document.write('.print-doc-content{flex:1!important;display:flex;flex-direction:column}');
               // Force le layout horizontal de l'en-tête (annule la règle mobile @media max-width:768px
               // qui fait passer pdoc-head en colonne, puisque la fenêtre d'impression peut être étroite)
               win.document.write('.pdoc-head{flex-direction:row!important;justify-content:space-between!important;align-items:flex-start!important;gap:24px!important;margin-bottom:16px!important}');
@@ -2942,22 +2945,21 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
                   {dealer?.tva_num && <span>TVA : {dealer.tva_num}</span>}
                 </div>
               </div>
-              <div>
+              <div style={{ textAlign: "right" }}>
                 <div className="pdoc-type">{order.type === "facture" ? "FACTURE" : order.type === "avoir" ? "AVOIR" : "BON DE COMMANDE"}</div>
                 <div className="pdoc-ref">N° {order.ref}</div>
                 <div className="pdoc-ref">Date : {order.date_creation}</div>
                 {order.date_echeance && <div className="pdoc-ref">Échéance : {order.date_echeance}</div>}
+
+                {/* Bloc CLIENT directement sous FACTURE/Ref pour gagner de la place verticale */}
+                <div style={{ marginTop: 16, paddingTop: 12, borderTop: "1px solid #e8e8e8", textAlign: "right" }}>
+                  <div className="pdoc-plabel" style={{ marginBottom: 4 }}>Client</div>
+                  <div className="pdoc-pname" style={{ fontSize: 13 }}>{order.client?.name || "—"}</div>
+                  <div className="pdoc-pinfo" style={{ fontSize: 10 }}>{order.client?.address}{order.client?.phone && <><br />{order.client.phone}</>}{order.client?.email && <><br />{order.client.email}</>}</div>
+                </div>
               </div>
             </div>
             <hr className="pdoc-divider" />
-            {/* Section Client uniquement (les infos vendeur sont déjà dans l'en-tête) */}
-            <div className="pdoc-parties pdoc-parties-client-only" style={{ display: "block", marginBottom: 20 }}>
-              <div>
-                <div className="pdoc-plabel">Client</div>
-                <div className="pdoc-pname">{order.client?.name || "—"}</div>
-                <div className="pdoc-pinfo">{order.client?.address}{order.client?.phone && <><br />{order.client.phone}</>}{order.client?.email && <><br />{order.client.email}</>}</div>
-              </div>
-            </div>
             <table className="pdoc-table">
               <thead>
                 <tr><th>Description véhicule</th><th>Plaque</th><th>VIN / Réf.</th><th style={{ textAlign: "right" }}>Prix HT</th></tr>
