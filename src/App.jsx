@@ -4593,21 +4593,169 @@ function LivreDePolice({ vehicles, livrePolice, setLivrePolice, dealer, viewMode
 
   const entries = livrePolice || [];
 
-  const sorted = [...entries].sort((a, b) => (b.num_ordre || 0) - (a.num_ordre || 0));
+  // Toggle pour l'admin : afficher ou masquer les entrées archivées
+  const [showArchived, setShowArchived] = useState(false);
+
+  // On filtre les archivées par défaut. Admin peut les afficher via le toggle.
+  const visibleEntries = showArchived ? entries : entries.filter(e => !e._archived);
+
+  const sorted = [...visibleEntries].sort((a, b) => (b.num_ordre || 0) - (a.num_ordre || 0));
   const filtered = sorted.filter(e =>
     !search || `${e.marque} ${e.modele} ${e.immat} ${e.vendeur_nom} ${e.acheteur_nom}`.toLowerCase().includes(search.toLowerCase())
   );
 
   const nextNum = (entries.length > 0 ? Math.max(...entries.map(e => e.num_ordre || 0)) : 0) + 1;
 
+  // ── HISTORIQUE LP — champs sensibles à tracer ──
+  // Ces champs sont surveillés à chaque modification : si leur valeur change,
+  // on log un événement dans entry.historique. C'est la traçabilité légale
+  // (esprit NF525 / art. R321-3 Code pénal).
+  const SENSITIVE_FIELDS = {
+    marque: "Marque",
+    modele: "Modèle",
+    annee: "Année",
+    immat: "Immatriculation",
+    vin: "VIN / Châssis",
+    kilometrage: "Kilométrage",
+    couleur: "Couleur",
+    pays_origine: "Pays d'origine",
+    date_entree: "Date d'entrée",
+    date_sortie: "Date de sortie",
+    prix_achat: "Prix d'achat",
+    mode_reglement: "Mode de règlement",
+    vendeur_nom: "Nom vendeur",
+    vendeur_prenom: "Prénom vendeur",
+    vendeur_adresse: "Adresse vendeur",
+    vendeur_type: "Type vendeur",
+    vendeur_piece_type: "Type de pièce",
+    vendeur_piece_id: "N° pièce d'identité",
+    vendeur_piece_date: "Date de pièce",
+    vendeur_piece_autorite: "Autorité de délivrance",
+    acheteur_nom: "Nom acheteur",
+    acheteur_adresse: "Adresse acheteur",
+  };
+
+  // Calcule les différences entre 2 versions de l'entrée
+  const computeDiff = (oldEntry, newEntry) => {
+    const changes = {};
+    for (const key of Object.keys(SENSITIVE_FIELDS)) {
+      const oldVal = oldEntry[key] ?? "";
+      const newVal = newEntry[key] ?? "";
+      // Comparaison en string pour gérer 8000 vs "8000"
+      if (String(oldVal).trim() !== String(newVal).trim()) {
+        changes[key] = {
+          label: SENSITIVE_FIELDS[key],
+          avant: String(oldVal),
+          apres: String(newVal),
+        };
+      }
+    }
+    return changes;
+  };
+
+  // Modale de justification — apparaît avant la sauvegarde si des modifications
+  // sur des champs sensibles ont été détectées. Sans justification, pas de save.
+  const [pendingModif, setPendingModif] = useState(null); // { entry, oldEntry, diff } | null
+  const [modifReason, setModifReason] = useState("");
+  const [modifReasonCustom, setModifReasonCustom] = useState("");
+
   const saveEntry = (entry) => {
     // Retirer le flag _incomplete si les infos obligatoires sont remplies
     const isComplete = entry.vendeur_nom && entry.vendeur_piece_id && entry.prix_achat;
-    const cleaned = { ...entry, _incomplete: !isComplete };
-    const exists = entries.find(x => x.id === cleaned.id);
-    const next = exists ? entries.map(x => x.id === cleaned.id ? cleaned : x) : [...entries, cleaned];
-    setLivrePolice(next);
+    const exists = entries.find(x => x.id === entry.id);
+
+    const now = new Date();
+    const horoStamp = {
+      date: today(),
+      heure: now.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }),
+    };
+
+    if (exists) {
+      // ─── MODIFICATION ───
+      const diff = computeDiff(exists, entry);
+      const hasChanges = Object.keys(diff).length > 0;
+
+      if (hasChanges) {
+        // Modifications de champs sensibles détectées → on demande une justification
+        // avant de persister. La sauvegarde réelle se fait dans confirmModif().
+        setPendingModif({ entry, oldEntry: exists, diff });
+        return;
+      }
+
+      // Pas de changement sensible → on enregistre directement (notes, annotation PV…)
+      const cleaned = { ...entry, _incomplete: !isComplete, historique: exists.historique || [] };
+      setLivrePolice(entries.map(x => x.id === cleaned.id ? cleaned : x));
+      setModal(null);
+    } else {
+      // ─── CRÉATION ───
+      const cleaned = {
+        ...entry,
+        _incomplete: !isComplete,
+        historique: [{ ...horoStamp, action: "creation" }],
+      };
+      setLivrePolice([...entries, cleaned]);
+      setModal(null);
+    }
+  };
+
+  // Confirme la modification après saisie de la justification
+  const confirmModif = () => {
+    if (!pendingModif) return;
+    const reason = modifReason === "Autre" ? modifReasonCustom.trim() : modifReason.trim();
+    if (!reason) return;
+
+    const { entry, oldEntry, diff } = pendingModif;
+    const isComplete = entry.vendeur_nom && entry.vendeur_piece_id && entry.prix_achat;
+    const now = new Date();
+    const horoStamp = {
+      date: today(),
+      heure: now.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }),
+    };
+    const cleaned = {
+      ...entry,
+      _incomplete: !isComplete,
+      historique: [...(oldEntry.historique || []), { ...horoStamp, action: "modification", changes: diff, raison: reason }],
+    };
+    setLivrePolice(entries.map(x => x.id === cleaned.id ? cleaned : x));
+    setPendingModif(null);
+    setModifReason("");
+    setModifReasonCustom("");
     setModal(null);
+  };
+
+  const cancelModif = () => {
+    setPendingModif(null);
+    setModifReason("");
+    setModifReasonCustom("");
+  };
+
+  // ── ARCHIVAGE (admin) — alternative douce à la suppression ──
+  // L'entrée n'est plus affichée dans la liste mais reste en base, avec
+  // la raison d'archivage et l'horodatage tracés dans l'historique.
+  const [pendingArchive, setPendingArchive] = useState(null); // { id, num, label }
+  const [archiveReason, setArchiveReason] = useState("");
+
+  const archiveEntry = () => {
+    if (!pendingArchive || !archiveReason.trim()) return;
+    const now = new Date();
+    setLivrePolice(entries.map(e => e.id === pendingArchive.id ? {
+      ...e,
+      _archived: true,
+      archive_date: today(),
+      archive_heure: now.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }),
+      archive_raison: archiveReason.trim(),
+      historique: [
+        ...(e.historique || []),
+        {
+          date: today(),
+          heure: now.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }),
+          action: "archivage",
+          raison: archiveReason.trim(),
+        },
+      ],
+    } : e));
+    setPendingArchive(null);
+    setArchiveReason("");
   };
 
   // Sauvegarde silencieuse (depuis PVLivraisonDoc — sans fermer la modale livre)
@@ -4631,6 +4779,131 @@ function LivreDePolice({ vehicles, livrePolice, setLivrePolice, dealer, viewMode
           onConfirm={() => delEntry(pendingDelete.id)}
           onCancel={() => setPendingDelete(null)}
         />
+      )}
+
+      {/* Modale d'archivage — alternative douce à la suppression.
+          Demande la raison qui sera tracée dans l'historique. */}
+      {pendingArchive && (
+        <div className="modal-bg" onClick={e => e.target === e.currentTarget && setPendingArchive(null)}>
+          <div className="modal" style={{ maxWidth: 480 }}>
+            <div className="modal-hd">
+              <span className="modal-title">♻️ Archiver l'entrée N°{String(pendingArchive.num).padStart(4,"0")}</span>
+              <button className="close-btn" onClick={() => { setPendingArchive(null); setArchiveReason(""); }}>×</button>
+            </div>
+            <div className="modal-body">
+              <div style={{ fontSize: 12, color: "var(--muted2)", marginBottom: 14, lineHeight: 1.6 }}>
+                <strong>{pendingArchive.label}</strong>
+                <br />
+                L'entrée sera <strong style={{ color: "var(--text)" }}>masquée de la liste</strong> mais conservée en base pour l'historique légal (5 ans, art. R321-3).
+                Vous pourrez la retrouver via la case « Afficher les archivées ».
+              </div>
+              <div className="form-group">
+                <label className="form-label">Raison de l'archivage <span style={{ color: "var(--red)" }}>*</span></label>
+                <select
+                  className="form-input"
+                  value={archiveReason}
+                  onChange={e => setArchiveReason(e.target.value)}
+                  style={{ marginBottom: 8 }}
+                >
+                  <option value="">— Sélectionner —</option>
+                  <option value="Doublon">Doublon (déjà saisi)</option>
+                  <option value="Erreur de saisie">Erreur de saisie</option>
+                  <option value="Annulation de la vente">Annulation de la vente</option>
+                  <option value="Rétractation client">Rétractation client</option>
+                  <option value="Test / saisie de démonstration">Test / saisie de démonstration</option>
+                  <option value="Autre">Autre (préciser)</option>
+                </select>
+                {archiveReason === "Autre" && (
+                  <input
+                    className="form-input"
+                    placeholder="Précisez la raison..."
+                    onChange={e => setArchiveReason(e.target.value)}
+                    autoFocus
+                  />
+                )}
+              </div>
+            </div>
+            <div className="modal-foot">
+              <button className="btn btn-ghost" onClick={() => { setPendingArchive(null); setArchiveReason(""); }}>Annuler</button>
+              <button
+                className="btn btn-primary"
+                disabled={!archiveReason.trim() || archiveReason === "Autre"}
+                onClick={archiveEntry}
+              >♻️ Archiver</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modale de justification des modifications.
+          Apparaît à la place de la modale d'édition quand des champs sensibles ont été modifiés.
+          Sans justification → la modification n'est pas enregistrée. */}
+      {pendingModif && (
+        <div className="modal-bg" onClick={e => e.target === e.currentTarget && cancelModif()}>
+          <div className="modal" style={{ maxWidth: 540 }}>
+            <div className="modal-hd">
+              <span className="modal-title">📝 Justification de la modification</span>
+              <button className="close-btn" onClick={cancelModif}>×</button>
+            </div>
+            <div className="modal-body">
+              <div style={{ fontSize: 12, color: "var(--muted2)", marginBottom: 14, lineHeight: 1.6 }}>
+                Le Livre de Police est un registre légal. Toute modification doit être justifiée pour
+                garantir l'intégrité des écritures (esprit art. R321-3 Code pénal).
+              </div>
+
+              {/* Aperçu des modifications détectées */}
+              <div style={{ background: "rgba(212,168,67,.06)", border: "1px solid rgba(212,168,67,.2)", borderRadius: 8, padding: "10px 14px", marginBottom: 14, maxHeight: 180, overflowY: "auto" }}>
+                <div style={{ fontSize: 10, letterSpacing: 1, textTransform: "uppercase", color: "var(--gold)", marginBottom: 6, fontWeight: 700 }}>
+                  Modifications détectées ({Object.keys(pendingModif.diff).length})
+                </div>
+                {Object.entries(pendingModif.diff).map(([k, c]) => (
+                  <div key={k} style={{ fontSize: 11, marginBottom: 4, display: "flex", flexWrap: "wrap", gap: 6, alignItems: "baseline" }}>
+                    <strong style={{ color: "var(--muted2)", minWidth: 130 }}>{c.label} :</strong>
+                    <span style={{ color: "var(--red)", textDecoration: "line-through" }}>{c.avant || "(vide)"}</span>
+                    <span style={{ color: "var(--muted)" }}>→</span>
+                    <span style={{ color: "var(--green)" }}>{c.apres || "(vide)"}</span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Raison de la modification <span style={{ color: "var(--red)" }}>*</span></label>
+                <select
+                  className="form-input"
+                  value={modifReason}
+                  onChange={e => setModifReason(e.target.value)}
+                  style={{ marginBottom: 8 }}
+                  autoFocus
+                >
+                  <option value="">— Sélectionner —</option>
+                  <option value="Erreur de saisie initiale">Erreur de saisie initiale</option>
+                  <option value="Information complémentaire reçue du vendeur">Information complémentaire reçue du vendeur</option>
+                  <option value="Correction sur pièce officielle">Correction sur pièce officielle</option>
+                  <option value="Mise à jour suite à livraison">Mise à jour suite à livraison</option>
+                  <option value="Régularisation administrative">Régularisation administrative</option>
+                  <option value="Autre">Autre (préciser)</option>
+                </select>
+                {modifReason === "Autre" && (
+                  <input
+                    className="form-input"
+                    placeholder="Précisez la raison..."
+                    value={modifReasonCustom}
+                    onChange={e => setModifReasonCustom(e.target.value)}
+                    autoFocus
+                  />
+                )}
+              </div>
+            </div>
+            <div className="modal-foot">
+              <button className="btn btn-ghost" onClick={cancelModif}>Annuler la modification</button>
+              <button
+                className="btn btn-primary"
+                disabled={!modifReason || (modifReason === "Autre" && !modifReasonCustom.trim())}
+                onClick={confirmModif}
+              >✓ Confirmer la modification</button>
+            </div>
+          </div>
+        </div>
       )}
 
       <div className="page-header">
@@ -4663,7 +4936,15 @@ function LivreDePolice({ vehicles, livrePolice, setLivrePolice, dealer, viewMode
         )}
       </div>
 
-      <input className="search-input" placeholder="Rechercher véhicule, vendeur, acheteur..." value={search} onChange={e => setSearch(e.target.value)} style={{ marginBottom: 16, width: 320 }} />
+      <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 16, flexWrap: "wrap" }}>
+        <input className="search-input" placeholder="Rechercher véhicule, vendeur, acheteur..." value={search} onChange={e => setSearch(e.target.value)} style={{ width: 320, marginBottom: 0 }} />
+        {viewMode === "admin" && entries.some(e => e._archived) && (
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--muted)", cursor: "pointer" }}>
+            <input type="checkbox" checked={showArchived} onChange={e => setShowArchived(e.target.checked)} />
+            Afficher les archivées <span style={{ color: "var(--gold)" }}>({entries.filter(e => e._archived).length})</span>
+          </label>
+        )}
+      </div>
 
       <div className="tbl-wrap">
         <table>
@@ -4721,7 +5002,7 @@ function LivreDePolice({ vehicles, livrePolice, setLivrePolice, dealer, viewMode
                 </td>
                 <td style={{ fontSize: 12 }}>{e.acheteur_nom || "—"}</td>
                 <td>
-                  <div style={{ display: "flex", gap: 4 }}>
+                  <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
                     <button className="btn btn-ghost btn-xs" onClick={() => setModal(e)}>✏️</button>
                     {e.date_sortie && (
                       <button
@@ -4730,6 +5011,19 @@ function LivreDePolice({ vehicles, livrePolice, setLivrePolice, dealer, viewMode
                         title="PV de Livraison"
                         style={{ color: "var(--gold)" }}
                       >📜 PV</button>
+                    )}
+                    {viewMode === "admin" && !e._archived && (
+                      <button
+                        className="btn btn-ghost btn-xs"
+                        onClick={() => setPendingArchive({ id: e.id, num: e.num_ordre, label: `${e.marque} ${e.modele} ${e.immat || ""}` })}
+                        title="Archiver (recommandé) — l'entrée sera masquée mais conservée pour l'historique légal"
+                        style={{ color: "#5fb573" }}
+                      >♻️</button>
+                    )}
+                    {viewMode === "admin" && e._archived && (
+                      <span title={`Archivée le ${e.archive_date} : ${e.archive_raison || ""}`} style={{ fontSize: 10, color: "#888", fontStyle: "italic", padding: "0 6px" }}>
+                        Archivée
+                      </span>
                     )}
                     {viewMode === "admin" && (
                       <button className="btn btn-danger btn-xs" onClick={() => setPendingDelete({ id: e.id, num: e.num_ordre, label: `${e.marque} ${e.modele} ${e.immat || ""}` })}>🗑</button>
@@ -4771,6 +5065,7 @@ function LivrePoliceModal({ entry, nextNum, vehicles, onSave, onClose }) {
   });
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const [showHistorique, setShowHistorique] = useState(false);
 
   const fillFromVehicle = (vid) => {
     const v = vehicles?.find(x => x.id === vid);
@@ -4926,6 +5221,14 @@ function LivrePoliceModal({ entry, nextNum, vehicles, onSave, onClose }) {
         </div>
         <div className="modal-foot">
           <button className="btn btn-ghost" onClick={onClose}>Annuler</button>
+          {entry?.historique?.length > 0 && (
+            <button
+              className="btn btn-ghost"
+              onClick={() => setShowHistorique(s => !s)}
+              title="Voir l'historique des modifications"
+              style={{ color: "var(--gold)" }}
+            >🕐 Historique ({entry.historique.length})</button>
+          )}
           <button className="btn btn-primary" onClick={() => {
             if (!form.marque || !form.date_entree) return alert("Marque et date d'entrée requis");
             // Retirer le flag _incomplete si les infos obligatoires sont remplies
@@ -4938,6 +5241,57 @@ function LivrePoliceModal({ entry, nextNum, vehicles, onSave, onClose }) {
             });
           }}>💾 Enregistrer</button>
         </div>
+
+        {/* Panneau Historique des modifications — affiché à la demande */}
+        {showHistorique && entry?.historique?.length > 0 && (
+          <div style={{ borderTop: "1px solid var(--border2)", padding: "16px 24px", background: "rgba(212,168,67,.04)", maxHeight: 320, overflowY: "auto" }}>
+            <div style={{ fontFamily: "Syne", fontSize: 13, fontWeight: 700, letterSpacing: 1, color: "var(--gold)", textTransform: "uppercase", marginBottom: 12 }}>
+              🕐 Historique des modifications
+            </div>
+            <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 14, fontStyle: "italic" }}>
+              Chaque modification des champs sensibles est tracée pour garantir l'intégrité du registre (esprit art. R321-3 Code pénal).
+              Cet historique n'apparaît pas sur le registre imprimé.
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              {[...entry.historique].reverse().map((h, idx) => (
+                <div key={idx} style={{ background: "var(--card2)", border: "1px solid var(--border2)", borderRadius: 8, padding: "10px 14px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: h.changes || h.raison ? 8 : 0 }}>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text)" }}>
+                      {h.action === "creation" && <span style={{ color: "var(--green)" }}>● Création</span>}
+                      {h.action === "modification" && <span style={{ color: "var(--gold)" }}>● Modification</span>}
+                      {h.action === "archivage" && <span style={{ color: "#5fb573" }}>● Archivage</span>}
+                    </span>
+                    <span style={{ fontSize: 10, color: "var(--muted)", fontFamily: "DM Mono, monospace" }}>
+                      {h.date} · {h.heure}
+                    </span>
+                  </div>
+                  {h.action === "archivage" && h.raison && (
+                    <div style={{ fontSize: 11, color: "var(--muted2)" }}>Raison : <strong style={{ color: "var(--text)" }}>{h.raison}</strong></div>
+                  )}
+                  {h.action === "modification" && h.changes && (
+                    <>
+                      {h.raison && (
+                        <div style={{ fontSize: 11, color: "var(--muted2)", marginBottom: 6, paddingBottom: 6, borderBottom: "1px dashed var(--border2)" }}>
+                          📝 Justification : <strong style={{ color: "var(--text)" }}>{h.raison}</strong>
+                        </div>
+                      )}
+                      <div style={{ fontSize: 11, display: "flex", flexDirection: "column", gap: 4 }}>
+                        {Object.entries(h.changes).map(([k, c]) => (
+                          <div key={k} style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "baseline" }}>
+                            <strong style={{ color: "var(--muted2)", minWidth: 140 }}>{c.label} :</strong>
+                            <span style={{ color: "var(--red)", textDecoration: "line-through" }}>{c.avant || "(vide)"}</span>
+                            <span style={{ color: "var(--muted)" }}>→</span>
+                            <span style={{ color: "var(--green)" }}>{c.apres || "(vide)"}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
