@@ -1032,7 +1032,7 @@ function CarteGriseCalc({ vehicleData, clientAddress, onApply }) {
 /* ═══════════════════════════════════════════════════════════════
    DASHBOARD
 ═══════════════════════════════════════════════════════════════ */
-function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUsage, livrePolice }) {
+function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUsage, livrePolice, dealer, setDealer }) {
   // ─── FILTRE PÉRIODE ─────────────────────────────────────────
   // Le filtre s'applique UNIQUEMENT à : 🏷 Vendus et ✅ Encaissé.
   // Les autres KPIs (stock, BC en cours, à encaisser, solde tréso, activité, suivi)
@@ -1173,24 +1173,64 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
   const todoCount = todoBC.length + todoAvoirs.length + todoLivret.length;
 
   // ─── MODULES VISIBLES ───────────────────────────────────────
-  // L'utilisateur peut activer/désactiver chaque module. Persistance via localStorage.
+  // L'utilisateur peut activer/désactiver chaque module. Persistance :
+  //   1) Source de vérité : Supabase (colonne garages.ui_prefs.dashboard_modules)
+  //      — suit l'abonné sur tous ses appareils
+  //   2) Miroir : localStorage — fallback offline et chargement instantané
+  //
+  // Sécurité : toutes les écritures passent par setDealer → sb.update → RLS Supabase.
+  // L'abonné ne peut écrire que sur SON propre garage (policies déjà en place).
   const MODULE_KEYS = ["instantane", "periode", "stock_dormant", "relances", "activite", "todo"];
   const DEFAULT_VISIBLE = { instantane: true, periode: true, stock_dormant: true, relances: true, activite: false, todo: false };
+
+  // Sanitize : ne garde que les clés connues et force en booléen.
+  // Empêche l'injection de données arbitraires dans le state même si la BD/localStorage
+  // contiennent des valeurs altérées.
+  const sanitizeModules = (raw) => {
+    if (!raw || typeof raw !== "object") return null;
+    const out = {};
+    for (const k of MODULE_KEYS) {
+      if (k in raw) out[k] = raw[k] === true; // force boolean strict
+    }
+    return out;
+  };
+
   const [moduleVisible, setModuleVisible] = useState(() => {
+    // 1) Tente de lire depuis dealer.ui_prefs (source de vérité)
+    try {
+      const fromDealer = sanitizeModules(dealer?.ui_prefs?.dashboard_modules);
+      if (fromDealer) return { ...DEFAULT_VISIBLE, ...fromDealer };
+    } catch (e) { /* ignore */ }
+    // 2) Fallback localStorage (pour les abonnés existants avant migration)
     try {
       const raw = localStorage.getItem("iocar_dashboard_modules");
       if (raw) {
-        const parsed = JSON.parse(raw);
-        // Garde-fou : si le format change (clés ajoutées), on merge avec les défauts
-        return { ...DEFAULT_VISIBLE, ...parsed };
+        const fromLocal = sanitizeModules(JSON.parse(raw));
+        if (fromLocal) return { ...DEFAULT_VISIBLE, ...fromLocal };
       }
     } catch (e) { /* ignore */ }
     return DEFAULT_VISIBLE;
   });
+
+  // Si dealer.ui_prefs change (ex. login depuis un autre appareil ou refresh), on resync.
+  useEffect(() => {
+    const fromDealer = sanitizeModules(dealer?.ui_prefs?.dashboard_modules);
+    if (fromDealer) {
+      setModuleVisible(prev => ({ ...DEFAULT_VISIBLE, ...fromDealer }));
+    }
+  }, [dealer?.ui_prefs?.dashboard_modules]);
+
   const toggleModule = (key) => {
+    if (!MODULE_KEYS.includes(key)) return; // garde-fou
     const next = { ...moduleVisible, [key]: !moduleVisible[key] };
     setModuleVisible(next);
+    // Miroir localStorage (chargement instantané au prochain login)
     try { localStorage.setItem("iocar_dashboard_modules", JSON.stringify(next)); } catch (e) { /* ignore */ }
+    // Source de vérité : Supabase (via setDealer → sb.update, RLS protégé)
+    if (typeof setDealer === "function") {
+      const newPrefs = { ...(dealer?.ui_prefs || {}), dashboard_modules: next };
+      setDealer({ ...dealer, ui_prefs: newPrefs });
+    }
   };
 
 
@@ -8004,7 +8044,7 @@ export default function App() {
           </aside>
 
           <main className={`content${(viewMode === "trial" || viewMode === "subscriber") ? " demo-offset" : ""}`}>
-            {tab === "dashboard"   && <Dashboard vehicles={activeVehicles} setVehicles={setVehiclesRaw} orders={activeOrders} setTab={setTab} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} livrePolice={livrePolice} />}
+            {tab === "dashboard"   && <Dashboard vehicles={activeVehicles} setVehicles={setVehiclesRaw} orders={activeOrders} setTab={setTab} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} livrePolice={livrePolice} dealer={dealer} setDealer={setDealerRaw} />}
             {tab === "fleet"       && <FleetPage vehicles={activeVehicles} setVehicles={setVehiclesRaw} orders={activeOrders} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} livrePolice={activeLivrePolice} setLivrePolice={setLivrePoliceRaw} viewMode={viewMode} garageId={garageId} dealer={dealer} />}
             {tab === "orders"      && <OrdersPage orders={activeOrders} setOrders={setOrdersRaw} vehicles={activeVehicles} setVehiclesRaw={setVehiclesRaw} dealer={dealer} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} clients={activeClients} setClients={setClientsRaw} viewMode={viewMode} />}
             {tab === "crm"         && <CrmPage clients={activeClients} setClients={setClientsRaw} orders={activeOrders} viewMode={viewMode} />}
