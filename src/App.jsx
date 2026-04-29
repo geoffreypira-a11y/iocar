@@ -2685,7 +2685,7 @@ function PaymentModal({ order, onSave, onClose }) {
 /* ═══════════════════════════════════════════════════════════════
    ORDER / INVOICE FORM
 ═══════════════════════════════════════════════════════════════ */
-function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClients, orders, setVehiclesRaw }) {
+function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClients, orders, setVehiclesRaw, usage, setUsage }) {
   const isEdit = !!order?.id;
   const [form, setForm] = useState(order || {
     type: "bc", ref: "", date_creation: today(), date_echeance: "",
@@ -3098,9 +3098,26 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
                   onClick={async () => {
                     const plate = (form.reprise_plate || "").trim().toUpperCase().replace(/\s/g, "");
                     if (!plate) return;
+                    // Vérification du quota mensuel — même logique que la recherche dashboard.
+                    // Le serveur compte de toute façon, mais on prévient l'utilisateur AVANT
+                    // pour éviter les factures surprise.
+                    const monthKey = new Date().toISOString().slice(0, 7);
+                    const usedThisMonth = usage?.[monthKey] || 0;
+                    const isFree = usedThisMonth < 10;
+                    if (!isFree) {
+                      const ok = window.confirm(
+                        `⚠️ Quota mensuel atteint (${usedThisMonth} recherches ce mois)\n\nCette recherche est payante : 0,20 €\n\nConfirmer ?`
+                      );
+                      if (!ok) return;
+                    }
                     setRepriseSearching(true);
                     try {
                       const data = await aiLookupPlate(plate, apiKey);
+                      // Incrément local après succès — le serveur a déjà incrémenté son compteur
+                      // atomique en BD. Ce setUsage met juste à jour l'affichage côté front.
+                      if (typeof setUsage === "function") {
+                        setUsage({ ...usage, [monthKey]: usedThisMonth + 1 });
+                      }
                       setForm(f => ({
                         ...f,
                         reprise_plate: plate,
@@ -4403,7 +4420,7 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
 
   return (
     <div className="page">
-      {modal && <OrderForm order={modal === "new" ? null : modal} vehicles={vehicles} onSave={save} onClose={() => setModal(null)} apiKey={apiKey} clients={clients} setClients={setClients} orders={orders} viewMode={viewMode} setVehiclesRaw={setVehiclesRaw} />}
+      {modal && <OrderForm order={modal === "new" ? null : modal} vehicles={vehicles} onSave={save} onClose={() => setModal(null)} apiKey={apiKey} clients={clients} setClients={setClients} orders={orders} viewMode={viewMode} setVehiclesRaw={setVehiclesRaw} usage={usage} setUsage={setUsage} />}
       {print && <PrintDoc order={print} dealer={dealer} onClose={() => setPrint(null)} viewMode={viewMode} />}
       {cession && <CessionDoc
         order={cession}
