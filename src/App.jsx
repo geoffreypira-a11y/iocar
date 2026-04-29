@@ -544,20 +544,23 @@ function calcOrder(o) {
   // Total TTC = montant soumis + carte grise (hors TVA) − reprise véhicule
   const repriseValeur = o.reprise_active ? (parseFloat(o.reprise_valeur) || 0) : 0;
   const ttc = montantTTC_soumis + carteGrise - repriseValeur;
-  const encaisse = (o.paiements || []).reduce((s, p) => s + (parseFloat(p.montant) || 0), 0);
-  const reste = ttc - encaisse;
 
   // Acompte versé à la signature (TTC, par défaut 0).
-  // Le reste à payer après acompte est juste informatif sur le document
-  // — il ne remplace pas le système de paiements (encaisse/reste) qui sert
-  // au suivi de trésorerie.
+  // L'acompte EST un encaissement réel — il doit être inclus dans `encaisse`
+  // pour que le Reste à payer affiché dans le modal de paiement soit correct.
   const acompteTtc = parseFloat(o.acompte_ttc) || 0;
+  const paiementsTotal = (o.paiements || []).reduce((s, p) => s + (parseFloat(p.montant) || 0), 0);
+  const encaisse = acompteTtc + paiementsTotal;
+  const reste = ttc - encaisse;
+
+  // Net après acompte = utile pour l'affichage sur le PDF (séparation visuelle
+  // entre acompte signature et paiements ultérieurs)
   const netApresAcompte = ttc - acompteTtc;
 
   // Les avoirs : le signe négatif est appliqué sur ttc/ht/tva pour le dashboard
   // Mais encaisse et reste restent en valeur absolue pour la logique de paiement
   const sign = o.type === "avoir" ? -1 : 1;
-  return { ht: ht * sign, remAmt, base: prixApresRemise, fraisMiseDispo, carteGrise, repriseValeur, baseTotal: montantTTC_soumis, tvaAmt: tvaAmt * sign, ttc: ttc * sign, encaisse, reste, avecTva, tvaPct, acompteTtc, netApresAcompte: netApresAcompte * sign };
+  return { ht: ht * sign, remAmt, base: prixApresRemise, fraisMiseDispo, carteGrise, repriseValeur, baseTotal: montantTTC_soumis, tvaAmt: tvaAmt * sign, ttc: ttc * sign, encaisse, reste, avecTva, tvaPct, acompteTtc, netApresAcompte: netApresAcompte * sign, paiementsTotal };
 }
 
 // ─── NUMÉROTATION SÉQUENTIELLE ──────────────────────────────
@@ -2092,6 +2095,8 @@ function PaymentModal({ order, onSave, onClose }) {
   const c = calcOrder(order);
   const isAvoir = order.type === "avoir";
   const displayTtc = Math.abs(c.ttc);
+  const displayAcompte = c.acompteTtc;
+  const displayPaiements = c.paiementsTotal;
   const displayEncaisse = Math.abs(c.encaisse);
   const displayReste = Math.abs(c.reste);
   const [form, setForm] = useState({ date: today(), montant: displayReste.toFixed(2), mode: "Virement" });
@@ -2117,13 +2122,20 @@ function PaymentModal({ order, onSave, onClose }) {
               <span style={{ color: "var(--muted)" }}>{isAvoir ? "Montant avoir" : "Total TTC"}</span>
               <span style={{ fontWeight: 700 }}>{fmtDec(displayTtc)}</span>
             </div>
+            {/* Ligne acompte (uniquement si > 0) — l'acompte est un encaissement réel */}
+            {displayAcompte > 0 && (
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginTop: 6 }}>
+                <span style={{ color: "var(--muted)" }}>Acompte versé à la signature</span>
+                <span style={{ color: "var(--green)" }}>- {fmtDec(displayAcompte)}</span>
+              </div>
+            )}
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginTop: 6 }}>
-              <span style={{ color: "var(--muted)" }}>{isAvoir ? "Déjà remboursé" : "Déjà encaissé"}</span>
-              <span style={{ color: "var(--green)" }}>{fmtDec(displayEncaisse)}</span>
+              <span style={{ color: "var(--muted)" }}>{isAvoir ? "Déjà remboursé (paiements)" : "Déjà encaissé (paiements)"}</span>
+              <span style={{ color: "var(--green)" }}>- {fmtDec(displayPaiements)}</span>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, fontWeight: 700, marginTop: 8, paddingTop: 8, borderTop: "1px solid var(--border2)" }}>
               <span>{isAvoir ? "Reste à rembourser" : "Reste à payer"}</span>
-              <span style={{ color: "var(--orange)" }}>{fmtDec(displayReste)}</span>
+              <span style={{ color: displayReste <= 0.01 ? "var(--green)" : "var(--orange)" }}>{fmtDec(displayReste)}</span>
             </div>
           </div>
           <div className="form-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
@@ -3038,8 +3050,10 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
                   <div className="pdoc-trow" style={{ color: "#3ecf7a" }}><span>Acompte versé à la signature</span><span>- {fmtDec(c.acompteTtc)}</span></div>
                   <div className="pdoc-trow" style={{ fontWeight: 700, color: "#0a0a0a", borderTop: "1px solid #e8e8e8", paddingTop: 6, marginTop: 4 }}><span>Reste à payer</span><span>{fmtDec(c.netApresAcompte)}</span></div>
                 </>}
-                {c.encaisse > 0 && <>
-                  <div className="pdoc-trow" style={{ color: "#3ecf7a" }}><span>Encaissé</span><span>- {fmtDec(c.encaisse)}</span></div>
+                {/* Encaissements ULTÉRIEURS (hors acompte signature, qui est déjà affiché ci-dessus).
+                    On utilise paiementsTotal pour ne pas compter l'acompte deux fois. */}
+                {c.paiementsTotal > 0 && <>
+                  <div className="pdoc-trow" style={{ color: "#3ecf7a" }}><span>{c.acompteTtc > 0 ? "Encaissements ultérieurs" : "Encaissé"}</span><span>- {fmtDec(c.paiementsTotal)}</span></div>
                   <div className="pdoc-trow" style={{ fontWeight: 700, color: c.reste <= 0 ? "#3ecf7a" : "#e5973c" }}><span>Solde restant</span><span>{fmtDec(c.reste)}</span></div>
                 </>}
               </div>
