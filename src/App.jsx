@@ -3419,12 +3419,25 @@ function PVLivraisonDoc({ entry, dealer, onSave, onClose }) {
     pv_annotation: entry.pv_annotation || "",
     pv_signature_garage: entry.pv_signature_garage || null,
     pv_signature_acheteur: entry.pv_signature_acheteur || null,
+    // Date + heure de signature (figées au clic "Signé", jamais écrasées ensuite)
+    pv_signe_date: entry.pv_signe_date || null,
+    pv_signe_heure: entry.pv_signe_heure || null,
   });
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
-  const save = () => {
-    if (onSave) onSave({ ...entry, ...form });
+  // Action "Signé" : fige la date + heure courantes (si pas déjà signé), sauvegarde et ferme.
+  // Si déjà signé : on confirme avant d'écraser (cas "re-signature").
+  const handleSign = () => {
+    if (form.pv_signe_date) {
+      const ok = window.confirm(`Le document a déjà été signé le ${form.pv_signe_date} à ${form.pv_signe_heure}.\n\nVoulez-vous re-signer maintenant ? La nouvelle date remplacera l'ancienne.`);
+      if (!ok) { onClose(); return; }
+    }
+    const now = new Date();
+    const newDate = today();
+    const newHeure = now.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+    const updated = { ...entry, ...form, pv_signe_date: newDate, pv_signe_heure: newHeure };
+    if (onSave) onSave(updated);
     onClose();
   };
 
@@ -3491,10 +3504,23 @@ function PVLivraisonDoc({ entry, dealer, onSave, onClose }) {
     <div className="modal-bg" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal" style={{ maxWidth: 900, width: "98vw", maxHeight: "92vh", display: "flex", flexDirection: "column" }}>
         <div className="modal-hd" style={{ flexShrink: 0 }}>
-          <span className="modal-title">📜 PV de Livraison — N°{String(entry.num_ordre || 0).padStart(4, "0")} · {entry.immat || ""}</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flex: 1, minWidth: 0 }}>
+            <span className="modal-title">📜 PV de Livraison — N°{String(entry.num_ordre || 0).padStart(4, "0")} · {entry.immat || ""}</span>
+            {form.pv_signe_date && (
+              <span style={{ fontSize: 11, color: "var(--green)", fontFamily: "DM Mono, monospace", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 4 }}>
+                ✓ Signé le {form.pv_signe_date} à {form.pv_signe_heure}
+              </span>
+            )}
+          </div>
           <div style={{ display: "flex", gap: 8 }}>
             <button className="btn btn-ghost btn-sm" onClick={handlePrint}>🖨 Imprimer / PDF</button>
-            <button className="btn btn-primary btn-sm" onClick={save}>💾 Enregistrer</button>
+            <button
+              className="btn btn-primary btn-sm"
+              onClick={handleSign}
+              title={form.pv_signe_date ? "Re-signer (remplace la date actuelle)" : "Marquer comme signé et figer la date+heure"}
+            >
+              ✍️ {form.pv_signe_date ? "Re-signer" : "Signé"}
+            </button>
             <button className="close-btn" onClick={onClose}>×</button>
           </div>
         </div>
@@ -3643,9 +3669,17 @@ function PVLivraisonDoc({ entry, dealer, onSave, onClose }) {
               </div>
             </div>
 
-            {/* Pied de page */}
+            {/* Pied de page : si signé → date+heure de signature ; sinon → date génération */}
             <div style={{ marginTop: 32, paddingTop: 12, borderTop: "1px solid #eee", fontSize: 10, color: "#666", textAlign: "center" }}>
-              Document généré le {today()} · {garageName} {garageSiret && `· SIRET ${garageSiret}`}
+              {form.pv_signe_date ? (
+                <>
+                  <strong style={{ color: "#1a1a1a" }}>✓ Document signé le {form.pv_signe_date} à {form.pv_signe_heure}</strong>
+                  <br />
+                  <span style={{ fontSize: 9, color: "#999" }}>{garageName} {garageSiret && `· SIRET ${garageSiret}`}</span>
+                </>
+              ) : (
+                <>Document généré le {today()} · {garageName} {garageSiret && `· SIRET ${garageSiret}`}</>
+              )}
             </div>
             </div>{/* /position:relative wrapper */}
           </div>
