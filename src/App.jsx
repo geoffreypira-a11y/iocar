@@ -1055,10 +1055,23 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
   const nbBC = orders.filter(o => o.type === "bc").length;
 
   // CA total et "À ENCAISSER" — instantanés, sur tous les orders.
-  const allTtc = orders.reduce((s, o) => s + calcOrder(o).ttc, 0);
   const aEncaisser = orders.reduce((s, o) => {
     if (o.type === "avoir") return s;
     return s + Math.max(0, calcOrder(o).reste);
+  }, 0);
+
+  // ENCAISSÉ TOTAL (instantané, toutes périodes) — utilisé uniquement pour le Solde tréso.
+  // Identique au calcul filtré ci-dessous, mais sans la condition inPeriod.
+  const encaisseTotal = orders.reduce((s, o) => {
+    const sign = o.type === "avoir" ? -1 : 1;
+    let local = 0;
+    if (o.type !== "avoir") {
+      local += parseFloat(o.acompte_ttc) || 0;
+    }
+    for (const p of (o.paiements || [])) {
+      local += parseFloat(p.montant) || 0;
+    }
+    return s + local * sign;
   }, 0);
 
   // ENCAISSÉ — filtré par période (date des paiements, et date de création pour l'acompte).
@@ -1086,15 +1099,10 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
   // ACHATS véhicules — instantané, tous les véhicules en stock + frais docs.
   const totalAchats = vehicles.reduce((s, v) => s + (parseFloat(v.prix_achat) || 0), 0);
   const totalFraisDocs = vehicles.reduce((s, v) => s + (v.documents || []).reduce((s2, d) => s2 + (parseFloat(d.montant) || 0), 0), 0);
-  // Solde tréso : encaissé (filtré par période) − achats (instantané)
-  // À noter : sur une période courte (ex. "Aujourd'hui"), le solde peut paraître très négatif
-  // car on compare l'encaissé du jour aux achats accumulés depuis toujours. Sur "Depuis le début"
-  // la valeur est exacte.
-  const soldeTreso = encaisse - totalAchats - totalFraisDocs;
+  // Solde tréso : INSTANTANÉ PUR — encaissé total (toutes périodes) − achats totaux.
+  // Indépendant du sélecteur de période : c'est la photo réelle de la trésorerie à date.
+  const soldeTreso = encaisseTotal - totalAchats - totalFraisDocs;
   const tresoPositive = soldeTreso >= 0;
-
-  // Activité récente — instantané, 6 derniers documents toutes périodes.
-  const recent = [...orders].sort((a, b) => (b.date_creation || "").localeCompare(a.date_creation || "")).slice(0, 6);
 
   // ─── STOCK DORMANT ──────────────────────────────────────────
   // Véhicules disponibles classés par âge en stock (date_entree). On garde le top 5.
@@ -1148,6 +1156,41 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
   const variationPct = (current, previous) => {
     if (previous === 0) return current > 0 ? null : 0; // null = pas de précédent significatif
     return Math.round((current - previous) / Math.abs(previous) * 100);
+  };
+
+  // ─── ACTIVITÉ RÉCENTE ───────────────────────────────────────
+  // 6 derniers documents toutes périodes confondues.
+  const recent = [...orders].sort((a, b) => (b.date_creation || "").localeCompare(a.date_creation || "")).slice(0, 6);
+
+  // ─── MODULE "À FAIRE" ───────────────────────────────────────
+  // Détecte les actions opérationnelles en attente :
+  // 1) BC vieux de plus de 15 jours (probablement à transformer en facture)
+  // 2) Avoirs avec un reste à rembourser > 0
+  // 3) Véhicules vendus dans le livre de police marqués "_incomplete"
+  const todoBC = orders.filter(o => o.type === "bc" && (daysSince(o.date_creation) ?? 0) >= 15);
+  const todoAvoirs = orders.filter(o => o.type === "avoir" && calcOrder(o).reste > 0.01);
+  const todoLivret = (livrePolice || []).filter(e => e._incomplete);
+  const todoCount = todoBC.length + todoAvoirs.length + todoLivret.length;
+
+  // ─── MODULES VISIBLES ───────────────────────────────────────
+  // L'utilisateur peut activer/désactiver chaque module. Persistance via localStorage.
+  const MODULE_KEYS = ["instantane", "periode", "stock_dormant", "relances", "activite", "todo"];
+  const DEFAULT_VISIBLE = { instantane: true, periode: true, stock_dormant: true, relances: true, activite: false, todo: false };
+  const [moduleVisible, setModuleVisible] = useState(() => {
+    try {
+      const raw = localStorage.getItem("iocar_dashboard_modules");
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        // Garde-fou : si le format change (clés ajoutées), on merge avec les défauts
+        return { ...DEFAULT_VISIBLE, ...parsed };
+      }
+    } catch (e) { /* ignore */ }
+    return DEFAULT_VISIBLE;
+  });
+  const toggleModule = (key) => {
+    const next = { ...moduleVisible, [key]: !moduleVisible[key] };
+    setModuleVisible(next);
+    try { localStorage.setItem("iocar_dashboard_modules", JSON.stringify(next)); } catch (e) { /* ignore */ }
   };
 
 
@@ -1304,12 +1347,60 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
       </div>
 
       {/* ───────────────────────────────────────────────────────
+          PANNEAU MODULES — toggles d'affichage (persistance localStorage)
+          ─────────────────────────────────────────────────────── */}
+      <div style={{
+        background: "var(--card2)", border: "1px solid var(--border2)",
+        borderRadius: 10, padding: "10px 14px", marginBottom: 20,
+        display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap"
+      }}>
+        <div style={{ fontSize: 10, letterSpacing: 1.5, textTransform: "uppercase", color: "var(--muted)", flexShrink: 0 }}>
+          🎛 Modules
+        </div>
+        {[
+          { key: "instantane", label: "État actuel" },
+          { key: "periode", label: "Sur la période" },
+          { key: "stock_dormant", label: "Stock dormant" },
+          { key: "relances", label: "À relancer" },
+          { key: "activite", label: "Activité récente" },
+          { key: "todo", label: `À faire${todoCount > 0 ? ` (${todoCount})` : ""}` },
+        ].map(m => {
+          const on = !!moduleVisible[m.key];
+          return (
+            <div
+              key={m.key}
+              onClick={() => toggleModule(m.key)}
+              style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none" }}
+              title={on ? "Cliquer pour masquer" : "Cliquer pour afficher"}
+            >
+              <div style={{
+                width: 32, height: 18, borderRadius: 9,
+                background: on ? "var(--gold)" : "var(--card)",
+                border: "1px solid var(--border2)", position: "relative", transition: "background .2s", flexShrink: 0
+              }}>
+                <div style={{
+                  width: 14, height: 14, borderRadius: "50%", background: "#fff",
+                  position: "absolute", top: 1,
+                  left: on ? 16 : 1,
+                  transition: "left .2s", boxShadow: "0 1px 2px rgba(0,0,0,.3)"
+                }} />
+              </div>
+              <span style={{ fontSize: 12, color: on ? "var(--text)" : "var(--muted)", fontWeight: on ? 600 : 400 }}>
+                {m.label}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+
+      {moduleVisible.instantane && <>
+      {/* ───────────────────────────────────────────────────────
           KPI — Section 1 : INSTANTANÉ (état présent, non filtré)
           ─────────────────────────────────────────────────────── */}
-      <div style={{ fontSize: 10, letterSpacing: 1.5, textTransform: "uppercase", color: "var(--muted)", marginBottom: 8 }}>
+      <div style={{ fontSize: 10, letterSpacing: 1.5, textTransform: "uppercase", color: "var(--muted)", marginBottom: 8, textAlign: "center" }}>
         📸 État actuel · instantané
       </div>
-      <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", marginBottom: 20 }}>
+      <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(180px, 220px))", justifyContent: "center", marginBottom: 24 }}>
         <div className="kpi" onClick={() => setTab("fleet")} style={{ cursor: "pointer" }}>
           <div className="kpi-label">🚗 En stock</div>
           <div className="kpi-val gold">{dispo}</div>
@@ -1331,6 +1422,9 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
           <div className="kpi-foot">encaissé − achats</div>
         </div>
       </div>
+      </>}
+
+      {moduleVisible.periode && <>
 
       {/* ───────────────────────────────────────────────────────
           KPI — Section 2 : PÉRIODE (filtré par le sélecteur)
@@ -1371,43 +1465,45 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
           })}
         </div>
       </div>
-      <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))" }}>
-        <div className="kpi" onClick={() => setTab("fleet")} style={{ cursor: "pointer", borderLeft: "3px solid var(--gold)" }}>
-          <div className="kpi-label">🏷 Vendus</div>
-          <div className="kpi-val" style={{ color: "var(--muted2)" }}>{vendu}</div>
-          {period !== "all" ? (() => {
-            const diff = vendu - venduPrev;
-            const color = diff > 0 ? "var(--green)" : diff < 0 ? "var(--red)" : "var(--muted)";
-            const arrow = diff > 0 ? "↗" : diff < 0 ? "↘" : "→";
-            return <div className="kpi-foot" style={{ color }}>{arrow} {diff >= 0 ? "+" : ""}{diff} vs {periodLabel}</div>;
-          })() : <div className="kpi-foot">véhicules cédés</div>}
-        </div>
-        <div className="kpi" style={{ borderLeft: "3px solid var(--gold)" }}>
-          <div className="kpi-label">✅ Encaissé</div>
-          <div className="kpi-val green">{fmt(encaisse)}</div>
-          {period !== "all" ? (() => {
-            const pct = variationPct(encaisse, encaissePrev);
-            if (pct === null) return <div className="kpi-foot" style={{ color: "var(--muted)" }}>nouveau · pas de {periodLabel}</div>;
-            const color = pct > 0 ? "var(--green)" : pct < 0 ? "var(--red)" : "var(--muted)";
-            const arrow = pct > 0 ? "↗" : pct < 0 ? "↘" : "→";
-            return <div className="kpi-foot" style={{ color }}>{arrow} {pct >= 0 ? "+" : ""}{pct}% vs {periodLabel}</div>;
-          })() : <div className="kpi-foot">depuis le début</div>}
-        </div>
-        <div className="kpi" style={{ borderLeft: "3px solid var(--gold)" }}>
-          <div className="kpi-label">💰 Panier moyen</div>
-          {(() => {
-            const panier = vendu > 0 ? encaisse / vendu : 0;
-            return <div className="kpi-val gold">{fmt(panier)}</div>;
-          })()}
-          <div className="kpi-foot">{vendu > 0 ? `${vendu} vente${vendu > 1 ? "s" : ""}` : "aucune vente"}</div>
-        </div>
-      </div>
+      {/* Layout : à gauche les 3 KPIs période en colonne, à droite le camembert
+          (qui reflète aussi la période choisie) */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 20, alignItems: "stretch" }}>
 
-      {/* CAMEMBERT TRÉSORERIE + ACTIVITÉ RÉCENTE */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 20 }}>
+        {/* COLONNE GAUCHE : 3 KPIs période */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div className="kpi" onClick={() => setTab("fleet")} style={{ cursor: "pointer", borderLeft: "3px solid var(--gold)" }}>
+            <div className="kpi-label">🏷 Vendus</div>
+            <div className="kpi-val" style={{ color: "var(--muted2)" }}>{vendu}</div>
+            {period !== "all" ? (() => {
+              const diff = vendu - venduPrev;
+              const color = diff > 0 ? "var(--green)" : diff < 0 ? "var(--red)" : "var(--muted)";
+              const arrow = diff > 0 ? "↗" : diff < 0 ? "↘" : "→";
+              return <div className="kpi-foot" style={{ color }}>{arrow} {diff >= 0 ? "+" : ""}{diff} vs {periodLabel}</div>;
+            })() : <div className="kpi-foot">véhicules cédés</div>}
+          </div>
+          <div className="kpi" style={{ borderLeft: "3px solid var(--gold)" }}>
+            <div className="kpi-label">✅ Encaissé</div>
+            <div className="kpi-val green">{fmt(encaisse)}</div>
+            {period !== "all" ? (() => {
+              const pct = variationPct(encaisse, encaissePrev);
+              if (pct === null) return <div className="kpi-foot" style={{ color: "var(--muted)" }}>nouveau · pas de {periodLabel}</div>;
+              const color = pct > 0 ? "var(--green)" : pct < 0 ? "var(--red)" : "var(--muted)";
+              const arrow = pct > 0 ? "↗" : pct < 0 ? "↘" : "→";
+              return <div className="kpi-foot" style={{ color }}>{arrow} {pct >= 0 ? "+" : ""}{pct}% vs {periodLabel}</div>;
+            })() : <div className="kpi-foot">depuis le début</div>}
+          </div>
+          <div className="kpi" style={{ borderLeft: "3px solid var(--gold)" }}>
+            <div className="kpi-label">💰 Panier moyen</div>
+            {(() => {
+              const panier = vendu > 0 ? encaisse / vendu : 0;
+              return <div className="kpi-val gold">{fmt(panier)}</div>;
+            })()}
+            <div className="kpi-foot">{vendu > 0 ? `${vendu} vente${vendu > 1 ? "s" : ""}` : "aucune vente"}</div>
+          </div>
+        </div>
 
-        {/* CAMEMBERT */}
-        <div className="card">
+        {/* COLONNE DROITE : camembert répartition trésorerie */}
+        <div className="card" style={{ borderLeft: "3px solid var(--gold)" }}>
           <div className="card-pad" style={{ borderBottom: "1px solid var(--border2)" }}>
             <div style={{ fontWeight: 700, fontSize: 14 }}>🏦 Répartition trésorerie</div>
             <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>Avance achats · Encaissé · À encaisser</div>
@@ -1445,44 +1541,21 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
             )}
           </div>
         </div>
-
-        {/* ACTIVITÉ RÉCENTE */}
-        <div className="card">
-          <div className="card-pad" style={{ borderBottom: "1px solid var(--border2)" }}>
-            <div style={{ fontWeight: 700, fontSize: 14 }}>🕒 Activité récente</div>
-            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>6 derniers documents</div>
-          </div>
-          {recent.length === 0 ? (
-            <div className="card-pad" style={{ color: "var(--muted)", fontSize: 13 }}>Aucune activité</div>
-          ) : (
-            <div>
-              {recent.map(o => {
-                const c = calcOrder(o);
-                return (
-                  <div key={o.id} style={{ padding: "11px 20px", borderBottom: "1px solid var(--border2)", display: "flex", alignItems: "center", gap: 12 }}>
-                    <span style={{ fontSize: 18 }}>{o.type === "facture" ? "🧾" : o.type === "avoir" ? "↩️" : "📝"}</span>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 600, fontSize: 13 }}>{o.client?.name || "Client non défini"}</div>
-                      <div style={{ fontSize: 11, color: "var(--muted)" }}>{o.ref} · {o.date_creation}</div>
-                    </div>
-                    <div style={{ textAlign: "right" }}>
-                      <div style={{ fontWeight: 700, fontSize: 13 }}>{fmt(c.ttc)}</div>
-                      <span className={`badge ${getPayStatut(c, o.type).cls}`}>{getPayStatut(c, o.type).label}</span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
       </div>
+      </>}
 
       {/* ───────────────────────────────────────────────────────
-          STOCK DORMANT + RELANCES — côte à côte
+          STOCK DORMANT + RELANCES — côte à côte (modules indépendants)
+          Si un seul module est actif, il prend toute la largeur.
           ─────────────────────────────────────────────────────── */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 20 }}>
+      {(moduleVisible.stock_dormant || moduleVisible.relances) && (
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: (moduleVisible.stock_dormant && moduleVisible.relances) ? "1fr 1fr" : "1fr",
+        gap: 16, marginBottom: 20
+      }}>
 
-        {/* STOCK DORMANT */}
+        {moduleVisible.stock_dormant && (
         <div className="card">
           <div className="card-pad" style={{ borderBottom: "1px solid var(--border2)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <div>
@@ -1532,8 +1605,9 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
             </div>
           )}
         </div>
+        )}
 
-        {/* RELANCES CLIENTS */}
+        {moduleVisible.relances && (
         <div className="card">
           <div className="card-pad" style={{ borderBottom: "1px solid var(--border2)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <div>
@@ -1584,7 +1658,106 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
             </div>
           )}
         </div>
+        )}
       </div>
+      )}
+
+      {/* ───────────────────────────────────────────────────────
+          ACTIVITÉ RÉCENTE + À FAIRE — côte à côte (modules indépendants)
+          ─────────────────────────────────────────────────────── */}
+      {(moduleVisible.activite || moduleVisible.todo) && (
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: (moduleVisible.activite && moduleVisible.todo) ? "1fr 1fr" : "1fr",
+        gap: 16, marginBottom: 20
+      }}>
+
+        {moduleVisible.activite && (
+        <div className="card">
+          <div className="card-pad" style={{ borderBottom: "1px solid var(--border2)" }}>
+            <div style={{ fontWeight: 700, fontSize: 14 }}>🕒 Activité récente</div>
+            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>6 derniers documents</div>
+          </div>
+          {recent.length === 0 ? (
+            <div className="card-pad" style={{ color: "var(--muted)", fontSize: 13 }}>Aucune activité</div>
+          ) : (
+            <div>
+              {recent.map(o => {
+                const c = calcOrder(o);
+                return (
+                  <div key={o.id} style={{ padding: "11px 20px", borderBottom: "1px solid var(--border2)", display: "flex", alignItems: "center", gap: 12 }}>
+                    <span style={{ fontSize: 18 }}>{o.type === "facture" ? "🧾" : o.type === "avoir" ? "↩️" : "📝"}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 600, fontSize: 13 }}>{o.client?.name || "Client non défini"}</div>
+                      <div style={{ fontSize: 11, color: "var(--muted)" }}>{o.ref} · {o.date_creation}</div>
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <div style={{ fontWeight: 700, fontSize: 13 }}>{fmt(c.ttc)}</div>
+                      <span className={`badge ${getPayStatut(c, o.type).cls}`}>{getPayStatut(c, o.type).label}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+        )}
+
+        {moduleVisible.todo && (
+        <div className="card">
+          <div className="card-pad" style={{ borderBottom: "1px solid var(--border2)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 14 }}>✅ À faire</div>
+              <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>actions opérationnelles en attente</div>
+            </div>
+            {todoCount > 0 && (
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontSize: 10, color: "var(--muted)", letterSpacing: 1, textTransform: "uppercase" }}>en attente</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "var(--gold)", fontFamily: "Syne" }}>{todoCount}</div>
+              </div>
+            )}
+          </div>
+          {todoCount === 0 ? (
+            <div className="card-pad" style={{ color: "var(--muted)", fontSize: 13 }}>🎉 Rien à faire, tout est à jour</div>
+          ) : (
+            <div>
+              {todoBC.length > 0 && (
+                <div onClick={() => setTab("orders")} style={{ padding: "10px 20px", borderBottom: "1px solid var(--border2)", display: "flex", alignItems: "flex-start", gap: 12, cursor: "pointer" }}>
+                  <span style={{ fontSize: 16, marginTop: 2 }}>📝</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{todoBC.length} BC à transformer en facture</div>
+                    <div style={{ fontSize: 11, color: "var(--muted)" }}>
+                      {todoBC.slice(0, 3).map(o => o.ref).join(", ")}{todoBC.length > 3 ? `, +${todoBC.length - 3}` : ""} (&gt; 15 jours)
+                    </div>
+                  </div>
+                </div>
+              )}
+              {todoLivret.length > 0 && (
+                <div onClick={() => setTab("livrepolice")} style={{ padding: "10px 20px", borderBottom: "1px solid var(--border2)", display: "flex", alignItems: "flex-start", gap: 12, cursor: "pointer" }}>
+                  <span style={{ fontSize: 16, marginTop: 2 }}>📋</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{todoLivret.length} entrée{todoLivret.length > 1 ? "s" : ""} du livre de police à compléter</div>
+                    <div style={{ fontSize: 11, color: "var(--muted)" }}>information manquante (acheteur, sortie...)</div>
+                  </div>
+                </div>
+              )}
+              {todoAvoirs.length > 0 && (
+                <div onClick={() => setTab("orders")} style={{ padding: "10px 20px", borderBottom: "1px solid var(--border2)", display: "flex", alignItems: "flex-start", gap: 12, cursor: "pointer" }}>
+                  <span style={{ fontSize: 16, marginTop: 2 }}>💸</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{todoAvoirs.length} avoir{todoAvoirs.length > 1 ? "s" : ""} à rembourser</div>
+                    <div style={{ fontSize: 11, color: "var(--muted)" }}>
+                      {todoAvoirs.slice(0, 3).map(o => o.ref).join(", ")}{todoAvoirs.length > 3 ? `, +${todoAvoirs.length - 3}` : ""}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        )}
+      </div>
+      )}
       {/* CALCULATEUR CARTE GRISE */}
       <div className="card" style={{ marginTop: 20 }}>
         <div className="card-pad" style={{ borderBottom: "1px solid var(--border2)" }}>
