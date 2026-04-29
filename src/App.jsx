@@ -6172,7 +6172,7 @@ const STATUTS_CLIENT = {
   inactif:     { label: "Inactif",        cls: "badge-muted",   icon: "💤" },
 };
 
-function CrmPage({ clients, setClients, orders, viewMode, dealer }) {
+function CrmPage({ clients, setClients, orders, viewMode, dealer, setDealer }) {
   const [search, setSearch]         = useState("");
   const [filterStatut, setFilter]   = useState("all");
   const [modal, setModal]           = useState(null);
@@ -6203,7 +6203,7 @@ function CrmPage({ clients, setClients, orders, viewMode, dealer }) {
 
   return (
     <div className="page">
-      {fiche && <CrmFiche client={fiche} orders={clientOrders(fiche.id)} onEdit={() => setModal(fiche)} onClose={() => setFiche(null)} onSave={save} dealer={dealer} viewMode={viewMode} />}
+      {fiche && <CrmFiche client={fiche} orders={clientOrders(fiche.id)} onEdit={() => setModal(fiche)} onClose={() => setFiche(null)} onSave={save} dealer={dealer} setDealer={setDealer} viewMode={viewMode} />}
       {modal && <CrmModal client={modal === "add" ? null : modal} onSave={save} onClose={() => setModal(null)} />}
       {pendingDelete && (
         <ConfirmModal
@@ -6295,11 +6295,53 @@ function CrmPage({ clients, setClients, orders, viewMode, dealer }) {
 }
 
 /* ── Fiche détail client ── */
-function CrmFiche({ client, orders, onEdit, onClose, onSave, dealer, viewMode }) {
+function CrmFiche({ client, orders, onEdit, onClose, onSave, dealer, setDealer, viewMode }) {
   const [newAnnot, setNewAnnot] = useState("");
   const [annotMode, setAnnotMode] = useState(false);
   const [pendingDeleteAnnot, setPendingDeleteAnnot] = useState(null);
   const [print, setPrint] = useState(null); // aperçu PDF d'un document cliqué
+
+  // ─── MODULES VISIBLES ───────────────────────────────────────
+  // Même système que le Dashboard : ui_prefs.crm_modules dans Supabase + miroir localStorage.
+  // "coordonnees" n'est pas toggleable (info de base du client, toujours visible).
+  const CRM_MODULE_KEYS = ["documents", "reprises", "annotations"];
+  const CRM_DEFAULT_VISIBLE = { documents: true, reprises: true, annotations: true };
+  const sanitizeCrmModules = (raw) => {
+    if (!raw || typeof raw !== "object") return null;
+    const out = {};
+    for (const k of CRM_MODULE_KEYS) {
+      if (k in raw) out[k] = raw[k] === true;
+    }
+    return out;
+  };
+  const [crmVisible, setCrmVisible] = useState(() => {
+    try {
+      const fromDealer = sanitizeCrmModules(dealer?.ui_prefs?.crm_modules);
+      if (fromDealer) return { ...CRM_DEFAULT_VISIBLE, ...fromDealer };
+    } catch (e) { /* ignore */ }
+    try {
+      const raw = localStorage.getItem("iocar_crm_modules");
+      if (raw) {
+        const fromLocal = sanitizeCrmModules(JSON.parse(raw));
+        if (fromLocal) return { ...CRM_DEFAULT_VISIBLE, ...fromLocal };
+      }
+    } catch (e) { /* ignore */ }
+    return CRM_DEFAULT_VISIBLE;
+  });
+  useEffect(() => {
+    const fromDealer = sanitizeCrmModules(dealer?.ui_prefs?.crm_modules);
+    if (fromDealer) setCrmVisible(prev => ({ ...CRM_DEFAULT_VISIBLE, ...fromDealer }));
+  }, [dealer?.ui_prefs?.crm_modules]);
+  const toggleCrmModule = (key) => {
+    if (!CRM_MODULE_KEYS.includes(key)) return;
+    const next = { ...crmVisible, [key]: !crmVisible[key] };
+    setCrmVisible(next);
+    try { localStorage.setItem("iocar_crm_modules", JSON.stringify(next)); } catch (e) { /* ignore */ }
+    if (typeof setDealer === "function") {
+      const newPrefs = { ...(dealer?.ui_prefs || {}), crm_modules: next };
+      setDealer({ ...dealer, ui_prefs: newPrefs });
+    }
+  };
 
   const addAnnotation = () => {
     if (!newAnnot.trim()) return;
@@ -6350,7 +6392,54 @@ function CrmFiche({ client, orders, onEdit, onClose, onSave, dealer, viewMode })
         </div>
 
         <div style={{ flex: 1, overflowY: "auto", padding: 24 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 24 }}>
+
+          {/* Panneau de toggles modules — persisté dans dealer.ui_prefs.crm_modules */}
+          <div style={{
+            background: "var(--card2)", border: "1px solid var(--border2)",
+            borderRadius: 10, padding: "10px 14px", marginBottom: 20,
+            display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap"
+          }}>
+            <div style={{ fontSize: 10, letterSpacing: 1.5, textTransform: "uppercase", color: "var(--muted)", flexShrink: 0 }}>
+              🎛 Modules
+            </div>
+            {[
+              { key: "documents", label: "Factures & BC" },
+              { key: "reprises", label: "Reprises" },
+              { key: "annotations", label: "Annotations" },
+            ].map(m => {
+              const on = !!crmVisible[m.key];
+              return (
+                <div
+                  key={m.key}
+                  onClick={() => toggleCrmModule(m.key)}
+                  style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none" }}
+                  title={on ? "Cliquer pour masquer" : "Cliquer pour afficher"}
+                >
+                  <div style={{
+                    width: 32, height: 18, borderRadius: 9,
+                    background: on ? "var(--gold)" : "var(--card)",
+                    border: "1px solid var(--border2)", position: "relative", transition: "background .2s", flexShrink: 0
+                  }}>
+                    <div style={{
+                      width: 14, height: 14, borderRadius: "50%", background: "#fff",
+                      position: "absolute", top: 1,
+                      left: on ? 16 : 1,
+                      transition: "left .2s", boxShadow: "0 1px 2px rgba(0,0,0,.3)"
+                    }} />
+                  </div>
+                  <span style={{ fontSize: 12, color: on ? "var(--text)" : "var(--muted)", fontWeight: on ? 600 : 400 }}>
+                    {m.label}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: crmVisible.documents ? "1fr 1fr" : "1fr",
+            gap: 20, marginBottom: 24
+          }}>
 
             {/* Infos contact */}
             <div className="card card-pad">
@@ -6370,6 +6459,7 @@ function CrmFiche({ client, orders, onEdit, onClose, onSave, dealer, viewMode })
             </div>
 
             {/* Documents rattachés */}
+            {crmVisible.documents && (
             <div className="card card-pad">
               <div style={{ fontFamily: "Syne", fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "var(--gold)", textTransform: "uppercase", marginBottom: 12 }}>
                 Factures & Bons de commande ({orders.length})
@@ -6418,10 +6508,11 @@ function CrmFiche({ client, orders, onEdit, onClose, onSave, dealer, viewMode })
                 </div>
               )}
             </div>
+            )}
           </div>
 
           {/* Reprises véhicules — calculé à partir des ordres du client */}
-          {(() => {
+          {crmVisible.reprises && (() => {
             const reprises = orders.filter(o => o.reprise_active && (parseFloat(o.reprise_valeur) || 0) > 0);
             if (reprises.length === 0) return null;
             const totalReprise = reprises.reduce((s, o) => s + (parseFloat(o.reprise_valeur) || 0), 0);
@@ -6466,6 +6557,7 @@ function CrmFiche({ client, orders, onEdit, onClose, onSave, dealer, viewMode })
           })()}
 
           {/* Annotations */}
+          {crmVisible.annotations && (
           <div className="card">
             <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--border2)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <div style={{ fontFamily: "Syne", fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "var(--gold)", textTransform: "uppercase" }}>
@@ -6513,6 +6605,7 @@ function CrmFiche({ client, orders, onEdit, onClose, onSave, dealer, viewMode })
               )}
             </div>
           </div>
+          )}
         </div>
       </div>
     </div>
@@ -8071,7 +8164,7 @@ export default function App() {
             {tab === "dashboard"   && <Dashboard vehicles={activeVehicles} setVehicles={setVehiclesRaw} orders={activeOrders} setTab={setTab} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} livrePolice={livrePolice} dealer={dealer} setDealer={setDealerRaw} />}
             {tab === "fleet"       && <FleetPage vehicles={activeVehicles} setVehicles={setVehiclesRaw} orders={activeOrders} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} livrePolice={activeLivrePolice} setLivrePolice={setLivrePoliceRaw} viewMode={viewMode} garageId={garageId} dealer={dealer} />}
             {tab === "orders"      && <OrdersPage orders={activeOrders} setOrders={setOrdersRaw} vehicles={activeVehicles} setVehiclesRaw={setVehiclesRaw} dealer={dealer} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} clients={activeClients} setClients={setClientsRaw} viewMode={viewMode} />}
-            {tab === "crm"         && <CrmPage clients={activeClients} setClients={setClientsRaw} orders={activeOrders} viewMode={viewMode} dealer={dealer} />}
+            {tab === "crm"         && <CrmPage clients={activeClients} setClients={setClientsRaw} orders={activeOrders} viewMode={viewMode} dealer={dealer} setDealer={setDealerRaw} />}
             {tab === "livrepolice" && (viewMode === "trial" ? (
               <div className="page" style={{ textAlign: "center", paddingTop: 80 }}>
                 <div style={{ fontSize: 48, marginBottom: 16 }}>📋</div>
