@@ -1412,16 +1412,9 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
             {(() => {
               const q = getQuotaStatus(usage);
               return (
-                <>
-                  <div style={{ fontSize: 10, textAlign: "right", color: q.color, letterSpacing: .5, fontWeight: 600 }}>
-                    {q.text}
-                  </div>
-                  {!q.isFree && (
-                    <div style={{ fontSize: 9, textAlign: "right", color: "var(--muted)", letterSpacing: .5 }}>
-                      {COST_EXTRA.toFixed(2)} € HT / recherche supplémentaire
-                    </div>
-                  )}
-                </>
+                <div style={{ fontSize: 10, textAlign: "right", color: q.color, letterSpacing: .5, fontWeight: 600 }}>
+                  {q.text}
+                </div>
               );
             })()}
           </div>
@@ -1945,11 +1938,6 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
               <div style={{ fontSize: 10, color: quotaStatus.color, letterSpacing: 1, fontWeight: 600 }}>
                 {quotaStatus.text}
               </div>
-              {!isFree && (
-                <div style={{ fontSize: 9, color: "var(--muted)", letterSpacing: .5 }}>
-                  {COST_EXTRA.toFixed(2)} € HT par recherche supplémentaire
-                </div>
-              )}
             </div>
           </div>
 
@@ -3191,11 +3179,6 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
                 return (
                   <div style={{ marginBottom: 10, fontSize: 11, color: q.color, fontWeight: 600, letterSpacing: .3 }}>
                     {q.text}
-                    {!q.isFree && (
-                      <span style={{ display: "block", fontSize: 10, color: "var(--muted)", fontWeight: 400, marginTop: 2 }}>
-                        {COST_EXTRA.toFixed(2)} € HT par recherche supplémentaire
-                      </span>
-                    )}
                   </div>
                 );
               })()}
@@ -8206,13 +8189,21 @@ export default function App() {
               <div style={{ background: "var(--card2)", borderRadius: 8, padding: "12px 14px" }}>
                 {(() => {
                   const used = usage?.[new Date().toISOString().slice(0,7)] || 0;
+                  const q = getQuotaStatus(usage);
                   return (
-                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, paddingBottom: 8, borderBottom: "1px solid var(--border2)" }}>
-                      <span style={{ fontSize: 12, color: "var(--muted)" }}>🔍 {viewMode === "admin" ? "Plaques ce mois" : "Plaques restantes"}</span>
-                      {viewMode === "admin" ? (
-                        <span style={{ fontSize: 12, fontWeight: 700, color: "var(--gold)" }}>{used} <span style={{ fontSize: 10, color: "var(--muted)" }}>/ ∞</span></span>
-                      ) : (
-                        <span style={{ fontSize: 12, fontWeight: 700, color: used < 10 ? "var(--green)" : "var(--red)" }}>{Math.max(0, 10 - used)}/10</span>
+                    <div style={{ marginBottom: 8, paddingBottom: 8, borderBottom: "1px solid var(--border2)" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span style={{ fontSize: 12, color: "var(--muted)" }}>🔍 Plaques</span>
+                        {viewMode === "admin" ? (
+                          <span style={{ fontSize: 12, fontWeight: 700, color: "var(--gold)" }}>{used} <span style={{ fontSize: 10, color: "var(--muted)" }}>/ ∞</span></span>
+                        ) : (
+                          <span style={{ fontSize: 12, fontWeight: 700, color: q.color }}>{q.used}/{QUOTA_FREE}</span>
+                        )}
+                      </div>
+                      {viewMode !== "admin" && !q.isFree && (
+                        <div style={{ fontSize: 10, color: "var(--red)", fontWeight: 600, marginTop: 4, textAlign: "right" }}>
+                          {q.montantHT.toFixed(2)} € HT à facturer
+                        </div>
                       )}
                     </div>
                   );
