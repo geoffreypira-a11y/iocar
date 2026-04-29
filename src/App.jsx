@@ -4069,10 +4069,16 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
                       )}
                       {o.type === "avoir" && c.reste > 0.01 && viewMode !== "trial" && (
                         <button className="btn btn-ghost btn-xs" style={{ color: "var(--red)" }} title="Marquer comme remboursé" onClick={() => {
-                          // Math.round(... * 100) / 100 garantit un montant à 2 décimales sans perte de centimes
-                          const montant = Math.round(Math.abs(c.ttc) * 100) / 100;
+                          // ⚠ On rembourse uniquement le RESTE (c.reste), pas le total TTC.
+                          // Sinon, si l'avoir a déjà un acompte ou un paiement partiel,
+                          // on rembourserait deux fois la même somme.
+                          // c.reste est déjà en valeur absolue (cf. calcOrder).
+                          const montant = Math.round(c.reste * 100) / 100;
+                          if (montant <= 0) return;
                           const pmt = { id: uid(), date: today(), montant, mode: "Virement" };
-                          const updated = { ...o, paiements: [pmt], statut: "payé" };
+                          // On AJOUTE aux paiements existants — on n'écrase pas, sinon on
+                          // perd l'historique d'un éventuel remboursement partiel précédent.
+                          const updated = { ...o, paiements: [...(o.paiements || []), pmt], statut: "payé" };
                           setOrders(orders.map(x => x.id === o.id ? updated : x));
                         }}>💸 Remboursé</button>
                       )}
