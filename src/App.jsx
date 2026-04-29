@@ -2868,11 +2868,13 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
               win.document.write('.pdoc-watermark img{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}');
               win.document.write('.pdoc-table td{background:transparent!important}');
               // Anti-page-break sur les blocs critiques (totaux, footer mentions)
-              // Pour pdoc-paiements, on AUTORISE la coupure : si le bloc Historique
-              // de paiements ne tient pas, il bascule proprement sur une page 2
-              // (plutôt que de pousser le footer mentions sur p2 et laisser p1 à moitié vide).
+              // Pour pdoc-paiements : on FORCE un saut de page AVANT le bloc historique
+              // de paiements. Comme ça la page 1 contient la facture complète et propre
+              // (table + totaux + mentions légales), et la page 2 contient l'historique
+              // des paiements bien rempli — au lieu d'avoir une page 1 à moitié vide
+              // avec le footer mentions poussé tout seul sur la page 2.
               win.document.write('.pdoc-totals, .pdoc-footer{page-break-inside:avoid!important}');
-              win.document.write('.pdoc-paiements{page-break-before:auto!important;break-inside:auto!important}');
+              win.document.write('.pdoc-paiements{page-break-before:always!important;break-before:page!important;margin-top:0!important;padding-top:14mm!important}');
               // Marges A4 minimales et compaction globale du document pour tenir sur 1 page
               win.document.write('@page{size:A4 portrait;margin:5mm 6mm}');
               win.document.write('@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}');
@@ -4674,10 +4676,122 @@ function SubscriptionSection({ dealer }) {
    LIVRE DE POLICE
    Champs obligatoires art. R321-3 à R321-5 Code Pénal
 ═══════════════════════════════════════════════════════════════ */
+
+// Génère un PDF imprimable du Livre de Police dans une fenêtre popup.
+// Format A4 paysage avec une vraie mise en page de registre légal.
+function printRegistre(entries, dealer) {
+  const win = window.open('', '_blank');
+  if (!win) { alert("Le navigateur a bloqué la fenêtre d'impression"); return; }
+
+  const garageName  = dealer?.name    || "Concession";
+  const garageAddr  = (dealer?.address || "").replace(/\n/g, " · ");
+  const garageSiret = dealer?.siret   || "";
+  const dateImpr    = today();
+
+  const esc = (s) => String(s ?? "").replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+  // Lignes du registre
+  const rows = entries.map(e => `
+    <tr>
+      <td class="num">${esc(String(e.num_ordre || "").padStart(4,"0"))}</td>
+      <td>${esc(e.date_entree || "")}</td>
+      <td>
+        <div class="veh"><strong>${esc(e.marque || "")} ${esc(e.modele || "")}</strong></div>
+        <div class="vehmeta">${esc(e.couleur || "")} ${e.annee ? "· " + esc(e.annee) : ""}</div>
+      </td>
+      <td class="immat">${esc(e.immat || "—")}</td>
+      <td class="vin">${esc(e.vin || "—")}</td>
+      <td class="km">${e.kilometrage ? esc(e.kilometrage) + " km" : "—"}</td>
+      <td>
+        <div><strong>${esc(e.vendeur_nom || "")} ${esc(e.vendeur_prenom || "")}</strong></div>
+        <div class="vehmeta">${esc(e.vendeur_type === "pro" ? "Pro" : "Particulier")}${e.vendeur_piece_id ? " · " + esc(e.vendeur_piece_type || "CNI") + " " + esc(e.vendeur_piece_id) : ""}</div>
+      </td>
+      <td class="prix">${e.prix_achat ? Number(e.prix_achat).toLocaleString("fr-FR") + " €" : "—"}</td>
+      <td>${esc(e.date_sortie || "—")}</td>
+      <td>${esc(e.acheteur_nom || "—")}</td>
+    </tr>
+  `).join("");
+
+  win.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"/>
+<title>Livre de Police — ${esc(garageName)}</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Syne:wght@700;800&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "DM Sans", sans-serif; color: #1a1a1a; font-size: 9.5pt; padding: 8mm 6mm; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 8px; margin-bottom: 12px; border-bottom: 2px solid #d4a843; }
+  .header h1 { font-family: "Syne", sans-serif; font-size: 18pt; font-weight: 800; color: #1a1a1a; letter-spacing: 1px; }
+  .header .sub { font-size: 8pt; color: #666; margin-top: 2px; }
+  .header-right { text-align: right; font-size: 8pt; color: #444; line-height: 1.5; }
+  .header-right strong { color: #1a1a1a; font-size: 10pt; }
+  table { width: 100%; border-collapse: collapse; font-size: 8.5pt; }
+  thead { background: #f4f0e3; }
+  thead th { padding: 5px 6px; text-align: left; font-weight: 700; font-size: 7.5pt; text-transform: uppercase; letter-spacing: 0.5px; color: #444; border-bottom: 1px solid #d4a843; }
+  tbody td { padding: 5px 6px; border-bottom: 1px solid #eee; vertical-align: top; }
+  tbody tr:nth-child(odd) { background: #fafafa; }
+  .num { font-family: "DM Mono", monospace; font-weight: 700; color: #d4a843; }
+  .veh { font-size: 9pt; }
+  .vehmeta { font-size: 7.5pt; color: #777; margin-top: 1px; }
+  .immat { font-family: "DM Mono", monospace; font-size: 8pt; }
+  .vin { font-family: "DM Mono", monospace; font-size: 7.5pt; color: #555; }
+  .km { white-space: nowrap; }
+  .prix { font-weight: 600; white-space: nowrap; }
+  .footer { margin-top: 16px; padding-top: 8px; border-top: 1px solid #ddd; font-size: 7.5pt; color: #666; display: flex; justify-content: space-between; }
+  .legal { background: #fdf8ec; border: 1px solid #e8d9a8; border-radius: 4px; padding: 6px 10px; margin-bottom: 10px; font-size: 7.5pt; color: #6a4f1a; }
+  @page { size: A4 landscape; margin: 5mm; }
+  @media print { body { padding: 0; } }
+</style>
+</head><body>
+  <div class="header">
+    <div>
+      <h1>LIVRE DE POLICE</h1>
+      <div class="sub">Registre obligatoire — art. R321-3 à R321-5 Code Pénal · Conservation 5 ans</div>
+    </div>
+    <div class="header-right">
+      <strong>${esc(garageName)}</strong>
+      ${garageAddr ? `<div>${esc(garageAddr)}</div>` : ""}
+      ${garageSiret ? `<div>SIRET : ${esc(garageSiret)}</div>` : ""}
+      <div style="margin-top:4px">Imprimé le ${esc(dateImpr)} · ${entries.length} entrée${entries.length > 1 ? "s" : ""}</div>
+    </div>
+  </div>
+
+  <div class="legal">
+    Les soussignés certifient l'exactitude des écritures ci-dessous tenues conformément aux articles R321-3 à R321-5 du Code pénal.
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>N°</th>
+        <th>Entrée</th>
+        <th>Véhicule</th>
+        <th>Immat.</th>
+        <th>VIN</th>
+        <th>Km</th>
+        <th>Vendeur / Provenance</th>
+        <th>Prix achat</th>
+        <th>Sortie</th>
+        <th>Acheteur</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rows || `<tr><td colspan="10" style="text-align:center;padding:30px;color:#888">Aucune entrée</td></tr>`}
+    </tbody>
+  </table>
+
+  <div class="footer">
+    <span>Document généré automatiquement par IO Car</span>
+    <span>Page <span class="pagenum"></span></span>
+  </div>
+</body></html>`);
+
+  win.document.close();
+  win.focus();
+  setTimeout(() => { win.print(); }, 800);
+}
+
 function LivreDePolice({ vehicles, livrePolice, setLivrePolice, dealer, viewMode }) {
   const [modal, setModal] = useState(null);
   const [search, setSearch] = useState("");
-  const [printMode, setPrintMode] = useState(false);
   const [pendingDelete, setPendingDelete] = useState(null);
   const [pvLivraison, setPvLivraison] = useState(null);
 
@@ -5002,7 +5116,7 @@ function LivreDePolice({ vehicles, livrePolice, setLivrePolice, dealer, viewMode
           <div className="page-sub">Registre obligatoire — art. R321-3 à R321-5 Code Pénal · Conservation 5 ans</div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          <button className="btn btn-ghost btn-sm" onClick={() => { setPrintMode(true); setTimeout(() => window.print(), 300); setTimeout(() => setPrintMode(false), 1000); }}>
+          <button className="btn btn-ghost btn-sm" onClick={() => printRegistre(filtered, dealer)}>
             🖨 Imprimer le registre
           </button>
           <button className="btn btn-primary" onClick={() => setModal("add")}>+ Nouvelle entrée</button>
@@ -5125,18 +5239,6 @@ function LivreDePolice({ vehicles, livrePolice, setLivrePolice, dealer, viewMode
           </tbody>
         </table>
       </div>
-
-      {/* IMPRESSION */}
-      {printMode && (
-        <div style={{ display: "none" }} className="print-only">
-          <div style={{ fontFamily: "DM Sans", padding: 20 }}>
-            <h2 style={{ marginBottom: 4 }}>LIVRE DE POLICE — {dealer?.name}</h2>
-            <p style={{ fontSize: 11, color: "#888", marginBottom: 20 }}>
-              {dealer?.address} · SIRET : {dealer?.siret} · Imprimé le {today()}
-            </p>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
