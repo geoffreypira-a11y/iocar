@@ -71,6 +71,45 @@ export default async function handler(req, res) {
         return res.status(200).json({ ok: true });
       }
 
+      // ─── ARCHIVER UN GARAGE ─────────────────────────────────
+      // L'utilisateur ne peut plus se connecter, mais ses données
+      // sont conservées (LP 5 ans, factures 10 ans).
+      case 'archive_garage': {
+        const { garageId, raison } = payload || {};
+        if (!garageId) return res.status(400).json({ error: 'garageId manquant' });
+        const { error } = await supabase
+          .from('garages')
+          .update({
+            _archived: true,
+            is_active: false,
+            archive_date: new Date().toISOString(),
+            archive_raison: raison || null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', garageId);
+        if (error) return res.status(500).json({ error: error.message });
+        return res.status(200).json({ ok: true });
+      }
+
+      // ─── DÉSARCHIVER UN GARAGE ──────────────────────────────
+      // Pour réactiver un compte client qui revient.
+      case 'unarchive_garage': {
+        const { garageId } = payload || {};
+        if (!garageId) return res.status(400).json({ error: 'garageId manquant' });
+        const { error } = await supabase
+          .from('garages')
+          .update({
+            _archived: false,
+            // is_active reste à false : le client doit se réabonner via Stripe Portal
+            archive_date: null,
+            archive_raison: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', garageId);
+        if (error) return res.status(500).json({ error: error.message });
+        return res.status(200).json({ ok: true });
+      }
+
       // ─── CHANGER LE PLAN ────────────────────────────────────
       case 'set_plan': {
         const { garageId, plan } = payload || {};
