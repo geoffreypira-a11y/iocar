@@ -2279,6 +2279,9 @@ function FleetPage({ vehicles, setVehicles, orders, apiKey, usage, setUsage, liv
             vendeur_piece_type: "CNI", vendeur_piece_id: "", vendeur_piece_date: "", vendeur_piece_autorite: "",
             mode_reglement: "Virement",
             date_sortie: "", acheteur_nom: "", acheteur_adresse: "",
+            // Champs CNI acheteur — OPTIONNELS (n'entrent pas dans isComplete).
+            // Bonne pratique mais pas exigée par l'art. R.321-3 du Code pénal.
+            acheteur_piece_type: "CNI", acheteur_piece_id: "", acheteur_piece_date: "", acheteur_piece_autorite: "",
             notes: "Entrée créée automatiquement depuis la flotte — à compléter",
             _incomplete: true,
           };
@@ -5444,6 +5447,11 @@ function LivreDePolice({ vehicles, livrePolice, setLivrePolice, dealer, viewMode
     vendeur_piece_autorite: "Autorité de délivrance",
     acheteur_nom: "Nom acheteur",
     acheteur_adresse: "Adresse acheteur",
+    // Champs CNI acheteur — optionnels mais tracés dans l'historique si modifiés.
+    acheteur_piece_type: "Type pièce acheteur",
+    acheteur_piece_id: "N° pièce acheteur",
+    acheteur_piece_date: "Date pièce acheteur",
+    acheteur_piece_autorite: "Autorité pièce acheteur",
   };
 
   // Calcule les différences entre 2 versions de l'entrée.
@@ -5864,6 +5872,9 @@ function LivrePoliceModal({ entry, nextNum, vehicles, onSave, onClose }) {
     vendeur_piece_id: "", vendeur_piece_type: "CNI", vendeur_piece_date: "", vendeur_piece_autorite: "",
     prix_achat: "", mode_reglement: "Virement",
     date_sortie: "", acheteur_nom: "", acheteur_adresse: "",
+    // Champs CNI acheteur — OPTIONNELS. Recommandé en bonne pratique mais
+    // pas exigé légalement (art. R.321-3 vise uniquement le vendeur).
+    acheteur_piece_type: "CNI", acheteur_piece_id: "", acheteur_piece_date: "", acheteur_piece_autorite: "",
     notes: ""
   });
 
@@ -6010,6 +6021,37 @@ function LivrePoliceModal({ entry, nextNum, vehicles, onSave, onClose }) {
             <div className="form-group full">
               <label className="form-label">Adresse de l'acheteur</label>
               <input className="form-input" value={form.acheteur_adresse||""} onChange={e => set("acheteur_adresse", e.target.value)} />
+            </div>
+            {/* Pièce d'identité acheteur — OPTIONNELLE.
+                La loi (art. R.321-3) n'impose la pièce d'identité que pour le VENDEUR
+                (anti-recel : prouver qu'on n'achète pas un véhicule volé).
+                Pour l'acheteur, c'est une bonne pratique recommandée — utile en cas
+                de litige ou de fraude au paiement — mais pas obligatoire. */}
+            <div className="form-group full" style={{ marginTop: 4 }}>
+              <div style={{ fontSize: 10, color: "var(--muted)", letterSpacing: 1, textTransform: "uppercase", marginBottom: 4 }}>
+                Pièce d'identité acheteur · facultatif
+              </div>
+              <div style={{ fontSize: 10, color: "var(--muted)", lineHeight: 1.5, marginBottom: 8, fontStyle: "italic" }}>
+                Recommandé en cas de litige ou de fraude — non exigé par l'art. R.321-3 du Code pénal.
+              </div>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Type pièce</label>
+              <select className="form-input" value={form.acheteur_piece_type || "CNI"} onChange={e => set("acheteur_piece_type", e.target.value)}>
+                {PIECES.map(p => <option key={p}>{p}</option>)}
+              </select>
+            </div>
+            <div className="form-group">
+              <label className="form-label">N° pièce d'identité</label>
+              <input className="form-input" value={form.acheteur_piece_id||""} onChange={e => set("acheteur_piece_id", e.target.value)} placeholder="optionnel" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Date délivrance</label>
+              <input className="form-input" value={form.acheteur_piece_date||""} onChange={e => set("acheteur_piece_date", e.target.value)} placeholder="jj/mm/aaaa" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Autorité émettrice</label>
+              <input className="form-input" value={form.acheteur_piece_autorite||""} onChange={e => set("acheteur_piece_autorite", e.target.value)} placeholder="ex: Préfecture du Rhône" />
             </div>
           </div>
 
