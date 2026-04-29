@@ -548,7 +548,10 @@ function calcOrder(o) {
   // Acompte versé à la signature (TTC, par défaut 0).
   // L'acompte EST un encaissement réel — il doit être inclus dans `encaisse`
   // pour que le Reste à payer affiché dans le modal de paiement soit correct.
-  const acompteTtc = parseFloat(o.acompte_ttc) || 0;
+  // ⚠ Pour les AVOIRS : on ignore l'acompte. Un avoir est un remboursement, pas
+  // une vente — il n'a pas de logique "acompte signature". Si l'order est cloné
+  // d'une facture qui en avait un, on le neutralise ici.
+  const acompteTtc = o.type === "avoir" ? 0 : (parseFloat(o.acompte_ttc) || 0);
   const paiementsTotal = (o.paiements || []).reduce((s, p) => s + (parseFloat(p.montant) || 0), 0);
   const encaisse = acompteTtc + paiementsTotal;
   const reste = ttc - encaisse;
@@ -2507,25 +2510,28 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
             </div>
           </details>
 
-          {/* ═══ ACOMPTE VERSÉ À LA SIGNATURE ═══ */}
-          <div className="form-row" style={{ marginBottom: 20 }}>
-            <div className="form-group">
-              <label className="form-label">
-                💰 Acompte versé à la signature (€ TTC)
-                <span style={{ fontSize: 10, color: "var(--muted)", marginLeft: 8, fontWeight: 400 }}>
-                  Laisser à 0 si pas d'acompte
-                </span>
-              </label>
-              <input
-                className="form-input"
-                type="number"
-                step="0.01"
-                min="0"
-                value={form.acompte_ttc ?? 0}
-                onChange={e => set("acompte_ttc", parseFloat(e.target.value) || 0)}
-              />
+          {/* ═══ ACOMPTE VERSÉ À LA SIGNATURE ═══
+              N'apparaît que pour BC et factures — pas pour les avoirs (remboursement). */}
+          {form.type !== "avoir" && (
+            <div className="form-row" style={{ marginBottom: 20 }}>
+              <div className="form-group">
+                <label className="form-label">
+                  💰 Acompte versé à la signature (€ TTC)
+                  <span style={{ fontSize: 10, color: "var(--muted)", marginLeft: 8, fontWeight: 400 }}>
+                    Laisser à 0 si pas d'acompte
+                  </span>
+                </label>
+                <input
+                  className="form-input"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={form.acompte_ttc ?? 0}
+                  onChange={e => set("acompte_ttc", parseFloat(e.target.value) || 0)}
+                />
+              </div>
             </div>
-          </div>
+          )}
 
           {/* ═══ REPRISE VÉHICULE ═══ */}
           <div style={{ fontFamily: "Syne", fontSize: 13, fontWeight: 700, letterSpacing: 1, color: "var(--gold)", marginBottom: 10, textTransform: "uppercase" }}>REPRISE VÉHICULE</div>
@@ -3921,12 +3927,13 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
               facture_origine: o.ref,
               paiements: [],
               statut: null,
-              prix_ht: String(avoirChoice.totalTtc),
+              prix_ht: String(Number(avoirChoice.totalTtc).toFixed(2)),
               frais_mise_dispo: "0",
               carte_grise: "0",
               remise_ttc: "0",
               reprise_active: false,
               reprise_valeur: 0,
+              acompte_ttc: 0,  // ⚠ Un avoir n'a pas d'acompte signature
             };
             setOrders([...orders, avoir]);
             setAvoirChoice(null);
@@ -3952,12 +3959,13 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
               facture_origine: o.ref,
               paiements: [],
               statut: null,
-              prix_ht: String(montant),
+              prix_ht: String(Number(montant).toFixed(2)),
               frais_mise_dispo: "0",
               carte_grise: "0",
               remise_ttc: "0",
               reprise_active: false,
               reprise_valeur: 0,
+              acompte_ttc: 0,  // ⚠ Un avoir n'a pas d'acompte signature
             };
             setOrders([...orders, avoir]);
             setAvoirPartiel(null);
@@ -4061,7 +4069,9 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
                       )}
                       {o.type === "avoir" && c.reste > 0.01 && viewMode !== "trial" && (
                         <button className="btn btn-ghost btn-xs" style={{ color: "var(--red)" }} title="Marquer comme remboursé" onClick={() => {
-                          const pmt = { id: uid(), date: today(), montant: Math.abs(c.ttc), mode: "Virement" };
+                          // Math.round(... * 100) / 100 garantit un montant à 2 décimales sans perte de centimes
+                          const montant = Math.round(Math.abs(c.ttc) * 100) / 100;
+                          const pmt = { id: uid(), date: today(), montant, mode: "Virement" };
                           const updated = { ...o, paiements: [pmt], statut: "payé" };
                           setOrders(orders.map(x => x.id === o.id ? updated : x));
                         }}>💸 Remboursé</button>
