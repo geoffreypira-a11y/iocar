@@ -4574,8 +4574,98 @@ function SettingsPage({ dealer, setDealer, usage, isRealAdmin }) {
         {saved && <span style={{ marginLeft: 12, fontSize: 12, color: "var(--orange)" }}>● Modifications non sauvegardées</span>}
       </div>
 
+      {/* SECTION MON ABONNEMENT */}
+      <SubscriptionSection dealer={dealer} />
+
       {/* SYSTÈME DE TICKETS */}
       <TicketSystem dealer={form} />
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   MON ABONNEMENT — accès au Stripe Customer Portal
+   Le client peut depuis le portail :
+   - Mettre à jour sa CB
+   - Annuler son abonnement (effectif à la fin de la période payée)
+   - Voir et télécharger ses factures Stripe
+═══════════════════════════════════════════════════════════════ */
+function SubscriptionSection({ dealer }) {
+  const [loading, setLoading] = useState(false);
+
+  const openPortal = async () => {
+    const { token } = loadSession();
+    if (!token) { alert("Session expirée."); return; }
+    setLoading(true);
+    try {
+      const res = await fetch("/api/customer-portal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.error || "Erreur lors de l'ouverture du portail");
+      }
+      const { url } = await res.json();
+      if (url) window.location.href = url;
+    } catch (e) {
+      alert(e.message);
+    }
+    setLoading(false);
+  };
+
+  const planLabel = dealer?.plan === "annual" ? "Annuel"
+    : dealer?.plan === "monthly" ? "Mensuel"
+    : dealer?.plan === "trial" ? "Essai" : "—";
+
+  const hasStripe = !!dealer?.stripe_customer_id;
+
+  return (
+    <div style={{ marginTop: 32, padding: "20px 24px", background: "var(--card2)", border: "1px solid var(--border)", borderRadius: 12 }}>
+      <div style={{ fontFamily: "Syne", fontSize: 14, fontWeight: 700, letterSpacing: 1, color: "var(--gold)", textTransform: "uppercase", marginBottom: 14 }}>
+        💳 Mon abonnement
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 16, marginBottom: 16 }}>
+        <div>
+          <div style={{ fontSize: 10, letterSpacing: 1, textTransform: "uppercase", color: "var(--muted)", marginBottom: 4 }}>Formule</div>
+          <div style={{ fontSize: 14, fontWeight: 600 }}>{planLabel}</div>
+        </div>
+        <div>
+          <div style={{ fontSize: 10, letterSpacing: 1, textTransform: "uppercase", color: "var(--muted)", marginBottom: 4 }}>Statut</div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: dealer?.is_active ? "var(--green)" : "var(--red)" }}>
+            {dealer?.is_active ? "✅ Actif" : "🔒 Suspendu"}
+          </div>
+        </div>
+        {dealer?.subscribed_at && (
+          <div>
+            <div style={{ fontSize: 10, letterSpacing: 1, textTransform: "uppercase", color: "var(--muted)", marginBottom: 4 }}>Membre depuis</div>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>
+              {new Date(dealer.subscribed_at).toLocaleDateString("fr-FR")}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        {hasStripe ? (
+          <button className="btn btn-primary" onClick={openPortal} disabled={loading}>
+            {loading ? "..." : "🔧 Gérer mon abonnement"}
+          </button>
+        ) : (
+          <div style={{ fontSize: 12, color: "var(--muted)", fontStyle: "italic" }}>
+            Aucun abonnement Stripe associé.
+          </div>
+        )}
+      </div>
+
+      {hasStripe && (
+        <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 12, lineHeight: 1.6 }}>
+          Le portail vous permet de mettre à jour votre carte bancaire, télécharger vos factures
+          ou annuler votre abonnement (l'annulation prend effet à la fin de la période payée,
+          sans remboursement au prorata).
+        </div>
+      )}
     </div>
   );
 }
@@ -6188,22 +6278,105 @@ function LoginScreen({ onLogin }) {
    ÉCRAN ACCÈS SUSPENDU
 ═══════════════════════════════════════════════════════════════ */
 function SuspendedScreen({ garage, onLogout }) {
+  const [loadingPortal, setLoadingPortal] = useState(false);
+
+  // Détermine la cause de la suspension pour adapter le message
+  const isPastDue = garage?.sub_status === "past_due" || garage?.payment_failed_at;
+  const isArchived = garage?._archived === true;
+  const hasStripeCustomer = !!garage?.stripe_customer_id;
+
+  const openPortal = async () => {
+    const { token } = loadSession();
+    if (!token) { alert("Session expirée, veuillez vous reconnecter."); return; }
+    setLoadingPortal(true);
+    try {
+      const res = await fetch("/api/customer-portal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.error || "Erreur lors de l'ouverture du portail");
+      }
+      const { url } = await res.json();
+      if (url) window.location.href = url;
+    } catch (e) {
+      alert(e.message);
+    }
+    setLoadingPortal(false);
+  };
+
+  // Si archivé : on cache l'option Stripe (on demande de contacter)
+  const showStripeButton = !isArchived && hasStripeCustomer;
+
+  // Titre + message adaptés
+  let title = "Abonnement suspendu";
+  let message = (
+    <>L'accès de <strong style={{ color: "var(--text)" }}>{garage?.name || "votre concession"}</strong> a été suspendu.</>
+  );
+  let icon = "🔒";
+
+  if (isArchived) {
+    title = "Compte archivé";
+    icon = "📦";
+    message = (
+      <>
+        Le compte <strong style={{ color: "var(--text)" }}>{garage?.name || "de cette concession"}</strong> a été archivé.<br />
+        Vos données sont conservées conformément aux obligations légales (Livre de Police 5 ans, factures 10 ans).<br />
+        Pour réactiver votre compte, contactez-nous.
+      </>
+    );
+  } else if (isPastDue) {
+    title = "Échec de paiement";
+    icon = "💳";
+    message = (
+      <>
+        Le dernier paiement de l'abonnement de <strong style={{ color: "var(--text)" }}>{garage?.name || "votre concession"}</strong> a échoué.<br />
+        Mettez à jour votre carte bancaire pour réactiver votre accès immédiatement.
+      </>
+    );
+  }
+
   return (
     <>
       <style>{STYLE}</style>
       <div className="auth-wrap">
-        <div className="auth-box" style={{ textAlign: "center" }}>
-          <div style={{ fontSize: 64, marginBottom: 20 }}>🔒</div>
-          <div style={{ fontFamily: "Syne", fontSize: 22, fontWeight: 700, marginBottom: 10 }}>Accès suspendu</div>
-          <div style={{ fontSize: 14, color: "var(--muted)", lineHeight: 1.7, marginBottom: 28 }}>
-            L'abonnement de <strong style={{ color: "var(--text)" }}>{garage?.name}</strong> est suspendu.<br />
-            Contactez-nous pour réactiver votre accès.
+        <div className="auth-box" style={{ textAlign: "center", maxWidth: 480 }}>
+          <div style={{ fontSize: 64, marginBottom: 20 }}>{icon}</div>
+          <div style={{ fontFamily: "Syne", fontSize: 22, fontWeight: 700, marginBottom: 12 }}>{title}</div>
+          <div style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.7, marginBottom: 28 }}>
+            {message}
           </div>
-          <a href="mailto:contact@iocar.online" className="btn btn-primary" style={{ display: "inline-flex", marginBottom: 16, justifyContent: "center" }}>
-            📧 Nous contacter
-          </a>
-          <br />
-          <button className="btn btn-ghost btn-sm" onClick={onLogout}>Se déconnecter</button>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, alignItems: "center" }}>
+            {showStripeButton && (
+              <button
+                className="btn btn-primary"
+                onClick={openPortal}
+                disabled={loadingPortal}
+                style={{ minWidth: 240 }}
+              >
+                {loadingPortal ? "..." : isPastDue ? "💳 Mettre à jour ma carte" : "✅ Réactiver mon abonnement"}
+              </button>
+            )}
+
+            <a
+              href="mailto:contact@iocar.online"
+              className="btn btn-ghost"
+              style={{ display: "inline-flex", justifyContent: "center", minWidth: 240 }}
+            >
+              📧 Nous contacter
+            </a>
+
+            <button className="btn btn-ghost btn-sm" onClick={onLogout} style={{ marginTop: 8 }}>
+              Se déconnecter
+            </button>
+          </div>
+
+          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 24, lineHeight: 1.6 }}>
+            Si vous souhaitez récupérer vos données (factures, livre de police…),<br />
+            contactez-nous, nous pourrons rouvrir votre accès temporairement.
+          </div>
         </div>
       </div>
     </>
@@ -6330,6 +6503,54 @@ function AdminPage({ token }) {
     try {
       await adminCall("toggle_active", { garageId: g.id, value: newVal });
       setGarages(garages.map(x => x.id === g.id ? { ...x, is_active: newVal, updated_at: new Date().toISOString() } : x));
+    } catch(e) {
+      alert("Erreur : " + e.message);
+    }
+    setUpdating(null);
+  };
+
+  const archiveGarage = async (g) => {
+    const raison = window.prompt(
+      `Archiver le compte de "${g.name || g.email}" ?\n\n` +
+      `Le client ne pourra plus se connecter, mais ses données restent en base ` +
+      `(LP 5 ans, factures 10 ans). Vous pourrez réactiver le compte plus tard.\n\n` +
+      `Raison de l'archivage (facultatif) :`
+    );
+    // null = annulation utilisateur, "" = OK sans raison → on poursuit
+    if (raison === null) return;
+    setUpdating(g.id);
+    try {
+      await adminCall("archive_garage", { garageId: g.id, raison });
+      setGarages(garages.map(x => x.id === g.id ? {
+        ...x,
+        _archived: true,
+        is_active: false,
+        archive_date: new Date().toISOString(),
+        archive_raison: raison || null,
+        updated_at: new Date().toISOString(),
+      } : x));
+    } catch(e) {
+      alert("Erreur : " + e.message);
+    }
+    setUpdating(null);
+  };
+
+  const unarchiveGarage = async (g) => {
+    if (!window.confirm(
+      `Désarchiver le compte de "${g.name || g.email}" ?\n\n` +
+      `Le compte redeviendra visible et le client pourra se reconnecter, ` +
+      `mais l'accès restera suspendu tant qu'il ne se sera pas réabonné via Stripe.`
+    )) return;
+    setUpdating(g.id);
+    try {
+      await adminCall("unarchive_garage", { garageId: g.id });
+      setGarages(garages.map(x => x.id === g.id ? {
+        ...x,
+        _archived: false,
+        archive_date: null,
+        archive_raison: null,
+        updated_at: new Date().toISOString(),
+      } : x));
     } catch(e) {
       alert("Erreur : " + e.message);
     }
@@ -6541,9 +6762,15 @@ function AdminPage({ token }) {
                     </select>
                   </td>
                   <td>
-                    <span className={`badge ${g.is_active ? "badge-green" : "badge-red"}`}>
-                      {g.is_active ? "✅ Actif" : "⛔ Suspendu"}
-                    </span>
+                    {g._archived ? (
+                      <span className="badge" style={{ background: "rgba(140,140,140,.15)", color: "#999", border: "1px solid rgba(140,140,140,.3)" }}>
+                        📦 Archivé
+                      </span>
+                    ) : (
+                      <span className={`badge ${g.is_active ? "badge-green" : "badge-red"}`}>
+                        {g.is_active ? "✅ Actif" : "🔒 Suspendu"}
+                      </span>
+                    )}
                   </td>
                   <td style={{ fontSize: 11, color: "var(--muted)" }}>
                     {g.created_at ? new Date(g.created_at).toLocaleDateString("fr-FR") : "—"}
@@ -6562,14 +6789,42 @@ function AdminPage({ token }) {
                   </td>
                   <td>
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      <button
-                        className={`btn btn-sm ${g.is_active ? "btn-danger" : "btn-primary"}`}
-                        onClick={() => toggleActive(g)}
-                        disabled={updating === g.id}
-                        style={{ fontSize: 11 }}
-                      >
-                        {updating === g.id ? "..." : g.is_active ? "⛔ Suspendre" : "✅ Activer"}
-                      </button>
+                      {/* Cadenas — toggle d'accès rapide. Désactivé si archivé. */}
+                      {!g._archived && (
+                        <button
+                          className={`btn btn-sm ${g.is_active ? "btn-danger" : "btn-primary"}`}
+                          onClick={() => toggleActive(g)}
+                          disabled={updating === g.id}
+                          style={{ fontSize: 11 }}
+                          title={g.is_active ? "Suspendre l'accès (cadenas fermé)" : "Réactiver l'accès (cadenas ouvert)"}
+                        >
+                          {updating === g.id ? "..." : g.is_active ? "🔒 Suspendre" : "🔓 Activer"}
+                        </button>
+                      )}
+
+                      {/* Archiver / Désarchiver */}
+                      {!g._archived ? (
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => archiveGarage(g)}
+                          disabled={updating === g.id}
+                          style={{ fontSize: 11, color: "#888" }}
+                          title="Archiver le compte (les données restent en base, le client ne peut plus se connecter)"
+                        >
+                          ♻️ Archiver
+                        </button>
+                      ) : (
+                        <button
+                          className="btn btn-primary btn-sm"
+                          onClick={() => unarchiveGarage(g)}
+                          disabled={updating === g.id}
+                          style={{ fontSize: 11 }}
+                          title="Désarchiver le compte — le client devra se réabonner via Stripe"
+                        >
+                          🔄 Réactiver
+                        </button>
+                      )}
+
                       <button
                         className="btn btn-ghost btn-sm"
                         style={{ fontSize: 11 }}
