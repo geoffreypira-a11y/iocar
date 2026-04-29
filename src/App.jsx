@@ -531,6 +531,39 @@ function inPeriod(dateStr, period) {
   return true;
 }
 
+// Renvoie true si dateStr tombe dans la période *précédente* (hier, mois dernier,
+// année dernière). Utile pour les comparatifs "vs période précédente".
+// "all" n'a pas de précédent → false.
+function inPreviousPeriod(dateStr, period) {
+  if (period === "all") return false;
+  const d = parseFr(dateStr);
+  if (!d) return false;
+  const now = new Date();
+  if (period === "day") {
+    const yesterday = new Date(now);
+    yesterday.setDate(now.getDate() - 1);
+    return d.getDate() === yesterday.getDate() && d.getMonth() === yesterday.getMonth() && d.getFullYear() === yesterday.getFullYear();
+  }
+  if (period === "month") {
+    const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    return d.getMonth() === prev.getMonth() && d.getFullYear() === prev.getFullYear();
+  }
+  if (period === "year") {
+    return d.getFullYear() === now.getFullYear() - 1;
+  }
+  return false;
+}
+
+// Nombre de jours entiers écoulés entre dateStr (DD/MM/YYYY) et aujourd'hui.
+// Retourne null si la date est invalide. Toujours positif si la date est dans le passé.
+function daysSince(dateStr) {
+  const d = parseFr(dateStr);
+  if (!d) return null;
+  const now = new Date();
+  const ms = now.setHours(0, 0, 0, 0) - d.setHours(0, 0, 0, 0);
+  return Math.floor(ms / 86400000);
+}
+
 function getPayStatut(c, type) {
   if (type === "avoir") {
     if (c.reste <= 0.01) return { label: "✅ Remboursé", cls: "badge-green" };
@@ -1063,6 +1096,60 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
   // Activité récente — instantané, 6 derniers documents toutes périodes.
   const recent = [...orders].sort((a, b) => (b.date_creation || "").localeCompare(a.date_creation || "")).slice(0, 6);
 
+  // ─── STOCK DORMANT ──────────────────────────────────────────
+  // Véhicules disponibles classés par âge en stock (date_entree). On garde le top 5.
+  // Seuils : ≥ 90 jours = critique (rouge), ≥ 60 jours = à surveiller (orange).
+  const stockDormant = vehicles
+    .filter(v => v.statut === "disponible")
+    .map(v => ({ v, jours: daysSince(v.date_entree) }))
+    .filter(x => x.jours !== null && x.jours >= 60)
+    .sort((a, b) => b.jours - a.jours)
+    .slice(0, 5);
+  const cashBloque = stockDormant.reduce((s, x) => s + (parseFloat(x.v.prix_achat) || 0), 0);
+
+  // ─── RELANCES CLIENTS ───────────────────────────────────────
+  // Factures avec un reste > 0, classées par ancienneté (date_creation). Top 5.
+  // Seuils : ≥ 30 jours = critique, ≥ 15 jours = à surveiller, sinon récent.
+  const relances = orders
+    .filter(o => o.type === "facture" && calcOrder(o).reste > 0.01)
+    .map(o => ({ o, jours: daysSince(o.date_creation), reste: calcOrder(o).reste }))
+    .filter(x => x.jours !== null)
+    .sort((a, b) => b.jours - a.jours)
+    .slice(0, 5);
+  const totalRelances = relances.reduce((s, x) => s + x.reste, 0);
+
+  // ─── COMPARATIF VS PÉRIODE PRÉCÉDENTE ───────────────────────
+  // Recalcule les mêmes agrégats sur la période précédente (mois dernier, année dernière, etc.)
+  const venduPrev = (livrePolice || []).filter(e => {
+    if (!e.date_sortie) return false;
+    if (e.motif_sortie && e.motif_sortie !== "vente") return false;
+    return inPreviousPeriod(e.date_sortie, period);
+  }).length;
+
+  const encaissePrev = orders.reduce((s, o) => {
+    const sign = o.type === "avoir" ? -1 : 1;
+    let local = 0;
+    if (o.type !== "avoir") {
+      const acompte = parseFloat(o.acompte_ttc) || 0;
+      if (acompte > 0 && inPreviousPeriod(o.date_creation, period)) {
+        local += acompte;
+      }
+    }
+    for (const p of (o.paiements || [])) {
+      if (inPreviousPeriod(p.date, period)) {
+        local += parseFloat(p.montant) || 0;
+      }
+    }
+    return s + local * sign;
+  }, 0);
+
+  // Helpers pour formatter les variations
+  const periodLabel = period === "day" ? "hier" : period === "month" ? "mois dernier" : period === "year" ? "an dernier" : "";
+  const variationPct = (current, previous) => {
+    if (previous === 0) return current > 0 ? null : 0; // null = pas de précédent significatif
+    return Math.round((current - previous) / Math.abs(previous) * 100);
+  };
+
 
   // ─── RECHERCHE PLAQUE ────────────────────────────────────────
   const [searchPlate, setSearchPlate] = useState("");
@@ -1166,12 +1253,7 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
       <div className="page-header">
         <div>
           <div className="page-title">Tableau de bord</div>
-          <div className="page-sub">Vue d'ensemble · {
-            period === "day" ? "ventes & encaissements du jour" :
-            period === "month" ? "ventes & encaissements du mois" :
-            period === "year" ? "ventes & encaissements de l'année" :
-            "ventes & encaissements depuis le début"
-          }</div>
+          <div className="page-sub">Vue d'ensemble de votre activité</div>
         </div>
         {/* BARRE RECHERCHE PLAQUE */}
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -1221,13 +1303,44 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
         </div>
       </div>
 
-      {/* SÉLECTEUR DE PÉRIODE */}
+      {/* ───────────────────────────────────────────────────────
+          KPI — Section 1 : INSTANTANÉ (état présent, non filtré)
+          ─────────────────────────────────────────────────────── */}
+      <div style={{ fontSize: 10, letterSpacing: 1.5, textTransform: "uppercase", color: "var(--muted)", marginBottom: 8 }}>
+        📸 État actuel · instantané
+      </div>
+      <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", marginBottom: 20 }}>
+        <div className="kpi" onClick={() => setTab("fleet")} style={{ cursor: "pointer" }}>
+          <div className="kpi-label">🚗 En stock</div>
+          <div className="kpi-val gold">{dispo}</div>
+          <div className="kpi-foot">{fleet} total</div>
+        </div>
+        <div className="kpi" onClick={() => setTab("orders")} style={{ cursor: "pointer" }}>
+          <div className="kpi-label">📋 BC en cours</div>
+          <div className="kpi-val blue">{nbBC}</div>
+          <div className="kpi-foot">bons de commande</div>
+        </div>
+        <div className="kpi">
+          <div className="kpi-label">⏳ À encaisser</div>
+          <div className="kpi-val" style={{ color: aEncaisser > 0.01 ? "var(--orange)" : "var(--green)" }}>{fmt(aEncaisser)}</div>
+          <div className="kpi-foot">{aEncaisser > 0.01 ? "solde restant dû" : "tout soldé ✓"}</div>
+        </div>
+        <div className="kpi" style={{ border: `1px solid ${tresoPositive ? "rgba(62,207,122,.3)" : "rgba(229,92,92,.3)"}`, background: tresoPositive ? "rgba(62,207,122,.04)" : "rgba(229,92,92,.04)" }}>
+          <div className="kpi-label" style={{ color: tresoPositive ? "var(--green)" : "var(--red)" }}>🏦 Solde tréso</div>
+          <div className="kpi-val" style={{ color: tresoPositive ? "var(--green)" : "var(--red)" }}>{fmt(soldeTreso)}</div>
+          <div className="kpi-foot">encaissé − achats</div>
+        </div>
+      </div>
+
+      {/* ───────────────────────────────────────────────────────
+          KPI — Section 2 : PÉRIODE (filtré par le sélecteur)
+          ─────────────────────────────────────────────────────── */}
       <div style={{
         display: "flex", alignItems: "center", justifyContent: "space-between",
-        gap: 12, marginBottom: 16, flexWrap: "wrap"
+        gap: 12, marginBottom: 8, flexWrap: "wrap"
       }}>
-        <div style={{ fontSize: 11, color: "var(--muted)", letterSpacing: 1.5, textTransform: "uppercase" }}>
-          📅 Période d'analyse
+        <div style={{ fontSize: 10, letterSpacing: 1.5, textTransform: "uppercase", color: "var(--gold)" }}>
+          📅 Sur la période
         </div>
         <div style={{
           display: "inline-flex", background: "var(--card2)",
@@ -1258,48 +1371,35 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
           })}
         </div>
       </div>
-
-      {/* KPI CARDS */}
       <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))" }}>
-        <div className="kpi" onClick={() => setTab("fleet")} style={{ cursor: "pointer" }}>
-          <div className="kpi-label">🚗 En stock</div>
-          <div className="kpi-val gold">{dispo}</div>
-          <div className="kpi-foot">{fleet} total · instantané</div>
-        </div>
-        <div className="kpi" onClick={() => setTab("fleet")} style={{ cursor: "pointer" }}>
+        <div className="kpi" onClick={() => setTab("fleet")} style={{ cursor: "pointer", borderLeft: "3px solid var(--gold)" }}>
           <div className="kpi-label">🏷 Vendus</div>
           <div className="kpi-val" style={{ color: "var(--muted2)" }}>{vendu}</div>
-          <div className="kpi-foot">{
-            period === "day" ? "aujourd'hui" :
-            period === "month" ? "ce mois" :
-            period === "year" ? "cette année" :
-            "depuis le début"
-          }</div>
+          {period !== "all" ? (() => {
+            const diff = vendu - venduPrev;
+            const color = diff > 0 ? "var(--green)" : diff < 0 ? "var(--red)" : "var(--muted)";
+            const arrow = diff > 0 ? "↗" : diff < 0 ? "↘" : "→";
+            return <div className="kpi-foot" style={{ color }}>{arrow} {diff >= 0 ? "+" : ""}{diff} vs {periodLabel}</div>;
+          })() : <div className="kpi-foot">véhicules cédés</div>}
         </div>
-        <div className="kpi" onClick={() => setTab("orders")} style={{ cursor: "pointer" }}>
-          <div className="kpi-label">📋 BC en cours</div>
-          <div className="kpi-val blue">{nbBC}</div>
-          <div className="kpi-foot">bons de commande</div>
-        </div>
-        <div className="kpi">
+        <div className="kpi" style={{ borderLeft: "3px solid var(--gold)" }}>
           <div className="kpi-label">✅ Encaissé</div>
           <div className="kpi-val green">{fmt(encaisse)}</div>
-          <div className="kpi-foot">{
-            period === "day" ? "aujourd'hui" :
-            period === "month" ? "ce mois" :
-            period === "year" ? "cette année" :
-            "depuis le début"
-          }</div>
+          {period !== "all" ? (() => {
+            const pct = variationPct(encaisse, encaissePrev);
+            if (pct === null) return <div className="kpi-foot" style={{ color: "var(--muted)" }}>nouveau · pas de {periodLabel}</div>;
+            const color = pct > 0 ? "var(--green)" : pct < 0 ? "var(--red)" : "var(--muted)";
+            const arrow = pct > 0 ? "↗" : pct < 0 ? "↘" : "→";
+            return <div className="kpi-foot" style={{ color }}>{arrow} {pct >= 0 ? "+" : ""}{pct}% vs {periodLabel}</div>;
+          })() : <div className="kpi-foot">depuis le début</div>}
         </div>
-        <div className="kpi">
-          <div className="kpi-label">⏳ À encaisser</div>
-          <div className="kpi-val" style={{ color: aEncaisser > 0.01 ? "var(--orange)" : "var(--green)" }}>{fmt(aEncaisser)}</div>
-          <div className="kpi-foot">{aEncaisser > 0.01 ? "solde restant dû" : "tout soldé ✓"}</div>
-        </div>
-        <div className="kpi" style={{ border: `1px solid ${tresoPositive ? "rgba(62,207,122,.3)" : "rgba(229,92,92,.3)"}`, background: tresoPositive ? "rgba(62,207,122,.04)" : "rgba(229,92,92,.04)" }}>
-          <div className="kpi-label" style={{ color: tresoPositive ? "var(--green)" : "var(--red)" }}>🏦 Solde tréso</div>
-          <div className="kpi-val" style={{ color: tresoPositive ? "var(--green)" : "var(--red)" }}>{fmt(soldeTreso)}</div>
-          <div className="kpi-foot">encaissé − achats</div>
+        <div className="kpi" style={{ borderLeft: "3px solid var(--gold)" }}>
+          <div className="kpi-label">💰 Panier moyen</div>
+          {(() => {
+            const panier = vendu > 0 ? encaisse / vendu : 0;
+            return <div className="kpi-val gold">{fmt(panier)}</div>;
+          })()}
+          <div className="kpi-foot">{vendu > 0 ? `${vendu} vente${vendu > 1 ? "s" : ""}` : "aucune vente"}</div>
         </div>
       </div>
 
@@ -1377,37 +1477,113 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
         </div>
       </div>
 
-      {/* SUIVI ENCAISSEMENTS */}
-      <div className="card">
-        <div className="card-pad" style={{ borderBottom: "1px solid var(--border2)" }}>
-          <div style={{ fontWeight: 700, fontSize: 14 }}>💳 Suivi encaissements en attente</div>
-        </div>
-        {orders.filter(o => calcOrder(o).reste > 0.01).length === 0 ? (
-          <div className="card-pad" style={{ color: "var(--muted)", fontSize: 13 }}>✅ Aucun encaissement en attente</div>
-        ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 1, background: "var(--border2)" }}>
-            {orders.filter(o => calcOrder(o).reste > 0.01).map(o => {
-              const c = calcOrder(o);
-              const pct = c.ttc > 0 ? Math.round(c.encaisse / c.ttc * 100) : 0;
-              return (
-                <div key={o.id} style={{ padding: "14px 20px", background: "var(--card)" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-                    <div>
-                      <div style={{ fontWeight: 600, fontSize: 13 }}>{o.client?.name || "—"}</div>
-                      <div style={{ fontSize: 11, color: "var(--muted)" }}>{o.vehicle_label || o.ref}</div>
+      {/* ───────────────────────────────────────────────────────
+          STOCK DORMANT + RELANCES — côte à côte
+          ─────────────────────────────────────────────────────── */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 20 }}>
+
+        {/* STOCK DORMANT */}
+        <div className="card">
+          <div className="card-pad" style={{ borderBottom: "1px solid var(--border2)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 14 }}>⚠ Stock dormant</div>
+              <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>véhicules en stock depuis ≥ 60 jours</div>
+            </div>
+            {cashBloque > 0 && (
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontSize: 10, color: "var(--muted)", letterSpacing: 1, textTransform: "uppercase" }}>cash bloqué</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "var(--orange)", fontFamily: "Syne" }}>{fmt(cashBloque)}</div>
+              </div>
+            )}
+          </div>
+          {stockDormant.length === 0 ? (
+            <div className="card-pad" style={{ color: "var(--muted)", fontSize: 13 }}>✅ Tout votre stock est récent (&lt; 60j)</div>
+          ) : (
+            <div>
+              {stockDormant.map(({ v, jours }) => {
+                const critique = jours >= 90;
+                const badgeBg = critique ? "rgba(229,92,92,.15)" : "rgba(229,151,60,.15)";
+                const badgeColor = critique ? "var(--red)" : "var(--orange)";
+                return (
+                  <div
+                    key={v.id}
+                    onClick={() => setTab("fleet")}
+                    style={{ padding: "10px 20px", borderBottom: "1px solid var(--border2)", display: "flex", alignItems: "center", gap: 12, cursor: "pointer" }}
+                  >
+                    <div style={{
+                      background: badgeBg, color: badgeColor,
+                      fontSize: 11, fontWeight: 700, padding: "4px 8px",
+                      borderRadius: 6, minWidth: 50, textAlign: "center",
+                      fontFamily: "DM Mono",
+                    }}>
+                      {jours} j
                     </div>
-                    <div style={{ textAlign: "right", fontSize: 12 }}>
-                      <div style={{ color: "var(--green)", fontWeight: 700 }}>{fmt(c.encaisse)}</div>
-                      <div style={{ color: "var(--orange)" }}>reste {fmt(c.reste)}</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {v.marque || "—"} {v.modele || ""} {v.plate ? `· ${v.plate}` : ""}
+                      </div>
+                      <div style={{ fontSize: 11, color: "var(--muted)" }}>
+                        {parseFloat(v.prix_achat) > 0 ? `Acheté ${fmt(parseFloat(v.prix_achat))} · ` : ""}entré le {v.date_entree || "—"}
+                      </div>
                     </div>
                   </div>
-                  <div className="progress"><div className="progress-fill" style={{ width: `${pct}%`, background: pct === 100 ? "var(--green)" : "var(--gold)" }} /></div>
-                  <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 4 }}>{pct}% encaissé</div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* RELANCES CLIENTS */}
+        <div className="card">
+          <div className="card-pad" style={{ borderBottom: "1px solid var(--border2)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 14 }}>📞 À relancer</div>
+              <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>factures avec un reste à encaisser</div>
+            </div>
+            {totalRelances > 0 && (
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontSize: 10, color: "var(--muted)", letterSpacing: 1, textTransform: "uppercase" }}>en attente</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "var(--orange)", fontFamily: "Syne" }}>{fmt(totalRelances)}</div>
+              </div>
+            )}
           </div>
-        )}
+          {relances.length === 0 ? (
+            <div className="card-pad" style={{ color: "var(--muted)", fontSize: 13 }}>✅ Aucune facture en attente</div>
+          ) : (
+            <div>
+              {relances.map(({ o, jours, reste }) => {
+                const critique = jours >= 30;
+                const moyen = jours >= 15;
+                const badgeBg = critique ? "rgba(229,92,92,.15)" : moyen ? "rgba(229,151,60,.15)" : "rgba(94,126,238,.15)";
+                const badgeColor = critique ? "var(--red)" : moyen ? "var(--orange)" : "var(--blue)";
+                return (
+                  <div
+                    key={o.id}
+                    onClick={() => setTab("orders")}
+                    style={{ padding: "10px 20px", borderBottom: "1px solid var(--border2)", display: "flex", alignItems: "center", gap: 12, cursor: "pointer" }}
+                  >
+                    <div style={{
+                      background: badgeBg, color: badgeColor,
+                      fontSize: 11, fontWeight: 700, padding: "4px 8px",
+                      borderRadius: 6, minWidth: 60, textAlign: "center",
+                      fontFamily: "DM Mono",
+                    }}>
+                      +{jours} j
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {o.client?.name || "—"}
+                      </div>
+                      <div style={{ fontSize: 11, color: "var(--muted)" }}>
+                        {o.ref} · reste <span style={{ color: "var(--orange)", fontWeight: 600 }}>{fmt(reste)}</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
       {/* CALCULATEUR CARTE GRISE */}
       <div className="card" style={{ marginTop: 20 }}>
