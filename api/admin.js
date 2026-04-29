@@ -110,6 +110,50 @@ export default async function handler(req, res) {
         return res.status(200).json({ ok: true });
       }
 
+      // ─── SUPPRIMER DÉFINITIVEMENT UN GARAGE ─────────────────
+      // ⚠ Action irréversible. Supprime :
+      //   - toutes les entrées vehicles, orders, clients, livre_police du garage
+      //   - la ligne dans la table garages
+      //   - l'utilisateur dans auth.users (qui ne pourra plus se connecter)
+      //
+      // À utiliser uniquement après expiration des durées de conservation
+      // légales (LP 5 ans, factures 10 ans) — ou pour des cas exceptionnels
+      // (compte de test, doublon, demande RGPD de suppression…).
+      case 'delete_garage': {
+        const { garageId } = payload || {};
+        if (!garageId) return res.status(400).json({ error: 'garageId manquant' });
+
+        // Récupérer le user_id avant suppression pour pouvoir nettoyer auth.users
+        const { data: g, error: getErr } = await supabase
+          .from('garages').select('user_id').eq('id', garageId).single();
+        if (getErr || !g) return res.status(404).json({ error: 'Garage introuvable' });
+
+        // 1. Supprimer toutes les données associées (CASCADE manuel)
+        const tables = ['vehicles', 'orders', 'clients', 'livre_police'];
+        for (const t of tables) {
+          const { error } = await supabase.from(t).delete().eq('garage_id', garageId);
+          if (error) {
+            console.error(`Erreur suppression ${t}:`, error);
+            return res.status(500).json({ error: `Erreur suppression ${t} : ${error.message}` });
+          }
+        }
+
+        // 2. Supprimer la ligne du garage
+        const { error: gErr } = await supabase.from('garages').delete().eq('id', garageId);
+        if (gErr) return res.status(500).json({ error: `Erreur suppression garage : ${gErr.message}` });
+
+        // 3. Supprimer le user dans auth.users (best-effort, ne bloque pas si erreur)
+        if (g.user_id) {
+          try {
+            await supabase.auth.admin.deleteUser(g.user_id);
+          } catch (authErr) {
+            console.error('Erreur suppression auth.users (non bloquant):', authErr);
+          }
+        }
+
+        return res.status(200).json({ ok: true });
+      }
+
       // ─── CHANGER LE PLAN ────────────────────────────────────
       case 'set_plan': {
         const { garageId, plan } = payload || {};
