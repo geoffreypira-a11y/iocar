@@ -1675,14 +1675,13 @@ function VehicleFiche({ v, dealer, onClose }) {
 /* ═══════════════════════════════════════════════════════════════
    FLEET PAGE
 ═══════════════════════════════════════════════════════════════ */
-function FleetPage({ vehicles, setVehicles, orders, apiKey, usage, setUsage, livrePolice, setLivrePolice, viewMode, garageId }) {
+function FleetPage({ vehicles, setVehicles, orders, apiKey, usage, setUsage, livrePolice, setLivrePolice, viewMode, garageId, dealer }) {
   const [modal, setModal] = useState(null);
   const [fiche, setFiche] = useState(null);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
   const [pendingDelete, setPendingDelete] = useState(null); // {id, label} | null
   const [showDemoLimit, setShowDemoLimit] = useState(false);
-  const [dealer] = useState({ name: "AUTO PRESTIGE", address: "12 Av. de la République\n75011 Paris", phone: "01 23 45 67 89" });
 
   // ── AUTO-CRÉATION LP : surveille les véhicules et crée les entrées manquantes ──
   const prevVehicleIdsRef = React.useRef(new Set());
@@ -2840,7 +2839,7 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
               document.querySelectorAll('style').forEach(s => win.document.write(s.textContent));
               // Forcer le layout A4 et le footer en bas
               win.document.write('body{margin:0;padding:0;background:#fff;font-family:"DM Sans",sans-serif}');
-              win.document.write('.print-doc{min-height:auto;display:flex;flex-direction:column;padding:18px 22px}');
+              win.document.write('.print-doc{min-height:auto;display:flex;flex-direction:column;padding:14px 18px}');
               win.document.write('.print-doc-content{flex:1}');
               // Force le layout horizontal de l'en-tête (annule la règle mobile @media max-width:768px
               // qui fait passer pdoc-head en colonne, puisque la fenêtre d'impression peut être étroite)
@@ -2864,7 +2863,10 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
               win.document.write('.pdoc-watermark{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}');
               win.document.write('.pdoc-watermark img{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}');
               win.document.write('.pdoc-table td{background:transparent!important}');
-              win.document.write('@page{size:A4 portrait;margin:8mm}');
+              // Anti-page-break sur le bloc final pour éviter qu'une seule ligne déborde sur une 2e page
+              win.document.write('.pdoc-totals, .pdoc-footer, .pdoc-paiements{page-break-inside:avoid!important}');
+              // Marges A4 plus serrées pour gagner de la place et tenir sur 1 page
+              win.document.write('@page{size:A4 portrait;margin:6mm 8mm}');
               win.document.write('@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}');
               win.document.write('</style>');
               win.document.write('</head><body>');
@@ -3158,7 +3160,7 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
    DÉCLARATION DE CESSION (Cerfa 15776*02)
    Pré-remplie avec les données véhicule + client + garage
 ═══════════════════════════════════════════════════════════════ */
-function CessionDoc({ order, dealer, vehicles, clients, onClose }) {
+function CessionDoc({ order, dealer, vehicles, clients, onUpdateOrder, onClose }) {
   // Données véhicule : fraîches depuis la flotte si disponibles, sinon celles de la commande
   const freshVehicle = order.vehicle_id && vehicles ? vehicles.find(vh => vh.id === order.vehicle_id) : null;
   const orderV = order.vehicle_data || {};
@@ -3182,6 +3184,13 @@ function CessionDoc({ order, dealer, vehicles, clients, onClose }) {
   };
   const [loading, setLoading] = useState(false);
   const [pdfUrl, setPdfUrl] = useState(null);
+
+  // ── DATE DU CERFA — figée à la première génération ──
+  // Si le cerfa n'a jamais été généré (pas de cession_date sur l'order),
+  // on prend today() ; sinon on garde la date sauvegardée pour ne pas
+  // l'écraser à chaque réouverture du document.
+  const [cessionDate, setCessionDate] = useState(order.cession_date || today());
+  const [cessionHeure, setCessionHeure] = useState(order.cession_heure || new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }));
 
   const generatePdf = async () => {
     setLoading(true);
@@ -3240,9 +3249,11 @@ function CessionDoc({ order, dealer, vehicles, clients, onClose }) {
 
       const dA = parseAddress(dealer?.address || "");
       const cA = parseAddress(client.address || "");
-      const dateJ = today();
+      // ⚠ On utilise la date FIGÉE depuis le state — pas today() — pour que la date
+      // ne change pas à chaque réouverture du document après l'impression.
+      const dateJ = cessionDate;
       const [dj, dm, da] = dateJ.includes("/") ? dateJ.split("/") : ["","",""];
-      const heure = new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+      const heure = cessionHeure;
       const [h1, h2] = heure.split(":");
       const dateMEC = v.date_mise_en_circulation || "";
       const mecP = dateMEC.includes("/") ? dateMEC.split("/") : [];
@@ -3320,17 +3331,49 @@ function CessionDoc({ order, dealer, vehicles, clients, onClose }) {
     }
   };
 
-  React.useEffect(() => { generatePdf(); }, []);
+  React.useEffect(() => {
+    generatePdf();
+    // Si c'est la PREMIÈRE génération (pas de date sauvegardée sur l'order),
+    // on persiste maintenant la date+heure pour qu'elles restent stables.
+    if (!order.cession_date && onUpdateOrder) {
+      onUpdateOrder({ ...order, cession_date: cessionDate, cession_heure: cessionHeure });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Bouton "Mettre à jour la date" : remet la date à aujourd'hui, sauvegarde,
+  // et regénère le PDF avec la nouvelle date.
+  const refreshDate = () => {
+    if (!window.confirm(`La date actuelle du Cerfa est ${cessionDate} à ${cessionHeure}.\n\nLa remplacer par la date d'aujourd'hui (${today()}) ?`)) return;
+    const newDate = today();
+    const newHeure = new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+    setCessionDate(newDate);
+    setCessionHeure(newHeure);
+    if (onUpdateOrder) onUpdateOrder({ ...order, cession_date: newDate, cession_heure: newHeure });
+    // Petit délai pour laisser React mettre à jour le state avant regénération
+    setTimeout(() => generatePdf(), 50);
+  };
 
   return (
     <div className="modal-bg" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal" style={{ maxWidth: 1000, width: "98vw", height: "92vh", display: "flex", flexDirection: "column" }}>
         <div className="modal-hd" style={{ flexShrink: 0 }}>
-          <span className="modal-title">Cerfa 15776 — Cession {v.plate || ""}</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flex: 1, minWidth: 0 }}>
+            <span className="modal-title">Cerfa 15776 — Cession {v.plate || ""}</span>
+            <span style={{ fontSize: 11, color: "var(--muted)", fontFamily: "DM Mono, monospace", whiteSpace: "nowrap" }}>
+              📅 {cessionDate} · {cessionHeure}
+            </span>
+          </div>
           <div style={{ display: "flex", gap: 8 }}>
             {pdfUrl && (
               <>
-                <a href={pdfUrl} download={"Cession_" + (v.plate || "vehicule") + "_" + today().replace(/\//g, "-") + ".pdf"} className="btn btn-primary btn-sm">Telecharger</a>
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={refreshDate}
+                  title="Remplacer par la date du jour"
+                  style={{ fontSize: 11 }}
+                >🔄 Mettre à jour la date</button>
+                <a href={pdfUrl} download={"Cession_" + (v.plate || "vehicule") + "_" + cessionDate.replace(/\//g, "-") + ".pdf"} className="btn btn-primary btn-sm">Telecharger</a>
                 <button className="btn btn-ghost btn-sm" onClick={() => { const w = window.open(pdfUrl, "_blank"); if (w) setTimeout(() => w.print(), 800); }}>Imprimer</button>
               </>
             )}
@@ -3380,7 +3423,34 @@ function PVLivraisonDoc({ entry, dealer, onSave, onClose }) {
   const handlePrint = () => {
     // Sauvegarde silencieuse avant impression (pour conserver les signatures)
     if (onSave) onSave({ ...entry, ...form });
-    setTimeout(() => window.print(), 200);
+
+    // Ouvre une fenêtre popup avec uniquement le document, comme pour les BC/factures.
+    // Plus robuste que `window.print()` direct sur la modale (qui souffre des règles
+    // de visibility/position des modaux et finit par imprimer une page blanche).
+    const el = document.getElementById('pv-livraison-print');
+    if (!el) { alert("Document introuvable"); return; }
+    const win = window.open('', '_blank');
+    if (!win) { alert("Le navigateur a bloqué la fenêtre d'impression"); return; }
+
+    win.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"/>');
+    win.document.write('<title>PV de Livraison ' + (entry.immat || '') + '</title>');
+    win.document.write('<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Syne:wght@700;800&display=swap" rel="stylesheet">');
+    win.document.write('<style>');
+    win.document.write('body{margin:0;padding:0;background:#fff;font-family:"DM Sans",sans-serif;color:#1a1a1a}');
+    win.document.write('#pv-livraison-print{max-width:800px;margin:0 auto;padding:20px 28px!important;color:#1a1a1a!important}');
+    win.document.write('#pv-livraison-print *{color:inherit}');
+    win.document.write('.hide-on-print{display:none!important}');
+    win.document.write('.only-on-print{display:block!important}');
+    win.document.write('img{max-width:100%}');
+    win.document.write('@page{size:A4 portrait;margin:8mm}');
+    win.document.write('@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}');
+    win.document.write('</style>');
+    win.document.write('</head><body>');
+    win.document.write(el.outerHTML);
+    win.document.write('</body></html>');
+    win.document.close();
+    win.focus();
+    setTimeout(() => { win.print(); }, 600);
   };
 
   const sigGarage   = typeof form.pv_signature_garage   === "string" ? form.pv_signature_garage   : form.pv_signature_garage?.url;
@@ -3408,16 +3478,16 @@ function PVLivraisonDoc({ entry, dealer, onSave, onClose }) {
 
         <div style={{ flex: 1, overflow: "auto", background: "#2a2a2a", padding: 20 }}>
           {/* Document A4 imprimable */}
-          <div className="pdoc" id="pv-livraison-print" style={{ background: "#fff", color: "#222", padding: "32px 40px", maxWidth: 800, margin: "0 auto", fontFamily: "DM Sans, system-ui, sans-serif", fontSize: 12, lineHeight: 1.5 }}>
+          <div className="pdoc" id="pv-livraison-print" style={{ background: "#fff", color: "#1a1a1a", padding: "32px 40px", maxWidth: 800, margin: "0 auto", fontFamily: "DM Sans, system-ui, sans-serif", fontSize: 12, lineHeight: 1.5 }}>
 
             {/* En-tête */}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24, paddingBottom: 16, borderBottom: "2px solid #d4a843" }}>
               <div>
                 {dealer?.logo && <img src={dealer.logo} alt="logo" style={{ maxHeight: 60, marginBottom: 8 }} />}
                 <div style={{ fontSize: 16, fontWeight: 700, color: "#1a1a1a" }}>{garageName}</div>
-                {garageAddr && <div style={{ fontSize: 10, color: "#666", whiteSpace: "pre-line" }}>{garageAddr}</div>}
-                {garageSiret && <div style={{ fontSize: 10, color: "#666" }}>SIRET : {garageSiret}</div>}
-                <div style={{ fontSize: 10, color: "#666" }}>
+                {garageAddr && <div style={{ fontSize: 11, color: "#444", whiteSpace: "pre-line" }}>{garageAddr}</div>}
+                {garageSiret && <div style={{ fontSize: 11, color: "#444" }}>SIRET : {garageSiret}</div>}
+                <div style={{ fontSize: 11, color: "#444" }}>
                   {garagePhone && <span>📞 {garagePhone}</span>}
                   {garagePhone && garageEmail && <span> · </span>}
                   {garageEmail && <span>✉ {garageEmail}</span>}
@@ -3425,35 +3495,35 @@ function PVLivraisonDoc({ entry, dealer, onSave, onClose }) {
               </div>
               <div style={{ textAlign: "right" }}>
                 <div style={{ fontFamily: "Syne, sans-serif", fontSize: 22, fontWeight: 800, color: "#d4a843", letterSpacing: 1 }}>PV DE LIVRAISON</div>
-                <div style={{ fontSize: 10, color: "#888", marginTop: 4 }}>Procès-verbal de remise de véhicule</div>
-                <div style={{ fontSize: 11, marginTop: 8 }}>N°{String(entry.num_ordre || 0).padStart(4, "0")}</div>
-                <div style={{ fontSize: 11 }}>Date : <strong>{dateLivraison}</strong></div>
+                <div style={{ fontSize: 11, color: "#666", marginTop: 4 }}>Procès-verbal de remise de véhicule</div>
+                <div style={{ fontSize: 12, color: "#1a1a1a", marginTop: 8 }}>N°{String(entry.num_ordre || 0).padStart(4, "0")}</div>
+                <div style={{ fontSize: 12, color: "#1a1a1a" }}>Date : <strong>{dateLivraison}</strong></div>
               </div>
             </div>
 
             {/* Préambule */}
-            <div style={{ marginBottom: 20, fontSize: 11, color: "#444" }}>
+            <div style={{ marginBottom: 20, fontSize: 12, color: "#1a1a1a", lineHeight: 1.6 }}>
               Le présent procès-verbal atteste la remise du véhicule désigné ci-dessous par le vendeur à l'acheteur, à la date indiquée. Les deux parties reconnaissent que le véhicule a été livré conformément aux conditions contractuelles convenues et après vérifications mutuelles.
             </div>
 
             {/* Parties */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 20 }}>
               <div style={{ padding: "12px 14px", background: "#f9f8f5", borderRadius: 6, border: "1px solid #e8e8e8" }}>
-                <div style={{ fontSize: 9, letterSpacing: 1.5, textTransform: "uppercase", color: "#888", marginBottom: 6, fontWeight: 700 }}>Le vendeur</div>
-                <div style={{ fontWeight: 700, fontSize: 12 }}>{garageName}</div>
-                {garageAddr && <div style={{ fontSize: 10, color: "#555", whiteSpace: "pre-line" }}>{garageAddr}</div>}
-                {garageSiret && <div style={{ fontSize: 10, color: "#555" }}>SIRET : {garageSiret}</div>}
+                <div style={{ fontSize: 9, letterSpacing: 1.5, textTransform: "uppercase", color: "#666", marginBottom: 6, fontWeight: 700 }}>Le vendeur</div>
+                <div style={{ fontWeight: 700, fontSize: 13, color: "#1a1a1a" }}>{garageName}</div>
+                {garageAddr && <div style={{ fontSize: 11, color: "#333", whiteSpace: "pre-line" }}>{garageAddr}</div>}
+                {garageSiret && <div style={{ fontSize: 11, color: "#333" }}>SIRET : {garageSiret}</div>}
               </div>
               <div style={{ padding: "12px 14px", background: "#f9f8f5", borderRadius: 6, border: "1px solid #e8e8e8" }}>
-                <div style={{ fontSize: 9, letterSpacing: 1.5, textTransform: "uppercase", color: "#888", marginBottom: 6, fontWeight: 700 }}>L'acheteur</div>
-                <div style={{ fontWeight: 700, fontSize: 12 }}>{entry.acheteur_nom || "—"}</div>
-                {entry.acheteur_adresse && <div style={{ fontSize: 10, color: "#555" }}>{entry.acheteur_adresse}</div>}
+                <div style={{ fontSize: 9, letterSpacing: 1.5, textTransform: "uppercase", color: "#666", marginBottom: 6, fontWeight: 700 }}>L'acheteur</div>
+                <div style={{ fontWeight: 700, fontSize: 13, color: "#1a1a1a" }}>{entry.acheteur_nom || "—"}</div>
+                {entry.acheteur_adresse && <div style={{ fontSize: 11, color: "#333" }}>{entry.acheteur_adresse}</div>}
               </div>
             </div>
 
             {/* Récapitulatif véhicule */}
             <div style={{ fontSize: 9, letterSpacing: 1.5, textTransform: "uppercase", color: "#d4a843", marginBottom: 10, fontWeight: 700 }}>🚗 Véhicule livré</div>
-            <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 20, border: "1px solid #e8e8e8" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 20, border: "1px solid #e8e8e8", color: "#1a1a1a" }}>
               <tbody>
                 {[
                   ["Marque", entry.marque],
@@ -3466,8 +3536,8 @@ function PVLivraisonDoc({ entry, dealer, onSave, onClose }) {
                   ["Pays d'origine", entry.pays_origine],
                 ].filter(([, v]) => v).map(([k, v]) => (
                   <tr key={k} style={{ borderBottom: "1px solid #f0f0f0" }}>
-                    <td style={{ padding: "8px 12px", fontSize: 10, color: "#666", width: "35%", background: "#fafafa", fontWeight: 600 }}>{k}</td>
-                    <td style={{ padding: "8px 12px", fontSize: 11, fontWeight: 500 }}>{v}</td>
+                    <td style={{ padding: "8px 12px", fontSize: 11, color: "#444", width: "35%", background: "#fafafa", fontWeight: 600 }}>{k}</td>
+                    <td style={{ padding: "8px 12px", fontSize: 12, fontWeight: 600, color: "#1a1a1a" }}>{v}</td>
                   </tr>
                 ))}
               </tbody>
@@ -3477,76 +3547,70 @@ function PVLivraisonDoc({ entry, dealer, onSave, onClose }) {
             {form.pv_annotation && (
               <>
                 <div style={{ fontSize: 9, letterSpacing: 1.5, textTransform: "uppercase", color: "#d4a843", marginBottom: 10, fontWeight: 700 }}>📝 Observations / accessoires remis</div>
-                <div style={{ padding: "12px 14px", background: "#fdf8ec", border: "1px solid #e8d9a8", borderRadius: 6, fontSize: 11, color: "#444", whiteSpace: "pre-wrap", marginBottom: 20 }}>
+                <div style={{ padding: "12px 14px", background: "#fdf8ec", border: "1px solid #e8d9a8", borderRadius: 6, fontSize: 12, color: "#1a1a1a", whiteSpace: "pre-wrap", marginBottom: 20, lineHeight: 1.6 }}>
                   {form.pv_annotation}
                 </div>
               </>
             )}
 
             {/* Mention */}
-            <div style={{ fontSize: 10, color: "#666", marginBottom: 24, padding: "10px 14px", background: "#fafafa", border: "1px dashed #ddd", borderRadius: 6 }}>
+            <div style={{ fontSize: 11, color: "#333", marginBottom: 24, padding: "10px 14px", background: "#fafafa", border: "1px dashed #ccc", borderRadius: 6, lineHeight: 1.5 }}>
               Les soussignés reconnaissent que le véhicule désigné ci-dessus a été remis en bon état apparent à la date indiquée, accompagné de l'ensemble de ses documents et accessoires éventuellement listés ci-dessus.
             </div>
 
             {/* Signatures */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24, marginTop: 24 }}>
               <div style={{ textAlign: "center" }}>
-                <div style={{ fontSize: 10, letterSpacing: 1, textTransform: "uppercase", color: "#888", marginBottom: 8, fontWeight: 600 }}>Signature du vendeur</div>
-                <div className="hide-on-print">
-                  <SignaturePad
-                    label=""
-                    savedImg={sigGarage}
-                    onSave={(s) => set("pv_signature_garage", s)}
-                  />
-                </div>
-                <div className="show-on-print" style={{ display: "none" }}>
-                  {sigGarage ? (
-                    <img src={sigGarage} alt="signature vendeur" style={{ maxHeight: 80, maxWidth: 240, border: "1px solid #ddd", padding: 4, background: "#fff" }} />
-                  ) : (
-                    <div style={{ height: 80, border: "1px dashed #aaa", borderRadius: 4 }} />
-                  )}
-                </div>
-                <div style={{ marginTop: 8, fontSize: 10, color: "#555", fontWeight: 600 }}>{garageName}</div>
+                <div style={{ fontSize: 10, letterSpacing: 1, textTransform: "uppercase", color: "#666", marginBottom: 8, fontWeight: 600 }}>Signature du vendeur</div>
+                {/* Si signature présente : affichage direct en <img> (visible à l'écran ET imprimable).
+                    Sinon : SignaturePad pour saisie + cadre vide pour l'impression. */}
+                {sigGarage ? (
+                  <img src={sigGarage} alt="signature vendeur" style={{ maxHeight: 80, maxWidth: 240, border: "1px solid #ddd", padding: 4, background: "#fff", display: "block", margin: "0 auto" }} />
+                ) : (
+                  <>
+                    <div className="hide-on-print">
+                      <SignaturePad label="" savedImg={null} onSave={(s) => set("pv_signature_garage", s)} />
+                    </div>
+                    <div style={{ height: 80, border: "1px dashed #aaa", borderRadius: 4, maxWidth: 240, margin: "0 auto", display: "none" }} className="only-on-print">&nbsp;</div>
+                  </>
+                )}
+                <div style={{ marginTop: 8, fontSize: 11, color: "#1a1a1a", fontWeight: 700 }}>{garageName}</div>
               </div>
 
               <div style={{ textAlign: "center" }}>
-                <div style={{ fontSize: 10, letterSpacing: 1, textTransform: "uppercase", color: "#888", marginBottom: 8, fontWeight: 600 }}>Signature de l'acheteur</div>
-                <div className="hide-on-print">
-                  <SignaturePad
-                    label=""
-                    savedImg={sigAcheteur}
-                    onSave={(s) => set("pv_signature_acheteur", s)}
-                  />
-                </div>
-                <div className="show-on-print" style={{ display: "none" }}>
-                  {sigAcheteur ? (
-                    <img src={sigAcheteur} alt="signature acheteur" style={{ maxHeight: 80, maxWidth: 240, border: "1px solid #ddd", padding: 4, background: "#fff" }} />
-                  ) : (
-                    <div style={{ height: 80, border: "1px dashed #aaa", borderRadius: 4 }} />
-                  )}
-                </div>
-                <div style={{ marginTop: 8, fontSize: 10, color: "#555", fontWeight: 600 }}>{entry.acheteur_nom || "—"}</div>
+                <div style={{ fontSize: 10, letterSpacing: 1, textTransform: "uppercase", color: "#666", marginBottom: 8, fontWeight: 600 }}>Signature de l'acheteur</div>
+                {sigAcheteur ? (
+                  <img src={sigAcheteur} alt="signature acheteur" style={{ maxHeight: 80, maxWidth: 240, border: "1px solid #ddd", padding: 4, background: "#fff", display: "block", margin: "0 auto" }} />
+                ) : (
+                  <>
+                    <div className="hide-on-print">
+                      <SignaturePad label="" savedImg={null} onSave={(s) => set("pv_signature_acheteur", s)} />
+                    </div>
+                    <div style={{ height: 80, border: "1px dashed #aaa", borderRadius: 4, maxWidth: 240, margin: "0 auto", display: "none" }} className="only-on-print">&nbsp;</div>
+                  </>
+                )}
+                <div style={{ marginTop: 8, fontSize: 11, color: "#1a1a1a", fontWeight: 700 }}>{entry.acheteur_nom || "—"}</div>
               </div>
             </div>
 
             {/* Pied de page */}
-            <div style={{ marginTop: 32, paddingTop: 12, borderTop: "1px solid #eee", fontSize: 9, color: "#999", textAlign: "center" }}>
+            <div style={{ marginTop: 32, paddingTop: 12, borderTop: "1px solid #eee", fontSize: 10, color: "#666", textAlign: "center" }}>
               Document généré le {today()} · {garageName} {garageSiret && `· SIRET ${garageSiret}`}
             </div>
           </div>
         </div>
       </div>
 
-      {/* CSS pour impression : on cache tout sauf le document */}
+      {/* CSS local au composant — l'impression se fait dans une fenêtre popup
+          (cf. handlePrint), donc on a juste besoin de bien afficher le doc à l'écran. */}
       <style>{`
-        @media print {
-          body * { visibility: hidden !important; }
-          #pv-livraison-print, #pv-livraison-print * { visibility: visible !important; }
-          #pv-livraison-print { position: absolute; left: 0; top: 0; width: 100%; padding: 20px !important; }
-          .hide-on-print { display: none !important; }
-          .show-on-print { display: block !important; }
-          .modal-hd, .close-btn, .btn { display: none !important; }
+        #pv-livraison-print {
+          color: #1a1a1a !important;
         }
+        #pv-livraison-print, #pv-livraison-print * {
+          color: inherit;
+        }
+        .only-on-print { display: none; }
       `}</style>
     </div>
   );
@@ -3719,7 +3783,19 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
     <div className="page">
       {modal && <OrderForm order={modal === "new" ? null : modal} vehicles={vehicles} onSave={save} onClose={() => setModal(null)} apiKey={apiKey} clients={clients} setClients={setClients} orders={orders} viewMode={viewMode} setVehiclesRaw={setVehiclesRaw} />}
       {print && <PrintDoc order={print} dealer={dealer} onClose={() => setPrint(null)} viewMode={viewMode} />}
-      {cession && <CessionDoc order={cession} dealer={dealer} vehicles={vehicles} clients={clients} onClose={() => setCession(null)} />}
+      {cession && <CessionDoc
+        order={cession}
+        dealer={dealer}
+        vehicles={vehicles}
+        clients={clients}
+        onUpdateOrder={(updated) => {
+          // Persiste la date du Cerfa sur l'order (cession_date / cession_heure)
+          // pour qu'elle ne change pas à chaque réouverture.
+          setOrders(orders.map(x => x.id === updated.id ? updated : x));
+          setCession(updated);
+        }}
+        onClose={() => setCession(null)}
+      />}
       {viewMode === "trial" && showDemoLimit && <DemoLimitModal type="orders" onClose={() => setShowDemoLimit(false)} />}
       {payment && <PaymentModal order={payment} onSave={o => { setOrders(orders.map(x => x.id === o.id ? o : x)); setPayment(null); }} onClose={() => setPayment(null)} />}
       {pendingDelete && (
@@ -6575,7 +6651,7 @@ export default function App() {
 
           <main className={`content${(viewMode === "trial" || viewMode === "subscriber") ? " demo-offset" : ""}`}>
             {tab === "dashboard"   && <Dashboard vehicles={activeVehicles} setVehicles={setVehiclesRaw} orders={activeOrders} setTab={setTab} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} livrePolice={livrePolice} />}
-            {tab === "fleet"       && <FleetPage vehicles={activeVehicles} setVehicles={setVehiclesRaw} orders={activeOrders} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} livrePolice={activeLivrePolice} setLivrePolice={setLivrePoliceRaw} viewMode={viewMode} garageId={garageId} />}
+            {tab === "fleet"       && <FleetPage vehicles={activeVehicles} setVehicles={setVehiclesRaw} orders={activeOrders} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} livrePolice={activeLivrePolice} setLivrePolice={setLivrePoliceRaw} viewMode={viewMode} garageId={garageId} dealer={dealer} />}
             {tab === "orders"      && <OrdersPage orders={activeOrders} setOrders={setOrdersRaw} vehicles={activeVehicles} setVehiclesRaw={setVehiclesRaw} dealer={dealer} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} clients={activeClients} setClients={setClientsRaw} viewMode={viewMode} />}
             {tab === "crm"         && <CrmPage clients={activeClients} setClients={setClientsRaw} orders={activeOrders} viewMode={viewMode} />}
             {tab === "livrepolice" && (viewMode === "trial" ? (
