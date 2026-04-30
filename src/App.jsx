@@ -6345,6 +6345,36 @@ function CrmPage({ clients, setClients, orders, viewMode, dealer, setDealer }) {
   const [pendingDelete, setPendingDelete] = useState(null);
   const [showDemoLimit, setShowDemoLimit] = useState(false);
 
+  // ─── MODE D'AFFICHAGE (capsules / liste) ────────────────────
+  // Persisté dans dealer.ui_prefs.crm_view (Supabase) avec miroir localStorage.
+  // "cards" = vue capsules (par défaut), "list" = vue liste compacte.
+  const sanitizeView = (raw) => (raw === "list" || raw === "cards") ? raw : null;
+  const [crmView, setCrmView] = useState(() => {
+    try {
+      const fromDealer = sanitizeView(dealer?.ui_prefs?.crm_view);
+      if (fromDealer) return fromDealer;
+    } catch (e) { /* ignore */ }
+    try {
+      const raw = localStorage.getItem("iocar_crm_view");
+      const fromLocal = sanitizeView(raw);
+      if (fromLocal) return fromLocal;
+    } catch (e) { /* ignore */ }
+    return "cards";
+  });
+  useEffect(() => {
+    const fromDealer = sanitizeView(dealer?.ui_prefs?.crm_view);
+    if (fromDealer && fromDealer !== crmView) setCrmView(fromDealer);
+  }, [dealer?.ui_prefs?.crm_view]);
+  const setCrmViewPersisted = (next) => {
+    if (!sanitizeView(next)) return;
+    setCrmView(next);
+    try { localStorage.setItem("iocar_crm_view", next); } catch (e) { /* ignore */ }
+    if (typeof setDealer === "function") {
+      const newPrefs = { ...(dealer?.ui_prefs || {}), crm_view: next };
+      setDealer({ ...dealer, ui_prefs: newPrefs });
+    }
+  };
+
   const filtered = clients.filter(c => {
     const matchS = !search || `${c.nom} ${c.prenom} ${c.email} ${c.phone}`.toLowerCase().includes(search.toLowerCase());
     const matchF = filterStatut === "all" || c.statut === filterStatut;
@@ -6400,15 +6430,110 @@ function CrmPage({ clients, setClients, orders, viewMode, dealer, setDealer }) {
             <div key={k} className={`tab${filterStatut === k ? " active" : ""}`} onClick={() => setFilter(k)}>{l}</div>
           ))}
         </div>
+        {/* Toggle vue capsules / liste — persisté dans ui_prefs.crm_view */}
+        <div style={{ marginLeft: "auto", display: "inline-flex", background: "var(--card2)", border: "1px solid var(--border2)", borderRadius: 8, padding: 3, gap: 2 }}>
+          {[
+            { key: "cards", icon: "▦", label: "Capsules" },
+            { key: "list", icon: "≡", label: "Liste" },
+          ].map(opt => {
+            const active = crmView === opt.key;
+            return (
+              <button
+                key={opt.key}
+                onClick={() => setCrmViewPersisted(opt.key)}
+                title={opt.label}
+                style={{
+                  padding: "6px 12px", fontSize: 12, fontWeight: 600,
+                  borderRadius: 6, border: "none", cursor: "pointer",
+                  background: active ? "var(--gold)" : "transparent",
+                  color: active ? "#0a0a0a" : "var(--muted)",
+                  transition: "all .15s",
+                  display: "flex", alignItems: "center", gap: 6,
+                }}
+              >
+                <span style={{ fontSize: 14, lineHeight: 1 }}>{opt.icon}</span>
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
-      {/* Grille clients */}
+      {/* Vue clients — capsules ou liste selon préférence */}
       {filtered.length === 0 ? (
         <div style={{ textAlign: "center", padding: "60px 20px", color: "var(--muted)" }}>
           <div style={{ fontSize: 48, marginBottom: 16, opacity: .3 }}>👥</div>
           <div style={{ fontSize: 14 }}>Aucun contact trouvé</div>
         </div>
+      ) : crmView === "list" ? (
+        // ─── MODE LISTE ─────────────────────────────────────────
+        // Format compact : tableau avec une ligne par client. Idéal pour scanner
+        // rapidement un grand volume de contacts.
+        <div className="card" style={{ overflow: "hidden" }}>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr style={{ background: "var(--card2)", borderBottom: "1px solid var(--border2)" }}>
+                  <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: "var(--muted)" }}>Client</th>
+                  <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: "var(--muted)" }}>Contact</th>
+                  <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: "var(--muted)" }}>Statut</th>
+                  <th style={{ padding: "10px 14px", textAlign: "center", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: "var(--muted)" }}>Documents</th>
+                  <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: "var(--muted)" }}>Intérêt</th>
+                  <th style={{ padding: "10px 14px", textAlign: "right", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: "var(--muted)" }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map(c => {
+                  const nbDocs = orders.filter(o => o.client?.name?.toLowerCase() === `${c.nom} ${c.prenom}`.toLowerCase().trim() || o.client_id === c.id).length;
+                  return (
+                    <tr
+                      key={c.id}
+                      onClick={() => setFiche(c)}
+                      onMouseEnter={e => e.currentTarget.style.background = "rgba(212,168,67,.04)"}
+                      onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                      style={{ borderBottom: "1px solid var(--border2)", cursor: "pointer", transition: "background .15s" }}
+                    >
+                      <td style={{ padding: "10px 14px" }}>
+                        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                          <div style={{
+                            width: 32, height: 32, borderRadius: "50%", background: "var(--gold3)",
+                            border: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "center",
+                            fontFamily: "Syne", fontWeight: 800, fontSize: 12, color: "var(--gold)", flexShrink: 0
+                          }}>
+                            {(c.nom?.[0] || "?").toUpperCase()}
+                          </div>
+                          <div style={{ fontWeight: 600 }}>{c.prenom} {c.nom}</div>
+                        </div>
+                      </td>
+                      <td style={{ padding: "10px 14px", color: "var(--muted2)", fontSize: 12 }}>
+                        {c.email || c.phone || "—"}
+                      </td>
+                      <td style={{ padding: "10px 14px" }}>
+                        <span className={`badge ${STATUTS_CLIENT[c.statut || "prospect"]?.cls}`}>
+                          {STATUTS_CLIENT[c.statut || "prospect"]?.label}
+                        </span>
+                      </td>
+                      <td style={{ padding: "10px 14px", textAlign: "center", fontSize: 12, color: "var(--muted)" }}>
+                        🧾 {nbDocs}
+                      </td>
+                      <td style={{ padding: "10px 14px", fontSize: 12, color: "var(--muted2)" }}>
+                        {c.vehicule_interet || (c.budget ? fmt(c.budget) : "—")}
+                      </td>
+                      <td style={{ padding: "10px 14px", textAlign: "right" }}>
+                        <button
+                          className="btn btn-danger btn-xs"
+                          onClick={e => { e.stopPropagation(); setPendingDelete({ id: c.id, label: `${c.prenom || ""} ${c.nom}`.trim() }); }}
+                        >🗑</button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
       ) : (
+        // ─── MODE CAPSULES (par défaut) ─────────────────────────
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 14 }}>
           {filtered.map(c => {
             const nbDocs = orders.filter(o => o.client?.name?.toLowerCase() === `${c.nom} ${c.prenom}`.toLowerCase().trim() || o.client_id === c.id).length;
