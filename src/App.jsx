@@ -2267,9 +2267,9 @@ function FleetPage({ vehicles, setVehicles, orders, apiKey, usage, setUsage, liv
           const repriseClient = v.origine === "reprise" && v.reprise_client ? v.reprise_client : null;
           const vendeurDefaults = repriseClient ? {
             vendeur_type: repriseClient.type || "particulier",
-            vendeur_nom: repriseClient.name || "",
-            vendeur_prenom: "", // le client.name de la facture est consolidé, pas de séparation possible
-            vendeur_adresse: repriseClient.address || "",
+            vendeur_nom: repriseClient.nom || repriseClient.name || "",       // "name" pour rétrocompat
+            vendeur_prenom: repriseClient.prenom || "",
+            vendeur_adresse: repriseClient.adresse || repriseClient.address || "", // "address" pour rétrocompat
           } : {
             vendeur_type: "particulier",
             vendeur_nom: "",
@@ -2306,7 +2306,12 @@ function FleetPage({ vehicles, setVehicles, orders, apiKey, usage, setUsage, liv
             // Bonne pratique mais pas exigée par l'art. R.321-3 du Code pénal.
             acheteur_piece_type: "CNI", acheteur_piece_id: "", acheteur_piece_date: "", acheteur_piece_autorite: "",
             notes: v.origine === "reprise"
-              ? `Véhicule repris lors de la vente ${v.origine_ref || ""} · Cédé par ${repriseClient?.name || "client"} · Pièce d'identité à compléter`.trim()
+              ? (() => {
+                  const cedeur = repriseClient
+                    ? `${repriseClient.prenom || ""} ${repriseClient.nom || repriseClient.name || ""}`.trim() || "client"
+                    : "client";
+                  return `Véhicule repris lors de la vente ${v.origine_ref || ""} · Cédé par ${cedeur} · Pièce d'identité à compléter`.trim();
+                })()
               : "Entrée créée automatiquement depuis la flotte — à compléter",
             _incomplete: true,
           };
@@ -3263,8 +3268,23 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
                         const d = form.reprise_data || {};
                         // Récupération des infos client (qui cède son ancien véhicule au garage).
                         // Du point de vue du LP, ce client EST le vendeur/fournisseur du véhicule repris.
+                        // On préfère les champs SÉPARÉS du CRM (prenom, nom, adresse, code_postal, ville)
+                        // au lieu du form.client.name consolidé qui ne distingue pas prénom/nom.
                         const client = form.client || {};
+                        const crmClient = form.client_id && clients
+                          ? clients.find(x => x.id === form.client_id)
+                          : null;
                         const isClientPro = !!(client.siren && String(client.siren).trim());
+                        // Construction d'une adresse PROPREMENT formatée à partir des champs séparés.
+                        const buildAddress = (cc) => {
+                          if (!cc) return "";
+                          const parts = [];
+                          if (cc.adresse) parts.push(cc.adresse);
+                          const cpVille = [cc.code_postal, cc.ville].filter(Boolean).join(" ");
+                          if (cpVille) parts.push(cpVille);
+                          if (cc.pays && cc.pays !== "France") parts.push(cc.pays);
+                          return parts.join(", ");
+                        };
                         const newVehicle = {
                           id: uid(),
                           plate: (form.reprise_plate || "").toUpperCase().replace(/\s/g, ""),
@@ -3284,9 +3304,22 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
                           // Infos vendeur pré-remplies depuis le client de la facture.
                           // Permet au LP auto-créé de se baser sur ces données au lieu d'avoir
                           // tous les champs vides. L'abonné devra quand même compléter la pièce d'identité.
-                          reprise_client: {
-                            name: client.name || "",
-                            address: client.address || "",
+                          // Si client lié au CRM : on utilise les champs séparés (nom/prenom/adresse/cp/ville).
+                          // Sinon (saisie libre dans la facture) : on prend ce qu'on a (name consolidé).
+                          reprise_client: crmClient ? {
+                            // Champs séparés depuis la fiche CRM (proprement remplis)
+                            nom: crmClient.nom || "",
+                            prenom: crmClient.prenom || "",
+                            adresse: buildAddress(crmClient),
+                            phone: crmClient.phone || "",
+                            email: crmClient.email || "",
+                            siren: client.siren || crmClient.siren || "",
+                            type: (client.siren || crmClient.siren) ? "pro" : "particulier",
+                          } : {
+                            // Fallback : pas de client CRM lié, on prend ce qu'il y a dans le formulaire
+                            nom: client.name || "",
+                            prenom: "",
+                            adresse: client.address || "",
                             phone: client.phone || "",
                             email: client.email || "",
                             siren: client.siren || "",
@@ -3312,7 +3345,12 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
                           carrosserie: d.carrosserie || "",
                           date_mise_en_circulation: d.date_mise_en_circulation || "",
                           documents: [],
-                          notes: `Véhicule repris lors de la vente ${form.ref || ""} · Valeur de reprise : ${fmt(parseFloat(form.reprise_valeur) || 0)} · Cédé par ${client.name || "—"}`.trim(),
+                          notes: (() => {
+                            const cedeur = crmClient
+                              ? `${crmClient.prenom || ""} ${crmClient.nom || ""}`.trim()
+                              : (client.name || "—");
+                            return `Véhicule repris lors de la vente ${form.ref || ""} · Valeur de reprise : ${fmt(parseFloat(form.reprise_valeur) || 0)} · Cédé par ${cedeur || "—"}`.trim();
+                          })(),
                         };
                         setVehiclesRaw(prev => [newVehicle, ...(prev || [])]);
                         set("reprise_ajoutee_flotte", true);
