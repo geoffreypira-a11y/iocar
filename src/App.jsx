@@ -976,12 +976,16 @@ function calcCarteGrise({ cv, energie, region, genre, dateMEC }) {
   return { y1, y2, y3, y4, y5, total, tarifCV, isElec, isCTTE, exoElec, ageOver10, coefAge };
 }
 
-function CarteGriseCalc({ vehicleData, clientAddress, onApply }) {
+function CarteGriseCalc({ vehicleData, clientAddress, onApply, standalone }) {
   const [cv, setCv] = useState(parseInt(vehicleData?.puissance_fiscale) || parseInt(vehicleData?.puissance_cv) || 5);
   const detectedRegion = getRegionFromPostal(clientAddress);
   const [region, setRegion] = useState(detectedRegion || "Provence-Alpes-Côte d'Azur");
   const [energie, setEnergie] = useState(vehicleData?.carburant || "Essence");
   const [genre, setGenre] = useState(vehicleData?.genre || "VP");
+
+  // Liste des énergies utilisée pour le menu déroulant (mode standalone uniquement).
+  // Couvre les valeurs reconnues par calcCarteGrise (cf. mapping dans cette fonction).
+  const ENERGIES_OPTIONS = ["Essence", "Diesel", "Hybride", "Hybride rechargeable", "Électrique", "GPL", "GNV", "E85"];
 
   React.useEffect(() => {
     if (vehicleData?.puissance_fiscale) setCv(parseInt(vehicleData.puissance_fiscale) || 5);
@@ -1013,7 +1017,13 @@ function CarteGriseCalc({ vehicleData, clientAddress, onApply }) {
         </div>
         <div className="form-group">
           <label className="form-label">Énergie {vehicleData?.carburant && <span style={{ fontSize: 9, color: "var(--green)" }}>✓ auto</span>}</label>
-          <input className="form-input" value={energie} onChange={e => setEnergie(e.target.value)} style={{ fontSize: 11 }} placeholder="Essence, Diesel, Électrique..." />
+          {standalone ? (
+            <select className="form-input" value={energie} onChange={e => setEnergie(e.target.value)} style={{ fontSize: 11 }}>
+              {ENERGIES_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+            </select>
+          ) : (
+            <input className="form-input" value={energie} onChange={e => setEnergie(e.target.value)} style={{ fontSize: 11 }} placeholder="Essence, Diesel, Électrique..." />
+          )}
         </div>
         <div className="form-group">
           <label className="form-label">Genre {vehicleData?.genre && <span style={{ fontSize: 9, color: "var(--green)" }}>✓ auto</span>}</label>
@@ -1839,7 +1849,7 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
           <div style={{ fontWeight: 700, fontSize: 14 }}>🪪 Calculateur Carte Grise (estimation)</div>
         </div>
         <div className="card-pad">
-          <CarteGriseCalc vehicleData={null} clientAddress={null} onApply={null} />
+          <CarteGriseCalc vehicleData={null} clientAddress={null} onApply={null} standalone />
         </div>
       </div>
     </div>
@@ -4780,23 +4790,37 @@ function TicketSystem({ dealer }) {
 
   const submit = async () => {
     if (!message.trim()) { setError("Veuillez décrire votre demande"); return; }
+    if (message.length > 5000) { setError("Message trop long (max 5000 caractères)"); return; }
     setSending(true); setError("");
     try {
-      // Envoi via mailto (fallback universel sans backend)
-      const subject = encodeURIComponent(`[IO Car] ${TYPES.find(t => t.value === type)?.label} — ${dealer?.name || "Utilisateur"}`);
-      const body = encodeURIComponent(
-        `Type : ${TYPES.find(t => t.value === type)?.label}\n` +
-        `Concession : ${dealer?.name || "—"}\n` +
-        `Email : ${dealer?.email || "—"}\n` +
-        `SIRET : ${dealer?.siret || "—"}\n` +
-        `Date : ${new Date().toLocaleString("fr-FR")}\n\n` +
-        `Message :\n${message}`
-      );
-      window.open(`mailto:contact@iocar.online?subject=${subject}&body=${body}`);
+      // Appel à l'endpoint serveur qui :
+      //  1. Vérifie l'authentification (JWT)
+      //  2. Insert le ticket en BD (Supabase, RLS protégé)
+      //  3. Envoie un email à contact@iocar.online via Resend (best-effort)
+      const token = localStorage.getItem("iocar_token");
+      if (!token) {
+        setError("Session expirée, veuillez vous reconnecter");
+        setSending(false);
+        return;
+      }
+      const res = await fetch("/api/ticket", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`,
+        },
+        body: JSON.stringify({ type, message: message.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "Erreur lors de l'envoi du ticket");
+        setSending(false);
+        return;
+      }
       setSent(true);
       setMessage("");
     } catch(e) {
-      setError("Erreur lors de l'envoi. Contactez contact@iocar.online");
+      setError("Erreur réseau. Si le problème persiste, contactez contact@iocar.online directement.");
     }
     setSending(false);
   };
