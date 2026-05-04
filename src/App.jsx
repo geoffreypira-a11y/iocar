@@ -923,6 +923,40 @@ const DEPT_TO_REGION = {
   "04":"Provence-Alpes-Côte d'Azur","05":"Provence-Alpes-Côte d'Azur","06":"Provence-Alpes-Côte d'Azur","13":"Provence-Alpes-Côte d'Azur","83":"Provence-Alpes-Côte d'Azur","84":"Provence-Alpes-Côte d'Azur",
 };
 
+// Noms officiels des départements (utilisés dans le sélecteur de carte grise).
+// Sources : INSEE — métropole + Corse (DOM-TOM exclus pour l'instant car non couverts par DEPT_TO_REGION).
+const DEPT_NAMES = {
+  "01":"Ain","02":"Aisne","03":"Allier","04":"Alpes-de-Haute-Provence","05":"Hautes-Alpes",
+  "06":"Alpes-Maritimes","07":"Ardèche","08":"Ardennes","09":"Ariège","10":"Aube",
+  "11":"Aude","12":"Aveyron","13":"Bouches-du-Rhône","14":"Calvados","15":"Cantal",
+  "16":"Charente","17":"Charente-Maritime","18":"Cher","19":"Corrèze","20":"Corse",
+  "2A":"Corse-du-Sud","2B":"Haute-Corse","21":"Côte-d'Or","22":"Côtes-d'Armor","23":"Creuse",
+  "24":"Dordogne","25":"Doubs","26":"Drôme","27":"Eure","28":"Eure-et-Loir",
+  "29":"Finistère","30":"Gard","31":"Haute-Garonne","32":"Gers","33":"Gironde",
+  "34":"Hérault","35":"Ille-et-Vilaine","36":"Indre","37":"Indre-et-Loire","38":"Isère",
+  "39":"Jura","40":"Landes","41":"Loir-et-Cher","42":"Loire","43":"Haute-Loire",
+  "44":"Loire-Atlantique","45":"Loiret","46":"Lot","47":"Lot-et-Garonne","48":"Lozère",
+  "49":"Maine-et-Loire","50":"Manche","51":"Marne","52":"Haute-Marne","53":"Mayenne",
+  "54":"Meurthe-et-Moselle","55":"Meuse","56":"Morbihan","57":"Moselle","58":"Nièvre",
+  "59":"Nord","60":"Oise","61":"Orne","62":"Pas-de-Calais","63":"Puy-de-Dôme",
+  "64":"Pyrénées-Atlantiques","65":"Hautes-Pyrénées","66":"Pyrénées-Orientales","67":"Bas-Rhin","68":"Haut-Rhin",
+  "69":"Rhône","70":"Haute-Saône","71":"Saône-et-Loire","72":"Sarthe","73":"Savoie",
+  "74":"Haute-Savoie","75":"Paris","76":"Seine-Maritime","77":"Seine-et-Marne","78":"Yvelines",
+  "79":"Deux-Sèvres","80":"Somme","81":"Tarn","82":"Tarn-et-Garonne","83":"Var",
+  "84":"Vaucluse","85":"Vendée","86":"Vienne","87":"Haute-Vienne","88":"Vosges",
+  "89":"Yonne","90":"Territoire de Belfort","91":"Essonne","92":"Hauts-de-Seine","93":"Seine-Saint-Denis",
+  "94":"Val-de-Marne","95":"Val-d'Oise",
+};
+
+// Helper : extrait le code département depuis une adresse (5 chiffres → 2 premiers).
+// Identique à la logique de getRegionFromPostal mais retourne le département au lieu de la région.
+function getDeptFromPostal(address) {
+  if (!address) return null;
+  const match = String(address).match(/\b(\d{5})\b/);
+  if (!match) return null;
+  return match[1].substring(0, 2);
+}
+
 function getRegionFromPostal(address) {
   if (!address) return null;
   const match = address.match(/\b(\d{5})\b/);
@@ -978,14 +1012,37 @@ function calcCarteGrise({ cv, energie, region, genre, dateMEC }) {
 
 function CarteGriseCalc({ vehicleData, clientAddress, onApply, standalone }) {
   const [cv, setCv] = useState(parseInt(vehicleData?.puissance_fiscale) || parseInt(vehicleData?.puissance_cv) || 5);
-  const detectedRegion = getRegionFromPostal(clientAddress);
-  const [region, setRegion] = useState(detectedRegion || "Provence-Alpes-Côte d'Azur");
   const [energie, setEnergie] = useState(vehicleData?.carburant || "Essence");
   const [genre, setGenre] = useState(vehicleData?.genre || "VP");
+
+  // ─── DÉPARTEMENT / RÉGION ─────────────────────────────────────────────
+  // Logique : la source de vérité est le département (2 premiers chiffres du CP).
+  // - Auto-détection depuis l'adresse client (clientAddress)
+  // - L'abonné peut OVERRIDER manuellement via le sélecteur (deptOverride)
+  // - La région utilisée pour le calcul est dérivée du département actif
+  // - En mode standalone : pas d'adresse, fallback sur "13" par défaut
+  const detectedDept = getDeptFromPostal(clientAddress);
+  const [deptOverride, setDeptOverride] = useState(null);
+  // Le département actif : override > détecté > fallback "13"
+  const activeDept = deptOverride || detectedDept || "13";
+  // La région correspondante (utilisée pour le calcul du tarif)
+  const region = DEPT_TO_REGION[activeDept] || "Provence-Alpes-Côte d'Azur";
+  // Indicateur visuel : la région est-elle auto-détectée (pas overridée) ?
+  const isAuto = !deptOverride && !!detectedDept;
 
   // Liste des énergies utilisée pour le menu déroulant (mode standalone uniquement).
   // Couvre les valeurs reconnues par calcCarteGrise (cf. mapping dans cette fonction).
   const ENERGIES_OPTIONS = ["Essence", "Diesel", "Hybride", "Hybride rechargeable", "Électrique", "GPL", "GNV", "E85"];
+
+  // Liste des départements pour le sélecteur, triés numériquement.
+  // On utilise le mapping DEPT_NAMES — affiche "13 — Bouches-du-Rhône" etc.
+  const DEPT_OPTIONS = Object.keys(DEPT_NAMES).sort((a, b) => {
+    // Tri numérique avec gestion de "2A" / "2B" qui passent après "20"
+    const na = parseInt(a, 10) || 0;
+    const nb = parseInt(b, 10) || 0;
+    if (na !== nb) return na - nb;
+    return a.localeCompare(b);
+  });
 
   React.useEffect(() => {
     if (vehicleData?.puissance_fiscale) setCv(parseInt(vehicleData.puissance_fiscale) || 5);
@@ -994,9 +1051,10 @@ function CarteGriseCalc({ vehicleData, clientAddress, onApply, standalone }) {
     if (vehicleData?.genre) setGenre(vehicleData.genre);
   }, [vehicleData?.puissance_fiscale, vehicleData?.puissance_cv, vehicleData?.carburant, vehicleData?.genre]);
 
+  // Quand l'adresse client change (ex: nouveau client sélectionné), on RESET l'override
+  // pour que la détection auto reprenne le contrôle. L'abonné peut toujours re-overrider.
   React.useEffect(() => {
-    const r = getRegionFromPostal(clientAddress);
-    if (r) setRegion(r);
+    setDeptOverride(null);
   }, [clientAddress]);
 
   const dateMEC = vehicleData?.date_mise_en_circulation || "";
@@ -1006,10 +1064,32 @@ function CarteGriseCalc({ vehicleData, clientAddress, onApply, standalone }) {
     <div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 14 }}>
         <div className="form-group">
-          <label className="form-label">Région {detectedRegion && <span style={{ fontSize: 9, color: "var(--green)" }}>✓ auto</span>}</label>
-          <select className="form-input" value={region} onChange={e => setRegion(e.target.value)} style={{ fontSize: 11 }}>
-            {Object.keys(TARIFS_REGIONS_2026).sort().map(r => <option key={r} value={r}>{r}</option>)}
+          <label className="form-label">
+            Département {isAuto && <span style={{ fontSize: 9, color: "var(--green)" }}>✓ auto</span>}
+            {deptOverride && (
+              <span
+                onClick={() => setDeptOverride(null)}
+                style={{ fontSize: 9, color: "var(--gold)", cursor: "pointer", marginLeft: 6, textDecoration: "underline" }}
+                title="Réinitialiser sur le département du client"
+              >
+                ↺ auto
+              </span>
+            )}
+          </label>
+          <select
+            className="form-input"
+            value={activeDept}
+            onChange={e => setDeptOverride(e.target.value)}
+            style={{ fontSize: 11 }}
+          >
+            {DEPT_OPTIONS.map(d => (
+              <option key={d} value={d}>{d} — {DEPT_NAMES[d]}</option>
+            ))}
           </select>
+          {/* Sous-titre indiquant la région calculée — utile car le tarif dépend de la région, pas du département */}
+          <div style={{ fontSize: 9, color: "var(--muted)", marginTop: 3, fontStyle: "italic" }}>
+            Région : {region}
+          </div>
         </div>
         <div className="form-group">
           <label className="form-label">Puissance fiscale (CV) {vehicleData?.puissance_fiscale && <span style={{ fontSize: 9, color: "var(--green)" }}>✓ auto</span>}</label>
