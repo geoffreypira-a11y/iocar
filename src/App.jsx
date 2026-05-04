@@ -368,6 +368,9 @@ textarea.form-input{resize:vertical;min-height:72px}
   .page{padding:70px 16px 90px}
   .page-title{font-size:20px;line-height:1.15;word-break:break-word}
   .page-sub{font-size:12px}
+  /* Le titre principal de chaque page peut chevaucher le burger menu (top:12px, height:42px).
+     On ajoute du padding-top sur le header de page pour que ça respire. */
+  .page-header{padding-top:8px}
   .kpi-grid{grid-template-columns:repeat(2,1fr)!important;gap:10px;margin-bottom:20px;justify-content:stretch!important}
   .kpi{padding:14px}
   .kpi-val{font-size:22px}
@@ -395,6 +398,8 @@ textarea.form-input{resize:vertical;min-height:72px}
   .pdoc-totals{justify-content:flex-end}
   /* Cards CRM */
   .crm-grid{grid-template-columns:1fr!important}
+  /* Page Paramètres : grille Logo+Infos passe en pleine largeur */
+  .settings-grid{grid-template-columns:1fr!important}
   /* ─── Dashboard responsive ─────────────────────────────────────
      Force les grids 2 colonnes du dashboard en pleine largeur sur mobile
      (KPI/camembert, stock dormant/relances, activité/todo).
@@ -5188,7 +5193,7 @@ function SettingsPage({ dealer, setDealer, usage, isRealAdmin }) {
         <div><div className="page-title">Paramètres</div><div className="page-sub">Informations de votre concession</div></div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, maxWidth: 900 }}>
+      <div className="settings-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, maxWidth: 900 }}>
 
         {/* LOGO */}
         <div className="card card-pad">
