@@ -284,6 +284,7 @@ input,textarea,select{font-family:'DM Sans',sans-serif}
 
 /* PAGE */
 .page{padding:28px 32px;max-width:1300px}
+.page-admin{max-width:none;padding-left:24px;padding-right:24px}
 .page.demo-offset{padding-top:64px}
 .page-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:28px;gap:16px;flex-wrap:wrap}
 .page-title{font-family:'Syne',sans-serif;font-size:28px;font-weight:800;letter-spacing:1px}
@@ -8117,7 +8118,7 @@ function AdminPage({ token }) {
   const mrr = mrrAbos + mrrPlaques;
 
   return (
-    <div className="page">
+    <div className="page page-admin">
       <div className="page-header">
         <div>
           <div className="page-title">🛡 Dashboard Admin</div>
