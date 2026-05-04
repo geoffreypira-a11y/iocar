@@ -7579,6 +7579,36 @@ function AdminPage({ token }) {
     }
   };
 
+  // Suppression d'un ticket (avec confirmation côté UI).
+  const deleteTicket = async (ticketId) => {
+    if (!window.confirm("Supprimer définitivement ce ticket ? Cette action est irréversible.")) return;
+    try {
+      await adminCall("tickets_delete", { ticketId });
+      setTickets(prev => prev.filter(t => t.id !== ticketId));
+      // Le compteur "new" peut diminuer si on a supprimé un ticket non lu
+      adminCall("tickets_count_new").then(({ count }) => setTicketsCountNew(count || 0)).catch(() => {});
+      // Si le ticket supprimé était expanded, on referme
+      if (expandedTicket === ticketId) setExpandedTicket(null);
+    } catch (e) {
+      alert(`Erreur : ${e.message}`);
+    }
+  };
+
+  // Purge de tous les tickets fermés — utile pour le nettoyage périodique.
+  const purgeClosedTickets = async () => {
+    if (!window.confirm("Supprimer définitivement TOUS les tickets fermés ? Cette action est irréversible.")) return;
+    try {
+      const { deleted } = await adminCall("tickets_purge_closed");
+      // Recharge la liste depuis le serveur pour refléter les suppressions
+      const filter = ticketStatusFilter === "all" ? {} : { status: ticketStatusFilter };
+      const { tickets: refreshed } = await adminCall("tickets_list", filter);
+      setTickets(refreshed || []);
+      alert(`${deleted} ticket${deleted > 1 ? "s" : ""} fermé${deleted > 1 ? "s" : ""} supprimé${deleted > 1 ? "s" : ""}.`);
+    } catch (e) {
+      alert(`Erreur : ${e.message}`);
+    }
+  };
+
   const loadGarageData = async (garageId) => {
     if (expandedGarage === garageId) { setExpandedGarage(null); setGarageData(null); return; }
     setExpandedGarage(garageId);
@@ -8139,23 +8169,33 @@ function AdminPage({ token }) {
 
       {adminTab === "tickets" && (
         <div>
-          {/* Filtres statut */}
-          <div className="tabs" style={{ marginBottom: 16 }}>
-            {[
-              { k: "all", l: "Tous" },
-              { k: "new", l: "🔴 Nouveaux" },
-              { k: "in_progress", l: "🟡 En cours" },
-              { k: "resolved", l: "🟢 Résolus" },
-              { k: "closed", l: "⚫ Fermés" },
-            ].map(opt => (
-              <div
-                key={opt.k}
-                className={`tab${ticketStatusFilter === opt.k ? " active" : ""}`}
-                onClick={() => setTicketStatusFilter(opt.k)}
-              >
-                {opt.l}
-              </div>
-            ))}
+          {/* Filtres statut + bouton purge */}
+          <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 16, flexWrap: "wrap" }}>
+            <div className="tabs" style={{ margin: 0, flex: 1 }}>
+              {[
+                { k: "all", l: "Tous" },
+                { k: "new", l: "🔴 Nouveaux" },
+                { k: "in_progress", l: "🟡 En cours" },
+                { k: "resolved", l: "🟢 Résolus" },
+                { k: "closed", l: "⚫ Fermés" },
+              ].map(opt => (
+                <div
+                  key={opt.k}
+                  className={`tab${ticketStatusFilter === opt.k ? " active" : ""}`}
+                  onClick={() => setTicketStatusFilter(opt.k)}
+                >
+                  {opt.l}
+                </div>
+              ))}
+            </div>
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={purgeClosedTickets}
+              title="Supprimer tous les tickets avec le statut 'Fermé'"
+              style={{ color: "var(--red)", borderColor: "rgba(229,92,92,.3)" }}
+            >
+              🧹 Purger les tickets fermés
+            </button>
           </div>
 
           {ticketsLoading ? (
@@ -8273,7 +8313,7 @@ function AdminPage({ token }) {
                           onChange={e => setTicketEditNotes(prev => ({ ...prev, [t.id]: e.target.value }))}
                           style={{ marginBottom: 8 }}
                         />
-                        <div style={{ display: "flex", gap: 8 }}>
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                           <button
                             className="btn btn-primary btn-sm"
                             onClick={() => updateTicket(t.id, { admin_notes: currentNotes })}
@@ -8288,6 +8328,14 @@ function AdminPage({ token }) {
                           >
                             📧 Répondre par email
                           </a>
+                          <button
+                            className="btn btn-danger btn-sm"
+                            onClick={() => deleteTicket(t.id)}
+                            style={{ marginLeft: "auto" }}
+                            title="Supprimer définitivement ce ticket"
+                          >
+                            🗑 Supprimer
+                          </button>
                         </div>
                       </div>
                     )}
