@@ -366,8 +366,9 @@ textarea.form-input{resize:vertical;min-height:72px}
   .content{padding-top:0}
   .content.demo-offset{padding-top:36px}
   .page{padding:70px 16px 90px}
-  .page-title{font-size:22px}
-  .kpi-grid{grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:20px}
+  .page-title{font-size:20px;line-height:1.15;word-break:break-word}
+  .page-sub{font-size:12px}
+  .kpi-grid{grid-template-columns:repeat(2,1fr)!important;gap:10px;margin-bottom:20px;justify-content:stretch!important}
   .kpi{padding:14px}
   .kpi-val{font-size:22px}
   .tbl-wrap{border-radius:8px;font-size:12px}
@@ -394,12 +395,29 @@ textarea.form-input{resize:vertical;min-height:72px}
   .pdoc-totals{justify-content:flex-end}
   /* Cards CRM */
   .crm-grid{grid-template-columns:1fr!important}
+  /* ─── Dashboard responsive ─────────────────────────────────────
+     Force les grids 2 colonnes du dashboard en pleine largeur sur mobile
+     (KPI/camembert, stock dormant/relances, activité/todo).
+     On utilise data-mobile-stack="1" sur le conteneur cible côté JSX,
+     ou directement les sélecteurs ci-dessous pour les grids existants. */
+  .dash-2col{grid-template-columns:1fr!important}
+  /* Le donut Répartition trésorerie devient plus petit en mobile et
+     se centre verticalement avec sa légende en dessous */
+  .dash-piewrap{flex-direction:column!important;gap:12px!important;align-items:stretch!important}
+  .dash-pie{width:160px!important;height:160px!important;margin:0 auto!important}
+  /* Sélecteur de période : 2 colonnes max au lieu de tout sur 1 ligne */
+  .period-selector{flex-wrap:wrap;width:100%}
+  .period-selector button{flex:1 1 calc(50% - 4px)!important;text-align:center;padding:8px 6px!important;font-size:11px!important;min-width:0}
+  /* Panneau toggles modules : titre sur sa propre ligne */
+  .modules-toggle-panel{flex-direction:column!important;align-items:stretch!important}
+  .modules-toggle-panel > div:first-child{margin-bottom:6px}
 }
 @media(max-width:480px){
-  .kpi-grid{grid-template-columns:1fr 1fr}
+  .kpi-grid{grid-template-columns:1fr 1fr!important}
   .kpi-val{font-size:20px}
   .btn{font-size:12px;padding:8px 14px}
   .btn-sm{padding:5px 10px;font-size:11px}
+  .page-title{font-size:18px}
 }
 @media print{
   .no-print,.sidebar,.hamburger,.bottom-nav{display:none!important}
@@ -1514,7 +1532,7 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
       {/* ───────────────────────────────────────────────────────
           PANNEAU MODULES — toggles d'affichage (persistance localStorage)
           ─────────────────────────────────────────────────────── */}
-      <div style={{
+      <div className="modules-toggle-panel" style={{
         background: "var(--card2)", border: "1px solid var(--border2)",
         borderRadius: 10, padding: "10px 14px", marginBottom: 20,
         display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap"
@@ -1601,7 +1619,7 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
         <div style={{ fontSize: 10, letterSpacing: 1.5, textTransform: "uppercase", color: "var(--gold)" }}>
           📅 Sur la période
         </div>
-        <div style={{
+        <div className="period-selector" style={{
           display: "inline-flex", background: "var(--card2)",
           border: "1px solid var(--border2)", borderRadius: 8, padding: 3, gap: 2
         }}>
@@ -1632,7 +1650,7 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
       </div>
       {/* Layout : à gauche les 3 KPIs période en colonne, à droite le camembert
           (qui reflète aussi la période choisie) */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 20, alignItems: "stretch" }}>
+      <div className="dash-2col" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 20, alignItems: "stretch" }}>
 
         {/* COLONNE GAUCHE : 3 KPIs période */}
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -1679,8 +1697,8 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
                 Aucune donnée financière
               </div>
             ) : (
-              <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-                <div style={{ width: 200, height: 200, flexShrink: 0 }}>
+              <div className="dash-piewrap" style={{ display: "flex", alignItems: "center", gap: 16 }}>
+                <div className="dash-pie" style={{ width: 200, height: 200, flexShrink: 0 }}>
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
                       <Pie
@@ -1714,7 +1732,7 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
           Si un seul module est actif, il prend toute la largeur.
           ─────────────────────────────────────────────────────── */}
       {(moduleVisible.stock_dormant || moduleVisible.relances) && (
-      <div style={{
+      <div className="dash-2col" style={{
         display: "grid",
         gridTemplateColumns: (moduleVisible.stock_dormant && moduleVisible.relances) ? "1fr 1fr" : "1fr",
         gap: 16, marginBottom: 20
@@ -1831,7 +1849,7 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
           ACTIVITÉ RÉCENTE + À FAIRE — côte à côte (modules indépendants)
           ─────────────────────────────────────────────────────── */}
       {(moduleVisible.activite || moduleVisible.todo) && (
-      <div style={{
+      <div className="dash-2col" style={{
         display: "grid",
         gridTemplateColumns: (moduleVisible.activite && moduleVisible.todo) ? "1fr 1fr" : "1fr",
         gap: 16, marginBottom: 20
