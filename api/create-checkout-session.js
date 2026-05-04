@@ -38,11 +38,28 @@ export default async function handler(req, res) {
     // Origine de l'app pour les URLs de redirection
     const origin = process.env.APP_ORIGIN || 'https://app.iocar.online';
 
+    // ─── METERED BILLING — Recherches plaque supplémentaires ──────────────
+    // On ajoute automatiquement le price metered (0,20 € / unité) à TOUS les
+    // abonnements créés. L'abonné ne paiera que ce qu'il consomme au-delà des
+    // 10 recherches gratuites/mois (le quota est géré côté serveur dans
+    // lookup-plate.js qui envoie un usage record à Stripe via createUsageRecord).
+    //
+    // Si STRIPE_METERED_PRICE_ID n'est pas défini en env, on ne l'ajoute pas
+    // (mode dégradé pour rétrocompatibilité, mais à éviter en production).
+    const lineItems = [{ price: priceId, quantity: 1 }];
+    const meteredPriceId = process.env.STRIPE_METERED_PRICE_ID;
+    if (meteredPriceId) {
+      // ⚠ Pas de "quantity" pour un price metered — Stripe exige son absence
+      lineItems.push({ price: meteredPriceId });
+    } else {
+      console.warn('⚠ STRIPE_METERED_PRICE_ID manquant — les recherches au-delà du quota ne seront pas facturées');
+    }
+
     // Création de la session Checkout côté serveur
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
       payment_method_types: ['card'],
-      line_items: [{ price: priceId, quantity: 1 }],
+      line_items: lineItems,
       customer_email: email,
       success_url: successUrl || `${origin}/?subscribed=1`,
       cancel_url:  cancelUrl  || `${origin}/?canceled=1`,
