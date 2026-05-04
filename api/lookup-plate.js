@@ -81,20 +81,32 @@ export default async function handler(req, res) {
     const v = rawData.data || rawData;
 
     // 7. Report Stripe metered si overage (ignoré pour l'admin)
-    if (overage && !isAdmin && stripe && garage.stripe_subscription_id) {
+    //
+    // ⚠ NOUVELLE API "Meter Events" (Stripe 2024+)
+    // L'ancienne API `subscriptionItems.createUsageRecord` ne fonctionne PAS
+    // avec un price configuré comme metered via une "billing.meter".
+    // Ici on envoie un meter event avec le nom et la clé customer définis
+    // dans le Dashboard Stripe :
+    //   - event_name: "api_requests" (nom configuré dans la meter Stripe)
+    //   - payload.stripe_customer_id: l'ID Stripe du customer du garage
+    //   - payload.value: "1" (1 recherche au-delà du quota gratuit)
+    //
+    // Stripe agrège (sum) tous les events du mois et facture automatiquement
+    // à la fin du cycle de facturation de l'abonnement.
+    if (overage && !isAdmin && stripe && garage.stripe_customer_id) {
       try {
-        const sub = await stripe.subscriptions.retrieve(garage.stripe_subscription_id);
-        // On cherche l'item facturable à l'usage
-        const meteredItem = sub.items.data.find(it => it.price?.recurring?.usage_type === 'metered');
-        if (meteredItem) {
-          await stripe.subscriptionItems.createUsageRecord(meteredItem.id, {
-            quantity: 1,
-            timestamp: Math.floor(Date.now() / 1000),
-            action: 'increment',
-          });
-        }
+        await stripe.billing.meterEvents.create({
+          event_name: 'api_requests',
+          payload: {
+            stripe_customer_id: garage.stripe_customer_id,
+            value: '1',
+          },
+          // identifier optionnel — utile pour idempotence si on relance
+          // accidentellement la même requête. On combine garage + timestamp.
+          identifier: `lookup-${garage.id}-${Date.now()}`,
+        });
       } catch (e) {
-        console.error('Report Stripe échoué (non bloquant):', e.message);
+        console.error('Report Stripe meter échoué (non bloquant):', e.message);
       }
     }
 
