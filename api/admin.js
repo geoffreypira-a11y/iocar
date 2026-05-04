@@ -285,6 +285,66 @@ export default async function handler(req, res) {
         return res.status(200).json({ backup: latest || null });
       }
 
+      // ─── TICKETS DE SUPPORT ─────────────────────────────────
+      // Liste tous les tickets, joints aux infos garage et user pour affichage.
+      // Filtrable par status. Limite 200 par requête (pagination future).
+      case 'tickets_list': {
+        const { status } = payload || {};
+        let query = supabase
+          .from('support_tickets')
+          .select('*, garages:garage_id(name, email, siret)')
+          .order('created_at', { ascending: false })
+          .limit(200);
+        if (status && ['new', 'in_progress', 'resolved', 'closed'].includes(status)) {
+          query = query.eq('status', status);
+        }
+        const { data, error } = await query;
+        if (error) return res.status(500).json({ error: error.message });
+        return res.status(200).json({ tickets: data || [] });
+      }
+
+      // ─── METTRE À JOUR UN TICKET ────────────────────────────
+      // Permet de changer status et admin_notes. Whitelist stricte des champs
+      // modifiables (pas de update libre via le payload).
+      case 'tickets_update': {
+        const { ticketId, status, admin_notes } = payload || {};
+        if (!ticketId) return res.status(400).json({ error: 'ticketId manquant' });
+        const updates = {};
+        if (status !== undefined) {
+          if (!['new', 'in_progress', 'resolved', 'closed'].includes(status)) {
+            return res.status(400).json({ error: 'Statut invalide' });
+          }
+          updates.status = status;
+        }
+        if (admin_notes !== undefined) {
+          if (typeof admin_notes !== 'string' || admin_notes.length > 5000) {
+            return res.status(400).json({ error: 'Notes invalides' });
+          }
+          updates.admin_notes = admin_notes;
+        }
+        if (Object.keys(updates).length === 0) {
+          return res.status(400).json({ error: 'Aucune mise à jour fournie' });
+        }
+        const { data, error } = await supabase
+          .from('support_tickets')
+          .update(updates)
+          .eq('id', ticketId)
+          .select()
+          .single();
+        if (error) return res.status(500).json({ error: error.message });
+        return res.status(200).json({ ticket: data });
+      }
+
+      // ─── COMPTEUR DE TICKETS NON LUS (pour le badge admin) ──
+      case 'tickets_count_new': {
+        const { count, error } = await supabase
+          .from('support_tickets')
+          .select('id', { count: 'exact', head: true })
+          .eq('status', 'new');
+        if (error) return res.status(500).json({ error: error.message });
+        return res.status(200).json({ count: count || 0 });
+      }
+
       default:
         return res.status(400).json({ error: 'Action inconnue' });
     }
