@@ -470,6 +470,29 @@ textarea.form-input{resize:vertical;min-height:72px}
   .crm-grid{grid-template-columns:1fr!important}
   /* Page Paramètres : grille Logo+Infos passe en pleine largeur */
   .settings-grid{grid-template-columns:1fr!important}
+  /* ─── Page Admin mobile ─────────────────────────────────────
+     Le tableau garde son scroll horizontal (impossible de réduire
+     9 colonnes sans perte d'info), mais on ajoute un hint visuel.
+     Les KPI passent en 2 colonnes serrées pour économiser la verticale. */
+  .page-admin{padding:70px 12px 90px!important}
+  .page-admin .kpi-grid{grid-template-columns:repeat(2,1fr)!important;gap:8px}
+  .page-admin .kpi{padding:10px}
+  .page-admin .kpi-label{font-size:9px}
+  .page-admin .kpi-val{font-size:16px!important}
+  /* Hint visuel sur le tableau scrollable : ombre à droite si débordement */
+  .page-admin .tbl-wrap{
+    position:relative;
+    background:linear-gradient(to right,var(--card) 30%,rgba(0,0,0,0)),
+               linear-gradient(to right,rgba(0,0,0,0),var(--card) 70%) 100% 0,
+               radial-gradient(farthest-side at 0 50%,rgba(212,168,67,.2),rgba(0,0,0,0)),
+               radial-gradient(farthest-side at 100% 50%,rgba(212,168,67,.2),rgba(0,0,0,0)) 100% 0;
+    background-repeat:no-repeat;
+    background-size:40px 100%,40px 100%,15px 100%,15px 100%;
+    background-attachment:local,local,scroll,scroll;
+  }
+  .page-admin table{font-size:11px}
+  .page-admin thead th{padding:6px 8px;white-space:nowrap}
+  .page-admin tbody td{padding:8px;white-space:nowrap}
   /* ─── Dashboard responsive ─────────────────────────────────────
      Force les grids 2 colonnes du dashboard en pleine largeur sur mobile
      (KPI/camembert, stock dormant/relances, activité/todo).
