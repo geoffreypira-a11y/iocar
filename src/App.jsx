@@ -7509,6 +7509,8 @@ function SuspendedScreen({ garage, onLogout }) {
    ADMIN PAGE — Dashboard garages IO Car
 ═══════════════════════════════════════════════════════════════ */
 function AdminPage({ token }) {
+  // Sous-onglet actif : "garages" (par défaut) ou "tickets"
+  const [adminTab, setAdminTab] = useState("garages");
   const [garages, setGarages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch]   = useState("");
@@ -7518,6 +7520,14 @@ function AdminPage({ token }) {
   const [backupLoading, setBackupLoading] = useState(false);
   const [expandedGarage, setExpandedGarage] = useState(null);
   const [garageData, setGarageData] = useState(null);
+
+  // ─── TICKETS DE SUPPORT ─────────────────────────────────────
+  const [tickets, setTickets] = useState([]);
+  const [ticketsLoading, setTicketsLoading] = useState(false);
+  const [ticketStatusFilter, setTicketStatusFilter] = useState("all");
+  const [ticketsCountNew, setTicketsCountNew] = useState(0);
+  const [expandedTicket, setExpandedTicket] = useState(null);
+  const [ticketEditNotes, setTicketEditNotes] = useState({});
 
   // Helper : appel générique à l'endpoint admin sécurisé
   const adminCall = async (action, payload, opts = {}) => {
@@ -7540,7 +7550,34 @@ function AdminPage({ token }) {
       .then(({ garages }) => { setGarages(garages || []); setLoading(false); })
       .catch(() => setLoading(false));
     checkBackup();
+    // Charge le compteur de tickets non lus en arrière-plan pour le badge
+    adminCall("tickets_count_new")
+      .then(({ count }) => setTicketsCountNew(count || 0))
+      .catch(() => {});
   }, [token]);
+
+  // Charge la liste des tickets quand on bascule sur l'onglet "tickets"
+  // ou quand le filtre de statut change.
+  useEffect(() => {
+    if (adminTab !== "tickets") return;
+    setTicketsLoading(true);
+    const filter = ticketStatusFilter === "all" ? {} : { status: ticketStatusFilter };
+    adminCall("tickets_list", filter)
+      .then(({ tickets }) => { setTickets(tickets || []); setTicketsLoading(false); })
+      .catch(() => { setTickets([]); setTicketsLoading(false); });
+  }, [adminTab, ticketStatusFilter]);
+
+  const updateTicket = async (ticketId, updates) => {
+    try {
+      const { ticket } = await adminCall("tickets_update", { ticketId, ...updates });
+      // Met à jour la liste locale
+      setTickets(prev => prev.map(t => t.id === ticketId ? { ...t, ...ticket } : t));
+      // Met à jour le compteur de tickets non lus
+      adminCall("tickets_count_new").then(({ count }) => setTicketsCountNew(count || 0)).catch(() => {});
+    } catch (e) {
+      alert(`Erreur : ${e.message}`);
+    }
+  };
 
   const loadGarageData = async (garageId) => {
     if (expandedGarage === garageId) { setExpandedGarage(null); setGarageData(null); return; }
@@ -7767,6 +7804,27 @@ function AdminPage({ token }) {
           </button>
         </div>
       </div>
+
+      {/* Onglets admin */}
+      <div className="tabs" style={{ marginBottom: 20 }}>
+        <div className={`tab${adminTab === "garages" ? " active" : ""}`} onClick={() => setAdminTab("garages")}>
+          🏢 Concessions
+        </div>
+        <div className={`tab${adminTab === "tickets" ? " active" : ""}`} onClick={() => setAdminTab("tickets")} style={{ position: "relative" }}>
+          🎫 Tickets
+          {ticketsCountNew > 0 && (
+            <span style={{
+              marginLeft: 8, padding: "2px 7px", borderRadius: 10,
+              background: "var(--red)", color: "#fff",
+              fontSize: 10, fontWeight: 700, fontFamily: "DM Mono",
+            }}>
+              {ticketsCountNew}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {adminTab === "garages" && (<>
 
       {/* Sauvegarde manuelle */}
       <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 20, padding: "12px 16px", background: "var(--card)", border: "1px solid var(--border2)", borderRadius: 10 }}>
@@ -8075,6 +8133,169 @@ function AdminPage({ token }) {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+      </>)}
+
+      {adminTab === "tickets" && (
+        <div>
+          {/* Filtres statut */}
+          <div className="tabs" style={{ marginBottom: 16 }}>
+            {[
+              { k: "all", l: "Tous" },
+              { k: "new", l: "🔴 Nouveaux" },
+              { k: "in_progress", l: "🟡 En cours" },
+              { k: "resolved", l: "🟢 Résolus" },
+              { k: "closed", l: "⚫ Fermés" },
+            ].map(opt => (
+              <div
+                key={opt.k}
+                className={`tab${ticketStatusFilter === opt.k ? " active" : ""}`}
+                onClick={() => setTicketStatusFilter(opt.k)}
+              >
+                {opt.l}
+              </div>
+            ))}
+          </div>
+
+          {ticketsLoading ? (
+            <div style={{ padding: 40, textAlign: "center", color: "var(--muted)" }}>⏳ Chargement…</div>
+          ) : tickets.length === 0 ? (
+            <div style={{ padding: 60, textAlign: "center", color: "var(--muted)" }}>
+              <div style={{ fontSize: 48, marginBottom: 12, opacity: .3 }}>🎫</div>
+              <div style={{ fontSize: 14 }}>
+                {ticketStatusFilter === "all"
+                  ? "Aucun ticket pour le moment"
+                  : `Aucun ticket avec le statut "${ticketStatusFilter}"`}
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {tickets.map(t => {
+                const TYPES_LABELS = {
+                  incident:     { label: "🔴 Incident technique", color: "var(--red)" },
+                  amelioration: { label: "💡 Amélioration",        color: "var(--gold)" },
+                  question:     { label: "❓ Question",            color: "var(--blue)" },
+                  facturation:  { label: "💳 Facturation",         color: "var(--orange)" },
+                };
+                const STATUS_LABELS = {
+                  new:         { label: "Nouveau",  cls: "badge-red" },
+                  in_progress: { label: "En cours", cls: "badge-orange" },
+                  resolved:    { label: "Résolu",   cls: "badge-green" },
+                  closed:      { label: "Fermé",    cls: "badge-muted" },
+                };
+                const typeInfo = TYPES_LABELS[t.type] || { label: t.type, color: "var(--muted)" };
+                const statusInfo = STATUS_LABELS[t.status] || { label: t.status, cls: "badge-muted" };
+                const isExpanded = expandedTicket === t.id;
+                const garageName = t.garages?.name || "—";
+                const garageEmail = t.garages?.email || "—";
+                const currentNotes = ticketEditNotes[t.id] !== undefined ? ticketEditNotes[t.id] : (t.admin_notes || "");
+                return (
+                  <div key={t.id} className="card" style={{
+                    borderLeft: `3px solid ${typeInfo.color}`,
+                    transition: "all .15s",
+                  }}>
+                    {/* Header — toujours visible, clickable pour expand */}
+                    <div
+                      onClick={() => setExpandedTicket(isExpanded ? null : t.id)}
+                      style={{
+                        padding: "12px 16px", cursor: "pointer",
+                        display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
+                      }}
+                    >
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: typeInfo.color }}>{typeInfo.label}</span>
+                          <span className={`badge ${statusInfo.cls}`}>{statusInfo.label}</span>
+                          {!t.email_sent && (
+                            <span className="badge badge-orange" title={t.email_error || "Email non envoyé"}>📧 Email KO</span>
+                          )}
+                        </div>
+                        <div style={{ fontSize: 13, fontWeight: 600 }}>{garageName}</div>
+                        <div style={{ fontSize: 11, color: "var(--muted)" }}>
+                          {garageEmail} · {new Date(t.created_at).toLocaleString("fr-FR")}
+                        </div>
+                      </div>
+                      <div style={{ fontSize: 18, color: "var(--muted)" }}>{isExpanded ? "▼" : "▶"}</div>
+                    </div>
+
+                    {/* Détail — visible si expanded */}
+                    {isExpanded && (
+                      <div style={{ padding: "0 16px 16px 16px", borderTop: "1px solid var(--border2)" }}>
+                        {/* Message du ticket */}
+                        <div style={{ fontSize: 11, color: "var(--muted)", letterSpacing: 1, textTransform: "uppercase", marginTop: 12, marginBottom: 6 }}>
+                          Message de l'abonné
+                        </div>
+                        <div style={{
+                          background: "var(--card2)", borderRadius: 8, padding: "12px 14px",
+                          fontSize: 13, lineHeight: 1.5, whiteSpace: "pre-wrap",
+                          marginBottom: 16,
+                        }}>
+                          {t.message}
+                        </div>
+
+                        {/* Infos garage */}
+                        <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 16 }}>
+                          SIRET : {t.garages?.siret || "—"} · Ticket ID : <span style={{ fontFamily: "DM Mono" }}>{t.id}</span>
+                        </div>
+
+                        {/* Changement de statut */}
+                        <div style={{ fontSize: 11, color: "var(--muted)", letterSpacing: 1, textTransform: "uppercase", marginBottom: 6 }}>
+                          Changer le statut
+                        </div>
+                        <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
+                          {[
+                            { k: "new",         l: "🔴 Nouveau" },
+                            { k: "in_progress", l: "🟡 En cours" },
+                            { k: "resolved",    l: "🟢 Résolu" },
+                            { k: "closed",      l: "⚫ Fermé" },
+                          ].map(s => (
+                            <button
+                              key={s.k}
+                              className={`btn btn-xs ${t.status === s.k ? "btn-primary" : "btn-ghost"}`}
+                              onClick={() => updateTicket(t.id, { status: s.k })}
+                              disabled={t.status === s.k}
+                            >
+                              {s.l}
+                            </button>
+                          ))}
+                        </div>
+
+                        {/* Notes admin */}
+                        <div style={{ fontSize: 11, color: "var(--muted)", letterSpacing: 1, textTransform: "uppercase", marginBottom: 6 }}>
+                          Notes internes (visibles uniquement par les admins)
+                        </div>
+                        <textarea
+                          className="form-input"
+                          rows={3}
+                          placeholder="Ex: Répondu par email le 02/05, en attente du retour client"
+                          value={currentNotes}
+                          onChange={e => setTicketEditNotes(prev => ({ ...prev, [t.id]: e.target.value }))}
+                          style={{ marginBottom: 8 }}
+                        />
+                        <div style={{ display: "flex", gap: 8 }}>
+                          <button
+                            className="btn btn-primary btn-sm"
+                            onClick={() => updateTicket(t.id, { admin_notes: currentNotes })}
+                            disabled={currentNotes === (t.admin_notes || "")}
+                          >
+                            💾 Enregistrer les notes
+                          </button>
+                          <a
+                            href={`mailto:${garageEmail}?subject=${encodeURIComponent(`[IO Car] Re: ${typeInfo.label}`)}&body=${encodeURIComponent(`Bonjour,\n\nSuite à votre ticket :\n\n> ${t.message.split('\n').join('\n> ')}\n\n`)}`}
+                            className="btn btn-ghost btn-sm"
+                            style={{ textDecoration: "none" }}
+                          >
+                            📧 Répondre par email
+                          </a>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
     </div>
