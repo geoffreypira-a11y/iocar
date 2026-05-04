@@ -345,6 +345,34 @@ export default async function handler(req, res) {
         return res.status(200).json({ count: count || 0 });
       }
 
+      // ─── SUPPRIMER UN TICKET ────────────────────────────────
+      // Suppression définitive d'un ticket. Utile pour nettoyer après résolution.
+      // RLS de la table autorise déjà DELETE pour les admins, mais on passe via
+      // service_role pour cohérence avec les autres endpoints admin.
+      case 'tickets_delete': {
+        const { ticketId } = payload || {};
+        if (!ticketId) return res.status(400).json({ error: 'ticketId manquant' });
+        const { error } = await supabase
+          .from('support_tickets')
+          .delete()
+          .eq('id', ticketId);
+        if (error) return res.status(500).json({ error: error.message });
+        return res.status(200).json({ success: true });
+      }
+
+      // ─── SUPPRIMER TOUS LES TICKETS FERMÉS ──────────────────
+      // Action de nettoyage en masse — supprime tous les tickets avec status="closed".
+      // Renvoie le nombre de tickets supprimés.
+      case 'tickets_purge_closed': {
+        const { data, error } = await supabase
+          .from('support_tickets')
+          .delete()
+          .eq('status', 'closed')
+          .select('id');
+        if (error) return res.status(500).json({ error: error.message });
+        return res.status(200).json({ deleted: data?.length || 0 });
+      }
+
       default:
         return res.status(400).json({ error: 'Action inconnue' });
     }
