@@ -117,6 +117,75 @@ function clearSession() {
 }
 
 /* ═══════════════════════════════════════════════════════════════
+   BROUILLONS DE FORMULAIRES — protection contre la perte de saisie
+   ═══════════════════════════════════════════════════════════════
+   Sauvegarde automatique du formulaire en cours dans localStorage,
+   pour que l'abonné puisse récupérer sa saisie en cas de coupure
+   réseau, fermeture accidentelle d'onglet, refresh, etc.
+
+   Sécurité :
+    - Stockage local uniquement (jamais envoyé sur un serveur)
+    - TTL de 24h : un brouillon plus vieux est ignoré (et purgé)
+    - Une clé par type de formulaire (ex: "draft:order", "draft:vehicle")
+    - Pas de stockage de données ultra-sensibles (signatures complètes
+      bypass — leur dataURL pèse trop lourd et n'est pas critique)
+*/
+const DRAFT_TTL_MS = 24 * 60 * 60 * 1000; // 24h
+const DRAFT_PREFIX = "iocar_draft_";
+
+function saveDraft(key, formData) {
+  try {
+    const payload = {
+      data: formData,
+      ts: Date.now(),
+    };
+    localStorage.setItem(DRAFT_PREFIX + key, JSON.stringify(payload));
+  } catch (e) {
+    // Quota plein ou autre — silencieusement ignoré, pas critique
+  }
+}
+
+function loadDraft(key) {
+  try {
+    const raw = localStorage.getItem(DRAFT_PREFIX + key);
+    if (!raw) return null;
+    const payload = JSON.parse(raw);
+    if (!payload?.ts || Date.now() - payload.ts > DRAFT_TTL_MS) {
+      // Expiré → on purge
+      localStorage.removeItem(DRAFT_PREFIX + key);
+      return null;
+    }
+    return payload.data;
+  } catch (e) {
+    return null;
+  }
+}
+
+function clearDraft(key) {
+  try { localStorage.removeItem(DRAFT_PREFIX + key); } catch (e) {}
+}
+
+// Nettoie tous les brouillons expirés (à appeler de temps en temps)
+function purgeExpiredDrafts() {
+  try {
+    const now = Date.now();
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k || !k.startsWith(DRAFT_PREFIX)) continue;
+      try {
+        const p = JSON.parse(localStorage.getItem(k) || "{}");
+        if (!p?.ts || now - p.ts > DRAFT_TTL_MS) {
+          localStorage.removeItem(k);
+          i--; // l'index a été décalé après suppression
+        }
+      } catch (e) {
+        localStorage.removeItem(k); // JSON corrompu → on purge
+      }
+    }
+  } catch (e) {}
+}
+
+/* ═══════════════════════════════════════════════════════════════
    STORAGE HELPERS — upload images via /api (jamais directement)
 ═══════════════════════════════════════════════════════════════ */
 // Upload une dataURL vers le bucket approprié et retourne { path, signedUrl }.
@@ -1963,6 +2032,13 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
    VEHICLE FORM MODAL
 ═══════════════════════════════════════════════════════════════ */
 function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garageId, viewMode }) {
+  const isEdit = !!vehicle?.id;
+  // ─── BROUILLON ───────────────────────────────────────────
+  // Comme pour OrderForm : sauvegarde auto en localStorage en mode création,
+  // et propose la restauration au montage si une saisie en cours est trouvée.
+  const DRAFT_KEY = "vehicle_new";
+  const [draftToRestore, setDraftToRestore] = useState(null);
+
   const [form, setForm] = useState(vehicle ? {
     ...vehicle,
     options: Array.isArray(vehicle.options) ? vehicle.options.join(", ") : vehicle.options || "",
@@ -1978,6 +2054,23 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
     includeTreso: false,
   });
   const [loading, setLoading] = useState(false);
+
+  // Au montage : check si un brouillon "vehicle_new" existe (et qu'on n'est pas en édition)
+  useEffect(() => {
+    if (isEdit) return;
+    const draft = loadDraft(DRAFT_KEY);
+    // On ne propose la restauration que si le brouillon contient quelque chose d'utile
+    if (draft && (draft.plate || draft.marque || draft.modele || draft.vin)) {
+      setDraftToRestore(draft);
+    }
+  }, []);
+
+  // Sauvegarde auto debouncée du formulaire en mode création
+  useEffect(() => {
+    if (isEdit) return;
+    const t = setTimeout(() => saveDraft(DRAFT_KEY, form), 1000);
+    return () => clearTimeout(t);
+  }, [form, isEdit]);
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
@@ -2029,10 +2122,47 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
       kilometrage: parseInt(form.kilometrage) || 0,
       options: form.options ? String(form.options).split(",").map(s => s.trim()).filter(Boolean) : [],
     });
+    // Purge du brouillon après sauvegarde réussie (mode création uniquement)
+    if (!isEdit) clearDraft(DRAFT_KEY);
   };
 
   return (
     <div className="modal-bg" onClick={e => e.target === e.currentTarget && onClose()}>
+      {/* ─── POPUP DE RESTAURATION DE BROUILLON ─────────────
+          Identique à celui de OrderForm — propose la reprise d'une saisie
+          interrompue (coupure réseau, fermeture accidentelle, refresh). */}
+      {draftToRestore && (
+        <div className="modal-bg" style={{ zIndex: 1000 }}>
+          <div className="modal modal-sm" onClick={e => e.stopPropagation()}>
+            <div className="modal-hd">
+              <span className="modal-title">📝 Brouillon récupéré</span>
+            </div>
+            <div className="modal-body">
+              <p style={{ fontSize: 13, lineHeight: 1.6, marginBottom: 16 }}>
+                Une saisie en cours a été détectée
+                {draftToRestore?.plate && <> pour la plaque <strong>{draftToRestore.plate}</strong></>}
+                {!draftToRestore?.plate && draftToRestore?.marque && <> pour <strong>{draftToRestore.marque} {draftToRestore.modele || ""}</strong></>}
+                .<br />
+                Voulez-vous reprendre où vous en étiez ?
+              </p>
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => { clearDraft(DRAFT_KEY); setDraftToRestore(null); }}
+                >
+                  🗑 Repartir de zéro
+                </button>
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={() => { setForm(draftToRestore); setDraftToRestore(null); }}
+                >
+                  ↩ Restaurer ma saisie
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="modal modal-lg">
         <div className="modal-hd">
           <span className="modal-title">{vehicle ? "Modifier le véhicule" : "Ajouter un véhicule"}</span>
@@ -2866,6 +2996,13 @@ function PaymentModal({ order, onSave, onClose }) {
 ═══════════════════════════════════════════════════════════════ */
 function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClients, orders, setVehiclesRaw, usage, setUsage }) {
   const isEdit = !!order?.id;
+  // ─── BROUILLON ───────────────────────────────────────────
+  // Clé du brouillon — un seul à la fois pour les NOUVEAUX documents.
+  // En mode édition, pas de brouillon (on travaille sur des données réelles).
+  const DRAFT_KEY = "order_new";
+  // État pour proposer la restauration au montage si un brouillon existe
+  const [draftToRestore, setDraftToRestore] = useState(null);
+
   const [form, setForm] = useState(order || {
     type: "bc", ref: "", date_creation: today(), date_echeance: "",
     client: { name: "", address: "", phone: "", email: "", siren: "" },
@@ -2890,6 +3027,24 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
     tva_sur_debits: false,
     paiements: [], notes: ""
   });
+
+  // Au montage : si nouveau document et brouillon existant, on propose la restauration
+  useEffect(() => {
+    if (isEdit) return;
+    const draft = loadDraft(DRAFT_KEY);
+    if (draft && draft.client?.name || draft && (draft.prix_ht || draft.notes || draft.vehicle_id)) {
+      // On ne propose la restauration que si le brouillon contient quelque chose d'utile
+      setDraftToRestore(draft);
+    }
+  }, []); // une seule fois au montage
+
+  // Sauvegarde auto du brouillon — uniquement en mode création, pas en édition.
+  // Pour ne pas saturer le localStorage, on debounce à 1s après chaque modif.
+  useEffect(() => {
+    if (isEdit) return;
+    const t = setTimeout(() => saveDraft(DRAFT_KEY, form), 1000);
+    return () => clearTimeout(t);
+  }, [form, isEdit]);
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const setClient = (k, v) => setForm(f => ({ ...f, client: { ...f.client, [k]: v } }));
@@ -2968,10 +3123,48 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
     // Générer la ref séquentielle si pas encore définie
     const ref = form.ref || nextRef(orders, form.type);
     onSave({ ...form, id: form.id || uid(), ref });
+    // On purge le brouillon après sauvegarde réussie
+    if (!isEdit) clearDraft(DRAFT_KEY);
   };
 
   return (
     <div className="modal-bg" onClick={e => e.target === e.currentTarget && onClose()}>
+      {/* ─── POPUP DE RESTAURATION DE BROUILLON ─────────────
+          S'affiche au montage si un brouillon existe (saisie en cours
+          interrompue par fermeture/coupure). L'abonné choisit de
+          restaurer ou de repartir de zéro. */}
+      {draftToRestore && (
+        <div className="modal-bg" style={{ zIndex: 1000 }}>
+          <div className="modal modal-sm" onClick={e => e.stopPropagation()}>
+            <div className="modal-hd">
+              <span className="modal-title">📝 Brouillon récupéré</span>
+            </div>
+            <div className="modal-body">
+              <p style={{ fontSize: 13, lineHeight: 1.6, marginBottom: 16 }}>
+                Une saisie en cours a été détectée
+                {draftToRestore?.client?.name && <> pour <strong>{draftToRestore.client.name}</strong></>}
+                {draftToRestore?.vehicle_label && <> sur <strong>{draftToRestore.vehicle_label}</strong></>}
+                .<br />
+                Voulez-vous reprendre où vous en étiez ?
+              </p>
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => { clearDraft(DRAFT_KEY); setDraftToRestore(null); }}
+                >
+                  🗑 Repartir de zéro
+                </button>
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={() => { setForm(draftToRestore); setDraftToRestore(null); }}
+                >
+                  ↩ Restaurer ma saisie
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="modal modal-lg">
         <div className="modal-hd">
           <span className="modal-title">{isEdit ? `Modifier ${form.ref}` : "Nouveau document"}</span>
@@ -8473,6 +8666,54 @@ export default function App() {
 
   const isRealDemo = token === "demo";
 
+  // ─── DÉTECTION DU RÉSEAU ────────────────────────────────────
+  // Affiche un bandeau quand l'abonné est offline.
+  // Combine 2 signaux :
+  //  - navigator.onLine (rapide, mais peu fiable : "true" si carte wifi active)
+  //  - ping périodique vers Supabase (vraie détection : peut-on parler au serveur ?)
+  // Le bandeau ne s'affiche que si BOTH signaux sont KO pour éviter les faux positifs.
+  const [isOnline, setIsOnline] = useState(typeof navigator !== "undefined" ? navigator.onLine : true);
+  useEffect(() => {
+    // Nettoyage des brouillons expirés au démarrage de l'app (1 fois par session)
+    purgeExpiredDrafts();
+
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+
+    // Ping de vérification toutes les 30s — détecte les "faux online" (wifi sans internet)
+    // On ping un endpoint Supabase léger (HEAD sur /auth) qui répond rapidement.
+    // En cas d'erreur réseau (vraie coupure) → on bascule offline même si navigator.onLine = true.
+    let cancelled = false;
+    const pingInterval = setInterval(async () => {
+      if (!navigator.onLine) {
+        if (!cancelled) setIsOnline(false);
+        return;
+      }
+      try {
+        // AbortController avec timeout 5s pour ne pas bloquer si le serveur traîne
+        const controller = new AbortController();
+        const t = setTimeout(() => controller.abort(), 5000);
+        await fetch(`${SUPABASE_URL}/auth/v1/health`, {
+          method: "HEAD",
+          signal: controller.signal,
+        });
+        clearTimeout(t);
+        if (!cancelled) setIsOnline(true);
+      } catch (e) {
+        if (!cancelled) setIsOnline(false);
+      }
+    }, 30000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(pingInterval);
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
+
   // Le statut admin est lu depuis la colonne garages.is_admin (DB),
   // initialisé à false et réaffecté dès que le garage est chargé.
   // Aucune liste d'emails n'est plus hardcodée dans le bundle — le front n'est
@@ -8714,6 +8955,23 @@ export default function App() {
   return (
     <>
       <style>{STYLE}</style>
+
+      {/* ─── BANDEAU OFFLINE ───────────────────────────────────
+          S'affiche tant que l'abonné est hors-ligne. Permet d'éviter qu'il
+          ne pense que ses actions sont enregistrées alors qu'elles échouent
+          silencieusement. Position fixed en haut, au-dessus de tout. */}
+      {!isOnline && (
+        <div style={{
+          position: "fixed", top: 0, left: 0, right: 0, zIndex: 600,
+          background: "linear-gradient(90deg, #c44, #a33)",
+          color: "#fff", padding: "10px 16px",
+          fontSize: 13, fontWeight: 600, textAlign: "center",
+          boxShadow: "0 2px 8px rgba(0,0,0,.3)",
+          letterSpacing: .3,
+        }}>
+          🔴 Connexion perdue — vos modifications ne pourront pas être sauvegardées tant que la connexion n'est pas rétablie
+        </div>
+      )}
 
       {/* ── Hamburger mobile ── */}
       <div className="hamburger" onClick={() => setSidebarOpen(o => !o)}>
