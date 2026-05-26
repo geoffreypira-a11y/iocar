@@ -663,7 +663,7 @@ function mapOrderToInvoice(order, calc) {
     payments.push({
       amount_cents: Math.round(Number(order.acompte_ttc) * 100),
       method: 'cash', // pas tracé côté IOCAR, on met cash par défaut
-      paid_at: order.date_facture || order.date_creation || new Date().toISOString().slice(0, 10),
+      paid_at: toIsoDate(order.date_facture || order.date_creation),
       notes: 'Acompte versé à la signature (IO CAR)',
       reference: order.ref ? `Acompte ${order.ref}` : null
     });
@@ -675,7 +675,7 @@ function mapOrderToInvoice(order, calc) {
       payments.push({
         amount_cents: Math.round(montant * 100),
         method: mapPaymentMethod(p.mode),
-        paid_at: p.date || new Date().toISOString().slice(0, 10),
+        paid_at: toIsoDate(p.date),
         notes: p.note || null,
         reference: order.ref || null
       });
@@ -723,7 +723,7 @@ function mapOrderToInvoice(order, calc) {
   return {
     external_id: order.id,
     number: order.ref || `IOCAR-${String(order.id || '').slice(0, 8).toUpperCase()}`,
-    issue_date: order.date_facture || order.date_creation || new Date().toISOString().slice(0, 10),
+    issue_date: toIsoDate(order.date_facture || order.date_creation),
     // ⚠️ Toujours 'paid' : on n'a pushé que parce que calc.reste <= 0.01
     status: 'paid',
     client: clientPayload,
@@ -756,6 +756,43 @@ function mapPaymentMethod(mode) {
   if (m.includes('espece') || m.includes('cash')) return 'cash';
   if (m.includes('chèque') || m.includes('cheque')) return 'check';
   return 'other';
+}
+
+// Convertit une date IOCAR (souvent "DD/MM/YYYY" en français) vers ISO YYYY-MM-DD
+// Accepte aussi : Date object, timestamp, déjà-ISO, "YYYY-MM-DD".
+// Retourne toujours une string ISO "YYYY-MM-DD" ou today() en fallback.
+function toIsoDate(input) {
+  const fallback = new Date().toISOString().slice(0, 10);
+  if (!input) return fallback;
+  // Déjà au bon format ISO ?
+  if (typeof input === 'string') {
+    const trimmed = input.trim();
+    // ISO standard
+    if (/^\d{4}-\d{2}-\d{2}/.test(trimmed)) return trimmed.slice(0, 10);
+    // Format FR : DD/MM/YYYY ou DD-MM-YYYY
+    const m = trimmed.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
+    if (m) {
+      const dd = m[1].padStart(2, '0');
+      const mm = m[2].padStart(2, '0');
+      const yyyy = m[3];
+      return `${yyyy}-${mm}-${dd}`;
+    }
+    // Format compact YYYYMMDD
+    const c = trimmed.match(/^(\d{4})(\d{2})(\d{2})$/);
+    if (c) return `${c[1]}-${c[2]}-${c[3]}`;
+    // Tentative parse natif (peut donner Invalid Date)
+    const d = new Date(trimmed);
+    if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+    return fallback;
+  }
+  if (input instanceof Date && !isNaN(input.getTime())) {
+    return input.toISOString().slice(0, 10);
+  }
+  if (typeof input === 'number') {
+    const d = new Date(input);
+    if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+  }
+  return fallback;
 }
 
 // ═══════════════════════════════════════════════════════════════════
