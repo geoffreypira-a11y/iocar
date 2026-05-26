@@ -466,6 +466,14 @@ textarea.form-input{resize:vertical;min-height:72px}
   .pdoc-head{flex-direction:column;gap:16px}
   .pdoc-parties{flex-direction:column;gap:12px}
   .pdoc-totals{justify-content:flex-end}
+  /* ─── Header admin mobile ───────────────────────────────────
+     En mobile : on garde le logo + déconnexion sur une ligne,
+     et le sélecteur de vue passe en dessous, centré sur toute la largeur. */
+  .admin-header{padding:8px 12px!important;gap:8px!important}
+  .admin-header > div:first-child{order:1;flex:1;min-width:0}
+  .admin-header > button{order:2;flex-shrink:0}
+  .admin-view-switch{order:3;flex:1 1 100%;justify-content:center}
+  .admin-view-switch > div{flex:1;text-align:center}
   /* Cards CRM */
   .crm-grid{grid-template-columns:1fr!important}
   /* Page Paramètres : grille Logo+Infos passe en pleine largeur */
@@ -7828,6 +7836,105 @@ function SuspendedScreen({ garage, onLogout }) {
 /* ═══════════════════════════════════════════════════════════════
    ADMIN PAGE — Dashboard garages IO Car
 ═══════════════════════════════════════════════════════════════ */
+
+/**
+ * Petit composant d'édition de la clé RapidAPI pour un garage donné.
+ * Composant DÉDIÉ (au lieu de l'inline précédent) parce que :
+ *  - L'input précédent était non-contrôlé (defaultValue + onBlur) ce qui
+ *    pose problème avec l'autofill iCloud et certains comportements iOS
+ *  - Le ✓ vert dépendait de g.rapidapi_key initial, donc restait affiché
+ *    même quand on vidait le champ (faux positif).
+ *  - Le onBlur peut ne pas se déclencher selon le navigateur, l'autofill, etc.
+ *
+ * Cette version :
+ *  - Input contrôlé avec state local
+ *  - Type text (au lieu de password) + toggle visibilité 👁/🙈
+ *  - Bouton 💾 explicite pour sauvegarder (plus fiable que onBlur)
+ *  - ✓ vert dynamique basé sur la valeur saisie
+ *  - Retour visuel : ⏳ pendant, ✅ après succès, ❌ + alert si erreur
+ */
+function RapidApiKeyEditor({ garage, onSaved, adminCall }) {
+  const [value, setValue] = useState(garage.rapidapi_key || "");
+  const [saving, setSaving] = useState(false);
+  const [status, setStatus] = useState(null); // "ok" | "err" | null
+  const [visible, setVisible] = useState(false);
+
+  // Si le garage change (refresh complet des données), on resynchronise le local state.
+  useEffect(() => { setValue(garage.rapidapi_key || ""); }, [garage.id, garage.rapidapi_key]);
+
+  const dirty = value.trim() !== (garage.rapidapi_key || "");
+
+  const save = async () => {
+    const val = value.trim();
+    setSaving(true); setStatus(null);
+    try {
+      // Log pour diagnostic en cas de retour de bug
+      console.log("[RapidApiKeyEditor] update_rapidapi", { garageId: garage.id, length: val.length });
+      const res = await adminCall("update_rapidapi", { garageId: garage.id, rapidapi_key: val });
+      console.log("[RapidApiKeyEditor] response", res);
+      setStatus("ok");
+      if (onSaved) onSaved(val);
+      // Le badge ✓ devient vert pendant 2s puis revient à l'état normal
+      setTimeout(() => setStatus(null), 2000);
+    } catch (err) {
+      console.error("[RapidApiKeyEditor] error", err);
+      setStatus("err");
+      alert("Erreur lors de la sauvegarde de la clé : " + (err?.message || "inconnue"));
+    }
+    setSaving(false);
+  };
+
+  return (
+    <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+      <input
+        className="form-input"
+        style={{
+          padding: "3px 8px", fontSize: 10, fontFamily: "DM Mono", width: 150,
+          // Désactive l'autofill iCloud sur les champs sensibles
+        }}
+        value={value}
+        onChange={e => setValue(e.target.value)}
+        placeholder="Clé RapidAPI..."
+        type={visible ? "text" : "password"}
+        autoComplete="off"
+        autoCorrect="off"
+        spellCheck="false"
+        // Indices anti-autofill pour les navigateurs (notamment Safari/iOS)
+        data-1p-ignore="true"
+        data-lpignore="true"
+      />
+      <button
+        type="button"
+        className="btn btn-ghost"
+        style={{ padding: "3px 6px", fontSize: 10, minWidth: 24 }}
+        onClick={() => setVisible(v => !v)}
+        title={visible ? "Masquer la clé" : "Afficher la clé"}
+      >
+        {visible ? "🙈" : "👁"}
+      </button>
+      <button
+        type="button"
+        className="btn"
+        style={{
+          padding: "3px 8px", fontSize: 10, minWidth: 30,
+          background: dirty ? "var(--gold)" : "var(--card2)",
+          color: dirty ? "#0b0c10" : "var(--muted)",
+          cursor: dirty && !saving ? "pointer" : "default",
+          opacity: saving ? .5 : 1,
+        }}
+        onClick={dirty && !saving ? save : undefined}
+        disabled={!dirty || saving}
+        title="Enregistrer la clé"
+      >
+        {saving ? "⏳" : (status === "ok" ? "✅" : (status === "err" ? "❌" : "💾"))}
+      </button>
+      {!dirty && value && status !== "ok" && (
+        <span style={{ color: "var(--green)", fontSize: 10 }} title="Clé enregistrée">✓</span>
+      )}
+    </div>
+  );
+}
+
 function AdminPage({ token }) {
   // Sous-onglet actif : "garages" (par défaut) ou "tickets"
   const [adminTab, setAdminTab] = useState("garages");
@@ -8267,26 +8374,13 @@ function AdminPage({ token }) {
                   <td style={{ fontSize: 12, color: "var(--muted)" }}>{g.email || "—"}</td>
                   <td style={{ fontFamily: "DM Mono", fontSize: 11 }}>{g.siret || "—"}</td>
                   <td>
-                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                      <input
-                        className="form-input"
-                        style={{ padding: "3px 8px", fontSize: 10, fontFamily: "DM Mono", width: 160 }}
-                        defaultValue={g.rapidapi_key || ""}
-                        placeholder="Clé RapidAPI..."
-                        type="password"
-                        onBlur={async e => {
-                          const val = e.target.value.trim();
-                          if (val === (g.rapidapi_key || "")) return;
-                          try {
-                            await adminCall("update_rapidapi", { garageId: g.id, rapidapi_key: val });
-                            setGarages(garages.map(x => x.id === g.id ? { ...x, rapidapi_key: val, updated_at: new Date().toISOString() } : x));
-                          } catch(err) {
-                            alert("Erreur : " + err.message);
-                          }
-                        }}
-                      />
-                      {g.rapidapi_key && <span style={{ color: "var(--green)", fontSize: 10 }}>✓</span>}
-                    </div>
+                    <RapidApiKeyEditor
+                      garage={g}
+                      adminCall={adminCall}
+                      onSaved={(newKey) => {
+                        setGarages(garages.map(x => x.id === g.id ? { ...x, rapidapi_key: newKey, updated_at: new Date().toISOString() } : x));
+                      }}
+                    />
                   </td>
                   <td style={{ textAlign: "center" }}>
                     {(() => {
@@ -8997,12 +9091,16 @@ export default function App() {
         </div>
       )}
 
-      {/* ── Hamburger mobile ── */}
+      {/* ── Hamburger mobile ──
+          Masqué en mode admin car la page admin a son propre header
+          autonome avec logo + switch de mode (pas de sidebar à ouvrir). */}
+      {viewMode !== "admin" && (
       <div className="hamburger" onClick={() => setSidebarOpen(o => !o)}>
         <span style={{ transform: sidebarOpen ? "rotate(45deg) translate(5px,5px)" : "none" }} />
         <span style={{ opacity: sidebarOpen ? 0 : 1, width: sidebarOpen ? 0 : 18 }} />
         <span style={{ transform: sidebarOpen ? "rotate(-45deg) translate(5px,-5px)" : "none" }} />
       </div>
+      )}
 
       {/* ── Bannière mode démo ou preview ── */}
       {viewMode === "trial" && (
@@ -9045,17 +9143,18 @@ export default function App() {
       {viewMode === "admin" ? (
         <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
           {/* Header admin */}
-          <div style={{
+          <div className="admin-header" style={{
             position: "sticky", top: 0, zIndex: 100,
             background: "var(--card)", borderBottom: "1px solid var(--border2)",
-            padding: "10px 24px", display: "flex", alignItems: "center", justifyContent: "space-between"
+            padding: "10px 16px", display: "flex", alignItems: "center", justifyContent: "space-between",
+            gap: 10, flexWrap: "wrap"
           }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              <div style={{ width: 32, height: 32, borderRadius: 8, background: "var(--gold)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "Syne", fontWeight: 800, fontSize: 12, color: "#0b0c10" }}>IO</div>
-              <div style={{ fontFamily: "Syne", fontWeight: 800, fontSize: 15, letterSpacing: 1 }}>IO <span style={{ color: "var(--gold)" }}>Car</span> <span style={{ fontSize: 11, color: "var(--muted)", fontFamily: "DM Sans" }}>— Admin</span></div>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+              <div style={{ width: 32, height: 32, borderRadius: 8, background: "var(--gold)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "Syne", fontWeight: 800, fontSize: 12, color: "#0b0c10", flexShrink: 0 }}>IO</div>
+              <div style={{ fontFamily: "Syne", fontWeight: 800, fontSize: 15, letterSpacing: 1, whiteSpace: "nowrap" }}>IO <span style={{ color: "var(--gold)" }}>Car</span> <span style={{ fontSize: 11, color: "var(--muted)", fontFamily: "DM Sans" }}>— Admin</span></div>
             </div>
             {/* Sélecteur de vue */}
-            <div style={{ display: "flex", gap: 4, background: "var(--card2)", borderRadius: 8, padding: 4 }}>
+            <div className="admin-view-switch" style={{ display: "flex", gap: 4, background: "var(--card2)", borderRadius: 8, padding: 4 }}>
               {[
                 { mode: "admin",      label: "🛡 Admin",   color: "var(--gold)" },
                 { mode: "subscriber", label: "✅ Abonné",  color: "var(--green)" },
@@ -9066,7 +9165,8 @@ export default function App() {
                   background: viewMode === mode ? "var(--card3)" : "transparent",
                   color: viewMode === mode ? color : "var(--muted)",
                   border: viewMode === mode ? `1px solid ${color}30` : "1px solid transparent",
-                  transition: "all .15s"
+                  transition: "all .15s",
+                  whiteSpace: "nowrap"
                 }}>{label}</div>
               ))}
             </div>
