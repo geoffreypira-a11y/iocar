@@ -2,6 +2,10 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recharts";
 
+// v8.37 — Pont IO BILL (composants UI)
+import IobillBridgeCard from "./components/IobillBridgeCard.jsx";
+import IobillInvoiceSync from "./components/IobillInvoiceSync.jsx";
+
 /* ═══════════════════════════════════════════════════════════════
    SUPABASE CONFIG
 ═══════════════════════════════════════════════════════════════ */
@@ -466,14 +470,6 @@ textarea.form-input{resize:vertical;min-height:72px}
   .pdoc-head{flex-direction:column;gap:16px}
   .pdoc-parties{flex-direction:column;gap:12px}
   .pdoc-totals{justify-content:flex-end}
-  /* ─── Header admin mobile ───────────────────────────────────
-     En mobile : on garde le logo + déconnexion sur une ligne,
-     et le sélecteur de vue passe en dessous, centré sur toute la largeur. */
-  .admin-header{padding:8px 12px!important;gap:8px!important}
-  .admin-header > div:first-child{order:1;flex:1;min-width:0}
-  .admin-header > button{order:2;flex-shrink:0}
-  .admin-view-switch{order:3;flex:1 1 100%;justify-content:center}
-  .admin-view-switch > div{flex:1;text-align:center}
   /* Cards CRM */
   .crm-grid{grid-template-columns:1fr!important}
   /* Page Paramètres : grille Logo+Infos passe en pleine largeur */
@@ -2504,7 +2500,7 @@ function VehicleFiche({ v, dealer, onClose }) {
 /* ═══════════════════════════════════════════════════════════════
    FLEET PAGE
 ═══════════════════════════════════════════════════════════════ */
-function FleetPage({ vehicles, setVehicles, orders, apiKey, usage, setUsage, livrePolice, setLivrePolice, viewMode, garageId, dealer }) {
+function FleetPage({ vehicles, setVehicles, orders, setOrders, apiKey, usage, setUsage, livrePolice, setLivrePolice, viewMode, garageId, dealer, token }) {
   const [modal, setModal] = useState(null);
   const [fiche, setFiche] = useState(null);
   const [search, setSearch] = useState("");
@@ -2641,6 +2637,54 @@ function FleetPage({ vehicles, setVehicles, orders, apiKey, usage, setUsage, liv
           return lp;
         });
       }
+
+      // v8.37 — Hook IO BILL : pousser la facture en PAID à IOBILL (fire-and-forget)
+      // Déclenché uniquement si :
+      //   - le compte IOBILL est lié
+      //   - auto_push activé dans paramètres
+      //   - on a trouvé un linkedOrder de type facture
+      //   - la facture est totalement soldée (sécurité)
+      if (token && dealer?.iobill_auto_push && dealer?.iobill_company_id
+          && linkedOrder && linkedOrder.type === 'facture') {
+        // Calcul "reste" inline (réplique calcOrder simplifiée)
+        const prixVente = parseFloat(linkedOrder.prix_ht) || 0;
+        const remAmt = parseFloat(linkedOrder.remise_ttc) || 0;
+        const fraisMD = parseFloat(linkedOrder.frais_mise_dispo) || 0;
+        const carteGrise = parseFloat(linkedOrder.carte_grise) || 0;
+        const reprise = linkedOrder.reprise_active ? (parseFloat(linkedOrder.reprise_valeur) || 0) : 0;
+        const ttc = (prixVente - remAmt) + fraisMD + carteGrise - reprise;
+        const acompte = parseFloat(linkedOrder.acompte_ttc) || 0;
+        const paiements = (Array.isArray(linkedOrder.paiements) ? linkedOrder.paiements : [])
+          .reduce((s, p) => s + (parseFloat(p.montant) || 0), 0);
+        const reste = ttc - (acompte + paiements);
+
+        if (reste <= 0.01) {
+          // Fire-and-forget : pas d'await, n'impacte pas la fluidité
+          fetch("/api/iobill-bridge", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+            body: JSON.stringify({ action: "mark_invoice_paid", order_id: linkedOrder.id })
+          })
+            .then(r => r.json())
+            .then(j => {
+              if (j.ok && j.invoice_id && setOrders) {
+                setOrders(prev => (prev || []).map(o => o.id === linkedOrder.id ? {
+                  ...o,
+                  iobill_invoice_id: j.invoice_id,
+                  iobill_invoice_number: j.invoice_number,
+                  iobill_pdf_url: j.pdf_url || o.iobill_pdf_url,
+                  iobill_synced_at: new Date().toISOString(),
+                  iobill_sync_error: null
+                } : o));
+                console.log("✅ Facture transmise à IOBILL :", j.invoice_number);
+              } else if (j.error) {
+                console.warn("Push IOBILL au Livré : erreur", j.error);
+              }
+            })
+            .catch(e => console.warn("Push IOBILL au Livré : échec réseau", e));
+        }
+      }
+
       // Supprimer de la flotte — le véhicule est parti
       setVehicles(vehicles.filter(x => x.id !== v.id));
       setModal(null);
@@ -4719,7 +4763,7 @@ function PVLivraisonDoc({ entry, dealer, onSave, onClose }) {
   );
 }
 
-function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKey, usage, setUsage, clients, setClients, viewMode }) {
+function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKey, usage, setUsage, clients, setClients, viewMode, token }) {
   const [tab, setTabLocal] = useState("all");
   const [modal, setModal] = useState(null);
   const [print, setPrint] = useState(null);
@@ -4813,6 +4857,36 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
       tva_sur_debits: o.tva_sur_debits || false,
     };
     setOrders(orders.map(x => x.id === o.id ? updated : x));
+
+    // v8.37 — Hook IO BILL : pousser la facture en BROUILLON à IOBILL (fire-and-forget)
+    // Déclenché si :
+    //   - le compte IOBILL est lié
+    //   - auto_push activé
+    //   - on convertit bien un BC vers facture (pas vers avoir, et c'est nouveau)
+    if (token && dealer?.iobill_auto_push && dealer?.iobill_company_id
+        && !o.iobill_invoice_id) {
+      fetch("/api/iobill-bridge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: "push_invoice_draft", order_id: o.id })
+      })
+        .then(r => r.json())
+        .then(j => {
+          if (j.ok && j.invoice_id) {
+            setOrders(prev => (prev || []).map(x => x.id === o.id ? {
+              ...x,
+              iobill_invoice_id: j.invoice_id,
+              iobill_invoice_number: j.invoice_number,
+              iobill_synced_at: new Date().toISOString(),
+              iobill_sync_error: null
+            } : x));
+            console.log("📝 Facture brouillon poussée à IOBILL :", j.invoice_number);
+          } else if (j.error) {
+            console.warn("Push draft IOBILL : erreur", j.error);
+          }
+        })
+        .catch(e => console.warn("Push draft IOBILL : échec réseau", e));
+    }
 
     // Passer le véhicule lié en "vendu" automatiquement
     if (o.vehicle_id && vehicles) {
@@ -5088,6 +5162,18 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
                         <button className="btn btn-danger btn-xs" onClick={() => setPendingDelete({ id: o.id, label: o.ref })}>🗑</button>
                       )}
                     </div>
+                    {/* v8.37 — État de transmission IO BILL (factures/avoirs uniquement) */}
+                    {(o.type === "facture" || o.type === "avoir") && viewMode !== "trial" && (
+                      <div style={{ marginTop: 6 }}>
+                        <IobillInvoiceSync
+                          token={token}
+                          order={o}
+                          garage={dealer}
+                          isPaid={c.reste <= 0.01}
+                          onSync={(patch) => setOrders(prev => (prev || []).map(x => x.id === o.id ? { ...x, ...patch } : x))}
+                        />
+                      </div>
+                    )}
                   </td>
                 </tr>
               );
@@ -5205,7 +5291,7 @@ function TicketSystem({ dealer }) {
   );
 }
 
-function SettingsPage({ dealer, setDealer, usage, isRealAdmin }) {
+function SettingsPage({ token, dealer, setDealer, usage, isRealAdmin }) {
   const [form, setForm] = useState(dealer);
   const [showKey, setShowKey] = useState(false);
   const fileRef = useRef();
@@ -5416,6 +5502,15 @@ function SettingsPage({ dealer, setDealer, usage, isRealAdmin }) {
     <div className="page">
       <div className="page-header">
         <div><div className="page-title">Paramètres</div><div className="page-sub">Informations de votre concession</div></div>
+      </div>
+
+      {/* ─── v8.37 — Carte Pont IO BILL ─── */}
+      <div style={{ maxWidth: 900, marginBottom: 20 }}>
+        <IobillBridgeCard
+          token={token}
+          garage={dealer}
+          onUpdate={(patch) => setDealer({ ...dealer, ...patch })}
+        />
       </div>
 
       <div className="settings-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, maxWidth: 900 }}>
@@ -7836,105 +7931,6 @@ function SuspendedScreen({ garage, onLogout }) {
 /* ═══════════════════════════════════════════════════════════════
    ADMIN PAGE — Dashboard garages IO Car
 ═══════════════════════════════════════════════════════════════ */
-
-/**
- * Petit composant d'édition de la clé RapidAPI pour un garage donné.
- * Composant DÉDIÉ (au lieu de l'inline précédent) parce que :
- *  - L'input précédent était non-contrôlé (defaultValue + onBlur) ce qui
- *    pose problème avec l'autofill iCloud et certains comportements iOS
- *  - Le ✓ vert dépendait de g.rapidapi_key initial, donc restait affiché
- *    même quand on vidait le champ (faux positif).
- *  - Le onBlur peut ne pas se déclencher selon le navigateur, l'autofill, etc.
- *
- * Cette version :
- *  - Input contrôlé avec state local
- *  - Type text (au lieu de password) + toggle visibilité 👁/🙈
- *  - Bouton 💾 explicite pour sauvegarder (plus fiable que onBlur)
- *  - ✓ vert dynamique basé sur la valeur saisie
- *  - Retour visuel : ⏳ pendant, ✅ après succès, ❌ + alert si erreur
- */
-function RapidApiKeyEditor({ garage, onSaved, adminCall }) {
-  const [value, setValue] = useState(garage.rapidapi_key || "");
-  const [saving, setSaving] = useState(false);
-  const [status, setStatus] = useState(null); // "ok" | "err" | null
-  const [visible, setVisible] = useState(false);
-
-  // Si le garage change (refresh complet des données), on resynchronise le local state.
-  useEffect(() => { setValue(garage.rapidapi_key || ""); }, [garage.id, garage.rapidapi_key]);
-
-  const dirty = value.trim() !== (garage.rapidapi_key || "");
-
-  const save = async () => {
-    const val = value.trim();
-    setSaving(true); setStatus(null);
-    try {
-      // Log pour diagnostic en cas de retour de bug
-      console.log("[RapidApiKeyEditor] update_rapidapi", { garageId: garage.id, length: val.length });
-      const res = await adminCall("update_rapidapi", { garageId: garage.id, rapidapi_key: val });
-      console.log("[RapidApiKeyEditor] response", res);
-      setStatus("ok");
-      if (onSaved) onSaved(val);
-      // Le badge ✓ devient vert pendant 2s puis revient à l'état normal
-      setTimeout(() => setStatus(null), 2000);
-    } catch (err) {
-      console.error("[RapidApiKeyEditor] error", err);
-      setStatus("err");
-      alert("Erreur lors de la sauvegarde de la clé : " + (err?.message || "inconnue"));
-    }
-    setSaving(false);
-  };
-
-  return (
-    <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-      <input
-        className="form-input"
-        style={{
-          padding: "3px 8px", fontSize: 10, fontFamily: "DM Mono", width: 150,
-          // Désactive l'autofill iCloud sur les champs sensibles
-        }}
-        value={value}
-        onChange={e => setValue(e.target.value)}
-        placeholder="Clé RapidAPI..."
-        type={visible ? "text" : "password"}
-        autoComplete="off"
-        autoCorrect="off"
-        spellCheck="false"
-        // Indices anti-autofill pour les navigateurs (notamment Safari/iOS)
-        data-1p-ignore="true"
-        data-lpignore="true"
-      />
-      <button
-        type="button"
-        className="btn btn-ghost"
-        style={{ padding: "3px 6px", fontSize: 10, minWidth: 24 }}
-        onClick={() => setVisible(v => !v)}
-        title={visible ? "Masquer la clé" : "Afficher la clé"}
-      >
-        {visible ? "🙈" : "👁"}
-      </button>
-      <button
-        type="button"
-        className="btn"
-        style={{
-          padding: "3px 8px", fontSize: 10, minWidth: 30,
-          background: dirty ? "var(--gold)" : "var(--card2)",
-          color: dirty ? "#0b0c10" : "var(--muted)",
-          cursor: dirty && !saving ? "pointer" : "default",
-          opacity: saving ? .5 : 1,
-        }}
-        onClick={dirty && !saving ? save : undefined}
-        disabled={!dirty || saving}
-        title="Enregistrer la clé"
-      >
-        {saving ? "⏳" : (status === "ok" ? "✅" : (status === "err" ? "❌" : "💾"))}
-      </button>
-      {!dirty && value && status !== "ok" && (
-        <span style={{ color: "var(--green)", fontSize: 10 }} title="Clé enregistrée">✓</span>
-      )}
-    </div>
-  );
-}
-
 function AdminPage({ token }) {
   // Sous-onglet actif : "garages" (par défaut) ou "tickets"
   const [adminTab, setAdminTab] = useState("garages");
@@ -8374,13 +8370,26 @@ function AdminPage({ token }) {
                   <td style={{ fontSize: 12, color: "var(--muted)" }}>{g.email || "—"}</td>
                   <td style={{ fontFamily: "DM Mono", fontSize: 11 }}>{g.siret || "—"}</td>
                   <td>
-                    <RapidApiKeyEditor
-                      garage={g}
-                      adminCall={adminCall}
-                      onSaved={(newKey) => {
-                        setGarages(garages.map(x => x.id === g.id ? { ...x, rapidapi_key: newKey, updated_at: new Date().toISOString() } : x));
-                      }}
-                    />
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      <input
+                        className="form-input"
+                        style={{ padding: "3px 8px", fontSize: 10, fontFamily: "DM Mono", width: 160 }}
+                        defaultValue={g.rapidapi_key || ""}
+                        placeholder="Clé RapidAPI..."
+                        type="password"
+                        onBlur={async e => {
+                          const val = e.target.value.trim();
+                          if (val === (g.rapidapi_key || "")) return;
+                          try {
+                            await adminCall("update_rapidapi", { garageId: g.id, rapidapi_key: val });
+                            setGarages(garages.map(x => x.id === g.id ? { ...x, rapidapi_key: val, updated_at: new Date().toISOString() } : x));
+                          } catch(err) {
+                            alert("Erreur : " + err.message);
+                          }
+                        }}
+                      />
+                      {g.rapidapi_key && <span style={{ color: "var(--green)", fontSize: 10 }}>✓</span>}
+                    </div>
                   </td>
                   <td style={{ textAlign: "center" }}>
                     {(() => {
@@ -8801,10 +8810,8 @@ export default function App() {
     window.addEventListener("offline", handleOffline);
 
     // Ping de vérification toutes les 30s — détecte les "faux online" (wifi sans internet)
-    // On ping un endpoint Supabase léger (HEAD sur /auth/v1/health) qui répond rapidement.
-    // ⚠ On doit inclure l'apikey, sinon Supabase renvoie un 401 qui pollue la console
-    // (même si techniquement 401 = serveur joignable, on évite les erreurs visibles).
-    // En cas d'erreur RÉSEAU (vraie coupure, timeout) → on bascule offline.
+    // On ping un endpoint Supabase léger (HEAD sur /auth) qui répond rapidement.
+    // En cas d'erreur réseau (vraie coupure) → on bascule offline même si navigator.onLine = true.
     let cancelled = false;
     const pingInterval = setInterval(async () => {
       if (!navigator.onLine) {
@@ -8817,7 +8824,6 @@ export default function App() {
         const t = setTimeout(() => controller.abort(), 5000);
         await fetch(`${SUPABASE_URL}/auth/v1/health`, {
           method: "HEAD",
-          headers: { "apikey": SUPABASE_KEY },
           signal: controller.signal,
         });
         clearTimeout(t);
@@ -9094,16 +9100,12 @@ export default function App() {
         </div>
       )}
 
-      {/* ── Hamburger mobile ──
-          Masqué en mode admin car la page admin a son propre header
-          autonome avec logo + switch de mode (pas de sidebar à ouvrir). */}
-      {viewMode !== "admin" && (
+      {/* ── Hamburger mobile ── */}
       <div className="hamburger" onClick={() => setSidebarOpen(o => !o)}>
         <span style={{ transform: sidebarOpen ? "rotate(45deg) translate(5px,5px)" : "none" }} />
         <span style={{ opacity: sidebarOpen ? 0 : 1, width: sidebarOpen ? 0 : 18 }} />
         <span style={{ transform: sidebarOpen ? "rotate(-45deg) translate(5px,-5px)" : "none" }} />
       </div>
-      )}
 
       {/* ── Bannière mode démo ou preview ── */}
       {viewMode === "trial" && (
@@ -9146,18 +9148,17 @@ export default function App() {
       {viewMode === "admin" ? (
         <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
           {/* Header admin */}
-          <div className="admin-header" style={{
+          <div style={{
             position: "sticky", top: 0, zIndex: 100,
             background: "var(--card)", borderBottom: "1px solid var(--border2)",
-            padding: "10px 16px", display: "flex", alignItems: "center", justifyContent: "space-between",
-            gap: 10, flexWrap: "wrap"
+            padding: "10px 24px", display: "flex", alignItems: "center", justifyContent: "space-between"
           }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
-              <div style={{ width: 32, height: 32, borderRadius: 8, background: "var(--gold)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "Syne", fontWeight: 800, fontSize: 12, color: "#0b0c10", flexShrink: 0 }}>IO</div>
-              <div style={{ fontFamily: "Syne", fontWeight: 800, fontSize: 15, letterSpacing: 1, whiteSpace: "nowrap" }}>IO <span style={{ color: "var(--gold)" }}>Car</span> <span style={{ fontSize: 11, color: "var(--muted)", fontFamily: "DM Sans" }}>— Admin</span></div>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{ width: 32, height: 32, borderRadius: 8, background: "var(--gold)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "Syne", fontWeight: 800, fontSize: 12, color: "#0b0c10" }}>IO</div>
+              <div style={{ fontFamily: "Syne", fontWeight: 800, fontSize: 15, letterSpacing: 1 }}>IO <span style={{ color: "var(--gold)" }}>Car</span> <span style={{ fontSize: 11, color: "var(--muted)", fontFamily: "DM Sans" }}>— Admin</span></div>
             </div>
             {/* Sélecteur de vue */}
-            <div className="admin-view-switch" style={{ display: "flex", gap: 4, background: "var(--card2)", borderRadius: 8, padding: 4 }}>
+            <div style={{ display: "flex", gap: 4, background: "var(--card2)", borderRadius: 8, padding: 4 }}>
               {[
                 { mode: "admin",      label: "🛡 Admin",   color: "var(--gold)" },
                 { mode: "subscriber", label: "✅ Abonné",  color: "var(--green)" },
@@ -9168,8 +9169,7 @@ export default function App() {
                   background: viewMode === mode ? "var(--card3)" : "transparent",
                   color: viewMode === mode ? color : "var(--muted)",
                   border: viewMode === mode ? `1px solid ${color}30` : "1px solid transparent",
-                  transition: "all .15s",
-                  whiteSpace: "nowrap"
+                  transition: "all .15s"
                 }}>{label}</div>
               ))}
             </div>
@@ -9281,8 +9281,8 @@ export default function App() {
 
           <main className={`content${(viewMode === "trial" || viewMode === "subscriber") ? " demo-offset" : ""}`}>
             {tab === "dashboard"   && <Dashboard vehicles={activeVehicles} setVehicles={setVehiclesRaw} orders={activeOrders} setTab={setTab} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} livrePolice={livrePolice} dealer={dealer} setDealer={setDealerRaw} />}
-            {tab === "fleet"       && <FleetPage vehicles={activeVehicles} setVehicles={setVehiclesRaw} orders={activeOrders} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} livrePolice={activeLivrePolice} setLivrePolice={setLivrePoliceRaw} viewMode={viewMode} garageId={garageId} dealer={dealer} />}
-            {tab === "orders"      && <OrdersPage orders={activeOrders} setOrders={setOrdersRaw} vehicles={activeVehicles} setVehiclesRaw={setVehiclesRaw} dealer={dealer} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} clients={activeClients} setClients={setClientsRaw} viewMode={viewMode} />}
+            {tab === "fleet"       && <FleetPage vehicles={activeVehicles} setVehicles={setVehiclesRaw} orders={activeOrders} setOrders={setOrdersRaw} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} livrePolice={activeLivrePolice} setLivrePolice={setLivrePoliceRaw} viewMode={viewMode} garageId={garageId} dealer={dealer} token={token} />}
+            {tab === "orders"      && <OrdersPage orders={activeOrders} setOrders={setOrdersRaw} vehicles={activeVehicles} setVehiclesRaw={setVehiclesRaw} dealer={dealer} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} clients={activeClients} setClients={setClientsRaw} viewMode={viewMode} token={token} />}
             {tab === "crm"         && <CrmPage clients={activeClients} setClients={setClientsRaw} orders={activeOrders} viewMode={viewMode} dealer={dealer} setDealer={setDealerRaw} />}
             {tab === "livrepolice" && (viewMode === "trial" ? (
               <div className="page" style={{ textAlign: "center", paddingTop: 80 }}>
@@ -9292,7 +9292,7 @@ export default function App() {
                 <button className="btn btn-primary" onClick={handleLogout}>🚀 S'abonner — 34,99€/mois</button>
               </div>
             ) : <LivreDePolice vehicles={activeVehicles} livrePolice={activeLivrePolice} setLivrePolice={setLivrePoliceRaw} dealer={dealer} viewMode={viewMode} />)}
-            {tab === "settings"    && <SettingsPage dealer={dealer} setDealer={setDealerRaw} usage={usage} isRealAdmin={isRealAdmin} />}
+            {tab === "settings"    && <SettingsPage dealer={dealer} setDealer={setDealerRaw} usage={usage} isRealAdmin={isRealAdmin} token={token} />}
           </main>
         </div>
       )}
