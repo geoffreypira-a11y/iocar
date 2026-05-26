@@ -196,13 +196,8 @@ async function handlePushInvoice(garage, supabase, body, res) {
   const orderId = body?.order_id;
   if (!orderId) return res.status(400).json({ error: 'order_id requis' });
 
-  // Charger l'order avec ses relations
-  const { data: order, error: ordErr } = await supabase
-    .from('orders')
-    .select('*')
-    .eq('id', orderId)
-    .eq('garage_id', garage.id)
-    .single();
+  // Charger l'order avec ses relations (flatten le JSON data)
+  const { order, error: ordErr } = await loadOrder(supabase, orderId, garage.id);
 
   if (ordErr || !order) {
     return res.status(404).json({ error: 'Order introuvable ou non autorisé' });
@@ -291,12 +286,7 @@ async function handlePushInvoiceDraft(garage, supabase, body, res) {
   const orderId = body?.order_id;
   if (!orderId) return res.status(400).json({ error: 'order_id requis' });
 
-  const { data: order, error: ordErr } = await supabase
-    .from('orders')
-    .select('*')
-    .eq('id', orderId)
-    .eq('garage_id', garage.id)
-    .single();
+  const { order, error: ordErr } = await loadOrder(supabase, orderId, garage.id);
   if (ordErr || !order) {
     return res.status(404).json({ error: 'Order introuvable ou non autorisé' });
   }
@@ -380,12 +370,7 @@ async function handleMarkInvoicePaid(garage, supabase, body, res) {
   const orderId = body?.order_id;
   if (!orderId) return res.status(400).json({ error: 'order_id requis' });
 
-  const { data: order, error: ordErr } = await supabase
-    .from('orders')
-    .select('*')
-    .eq('id', orderId)
-    .eq('garage_id', garage.id)
-    .single();
+  const { order, error: ordErr } = await loadOrder(supabase, orderId, garage.id);
   if (ordErr || !order) {
     return res.status(404).json({ error: 'Order introuvable ou non autorisé' });
   }
@@ -734,4 +719,37 @@ function mapPaymentMethod(mode) {
   if (m.includes('espece') || m.includes('cash')) return 'cash';
   if (m.includes('chèque') || m.includes('cheque')) return 'check';
   return 'other';
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// flattenOrder — Normalise la structure d'un order chargé depuis Supabase
+//
+// IMPORTANT : côté IOCAR, la table `orders` a une architecture EAV :
+//   {id, garage_id, data: {...tous les champs métier...}, created_at}
+//
+// On aplatit pour avoir un objet flat `{id, garage_id, type, prix_ht, ...}`
+// comme le fait le frontend (cf. useSupabaseTable ligne 7449).
+//
+// Les colonnes iobill_* qu'on a ajoutées à `orders` directement (pour pouvoir
+// les indexer/requêter) restent au top-level — on les préserve.
+// ═══════════════════════════════════════════════════════════════════
+function flattenOrder(row) {
+  if (!row) return null;
+  if (!row.data || typeof row.data !== 'object') return row;
+  // On commence par les données métier (data), puis on superpose les colonnes
+  // top-level pour les preserver (id, garage_id, iobill_*, created_at...)
+  const { data: nested, ...topLevel } = row;
+  return { ...nested, ...topLevel };
+}
+
+// Charge + aplatit un order, avec vérif d'autorisation par garage_id
+async function loadOrder(supabase, orderId, garageId) {
+  const { data: row, error } = await supabase
+    .from('orders')
+    .select('*')
+    .eq('id', orderId)
+    .eq('garage_id', garageId)
+    .single();
+  if (error || !row) return { error: error || new Error('not found'), order: null };
+  return { error: null, order: flattenOrder(row) };
 }
