@@ -8801,8 +8801,10 @@ export default function App() {
     window.addEventListener("offline", handleOffline);
 
     // Ping de vérification toutes les 30s — détecte les "faux online" (wifi sans internet)
-    // On ping un endpoint Supabase léger (HEAD sur /auth) qui répond rapidement.
-    // En cas d'erreur réseau (vraie coupure) → on bascule offline même si navigator.onLine = true.
+    // On ping un endpoint Supabase léger (HEAD sur /auth/v1/health) qui répond rapidement.
+    // ⚠ On doit inclure l'apikey, sinon Supabase renvoie un 401 qui pollue la console
+    // (même si techniquement 401 = serveur joignable, on évite les erreurs visibles).
+    // En cas d'erreur RÉSEAU (vraie coupure, timeout) → on bascule offline.
     let cancelled = false;
     const pingInterval = setInterval(async () => {
       if (!navigator.onLine) {
@@ -8815,6 +8817,7 @@ export default function App() {
         const t = setTimeout(() => controller.abort(), 5000);
         await fetch(`${SUPABASE_URL}/auth/v1/health`, {
           method: "HEAD",
+          headers: { "apikey": SUPABASE_KEY },
           signal: controller.signal,
         });
         clearTimeout(t);
