@@ -601,12 +601,12 @@ function mapOrderToInvoice(order, calc) {
   const ttcToHt = (ttc) => avecTva ? ttc / (1 + tvaPct / 100) : ttc;
 
   const v = order.vehicle_data || {};
-  const vehicleLabel = [v.marque, v.modele, v.finition].filter(Boolean).join(' ')
-    || (order.vehicle_label || 'Véhicule');
+  const vehicleLabel = sanitizeString([v.marque, v.modele, v.finition].filter(Boolean).join(' ')
+    || (order.vehicle_label || 'Véhicule'));
   // ⚠️ Côté IOCAR, le champ d'immatriculation s'appelle `plate`, pas `immatriculation`
-  const vehiclePlate = v.plate || order.vehicle_plate || '';
+  const vehiclePlate = sanitizeString(v.plate || order.vehicle_plate || '');
   const km = v.kilometrage ? `${Number(v.kilometrage).toLocaleString('fr-FR')} km` : '';
-  const description1 = `VENTE VÉHICULE — ${vehicleLabel}${vehiclePlate ? ' (' + vehiclePlate + ')' : ''}${km ? ' · ' + km : ''}`;
+  const description1 = sanitizeString(`VENTE VÉHICULE — ${vehicleLabel}${vehiclePlate ? ' (' + vehiclePlate + ')' : ''}${km ? ' · ' + km : ''}`);
 
   const lines = [];
   // L1 — véhicule
@@ -639,13 +639,13 @@ function mapOrderToInvoice(order, calc) {
   }
   // L4 — reprise (ligne négative)
   if (reprise > 0) {
-    const reprDesc = [
+    const reprDesc = sanitizeString([
       'Reprise véhicule',
       order.reprise_plate ? `· ${order.reprise_plate}` : '',
       order.reprise_marque || order.reprise_modele
         ? `· ${[order.reprise_marque, order.reprise_modele].filter(Boolean).join(' ')}`
         : ''
-    ].filter(Boolean).join(' ');
+    ].filter(Boolean).join(' '));
     lines.push({
       description: reprDesc,
       quantity: 1,
@@ -665,7 +665,7 @@ function mapOrderToInvoice(order, calc) {
       method: 'cash', // pas tracé côté IOCAR, on met cash par défaut
       paid_at: toIsoDate(order.date_facture || order.date_creation),
       notes: 'Acompte versé à la signature (IO CAR)',
-      reference: order.ref ? `Acompte ${order.ref}` : null
+      reference: order.ref ? sanitizeString(`Acompte ${order.ref}`) : null
     });
   }
   if (Array.isArray(order.paiements)) {
@@ -676,8 +676,8 @@ function mapOrderToInvoice(order, calc) {
         amount_cents: Math.round(montant * 100),
         method: mapPaymentMethod(p.mode),
         paid_at: toIsoDate(p.date),
-        notes: p.note || null,
-        reference: order.ref || null
+        notes: sanitizeString(p.note) || null,
+        reference: sanitizeString(order.ref) || null
       });
     }
   }
@@ -686,23 +686,26 @@ function mapOrderToInvoice(order, calc) {
   // Si siren rempli → société. Sinon particulier (on splite le name).
   const cli = order.client || {};
   const hasSiren = !!(cli.siren && String(cli.siren).trim());
+  // Adresse : peut contenir des \n (saisie multi-lignes). On garde le texte
+  // mais en single-line séparé par " — " pour rester compatible pdf-lib.
+  const cleanAddress = cli.address ? sanitizeString(cli.address, ' — ') : null;
   let clientPayload;
   if (hasSiren) {
     clientPayload = {
-      legal_name: cli.name || null,
+      legal_name: sanitizeString(cli.name) || null,
       first_name: null,
       last_name: null,
       siret: String(cli.siren).replace(/\s/g, '') || null,
-      email: cli.email || null,
-      phone: cli.phone || null,
-      address_line1: cli.address || null,
+      email: sanitizeString(cli.email) || null,
+      phone: sanitizeString(cli.phone) || null,
+      address_line1: cleanAddress,
       postal_code: null,
       city: null,
       country: 'FR'
     };
   } else {
     // Splite "Jean Dupont" en first=Jean / last=Dupont (heuristique simple)
-    const fullName = String(cli.name || '').trim();
+    const fullName = sanitizeString(String(cli.name || '').trim());
     const parts = fullName.split(/\s+/);
     const firstName = parts.length > 1 ? parts.slice(0, -1).join(' ') : (parts[0] || null);
     const lastName = parts.length > 1 ? parts[parts.length - 1] : null;
@@ -711,9 +714,9 @@ function mapOrderToInvoice(order, calc) {
       first_name: firstName || null,
       last_name: lastName || null,
       siret: null,
-      email: cli.email || null,
-      phone: cli.phone || null,
-      address_line1: cli.address || null,
+      email: sanitizeString(cli.email) || null,
+      phone: sanitizeString(cli.phone) || null,
+      address_line1: cleanAddress,
       postal_code: null,
       city: null,
       country: 'FR'
@@ -722,7 +725,7 @@ function mapOrderToInvoice(order, calc) {
 
   return {
     external_id: order.id,
-    number: order.ref || `IOCAR-${String(order.id || '').slice(0, 8).toUpperCase()}`,
+    number: sanitizeString(order.ref) || `IOCAR-${String(order.id || '').slice(0, 8).toUpperCase()}`,
     issue_date: toIsoDate(order.date_facture || order.date_creation),
     // ⚠️ Toujours 'paid' : on n'a pushé que parce que calc.reste <= 0.01
     status: 'paid',
@@ -734,14 +737,14 @@ function mapOrderToInvoice(order, calc) {
     },
     vehicle_meta: {
       plate: vehiclePlate,
-      vin: v.vin || null,
-      marque: v.marque || null,
-      modele: v.modele || null,
-      finition: v.finition || null,
+      vin: sanitizeString(v.vin) || null,
+      marque: sanitizeString(v.marque) || null,
+      modele: sanitizeString(v.modele) || null,
+      finition: sanitizeString(v.finition) || null,
       annee: v.annee || null,
       kilometrage: v.kilometrage || null,
-      carburant: v.carburant || null,
-      genre: v.genre || null
+      carburant: sanitizeString(v.carburant) || null,
+      genre: sanitizeString(v.genre) || null
     },
     vat_regime: avecTva ? 'standard' : 'margin_297a'
   };
@@ -756,6 +759,35 @@ function mapPaymentMethod(mode) {
   if (m.includes('espece') || m.includes('cash')) return 'cash';
   if (m.includes('chèque') || m.includes('cheque')) return 'check';
   return 'other';
+}
+
+// Nettoie une string pour qu'elle soit safe dans pdf-lib (WinAnsi) :
+//   - Convertit \r\n et \n et \r en espace (single-line) ou en " - " (compact)
+//   - Supprime les caractères de contrôle non-imprimables (sauf espaces)
+//   - Trim et compacte les espaces multiples
+// Pour les champs MULTILIGNES (notes), utiliser sanitizeMultiline() qui garde \n.
+function sanitizeString(s, separator = ' ') {
+  if (s == null) return s;
+  if (typeof s !== 'string') return s;
+  return s
+    .replace(/[\r\n]+/g, separator)              // newlines → séparateur
+    .replace(/[\x00-\x08\x0b-\x0c\x0e-\x1f]/g, '') // contrôles non-imprimables
+    .replace(/\s+/g, ' ')                         // espaces multiples → 1 seul
+    .trim();
+}
+
+// Version multilignes pour les notes : garde les \n mais nettoie le reste
+function sanitizeMultiline(s) {
+  if (s == null) return s;
+  if (typeof s !== 'string') return s;
+  return s
+    .replace(/\r\n/g, '\n')                       // CRLF → LF
+    .replace(/\r/g, '\n')                         // CR → LF
+    .replace(/[\x00-\x08\x0b-\x0c\x0e-\x1f]/g, '') // contrôles sauf \n et \t
+    .split('\n')
+    .map(line => line.replace(/[ \t]+/g, ' ').trim())
+    .join('\n')
+    .trim();
 }
 
 // Convertit une date IOCAR (souvent "DD/MM/YYYY" en français) vers ISO YYYY-MM-DD
