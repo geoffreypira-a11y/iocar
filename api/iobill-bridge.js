@@ -120,7 +120,7 @@ async function handleLink(user, garage, supabase, body, res) {
 
   const j = await callIobill(linkPayload);
   if (!j.ok) {
-    return res.status(502).json({ error: 'Échec lien IOBILL', details: j.error });
+    return res.status(502).json({ error: 'Échec lien IOBILL', details: j.error, last_error: j.last_error, hint: j.hint, full_payload: j.full_payload });
   }
 
   const { error: updErr } = await supabase
@@ -176,7 +176,7 @@ async function handleSyncCompany(garage, supabase, res) {
 
   const j = await callIobill(payload);
   if (!j.ok) {
-    return res.status(502).json({ error: 'Échec sync IOBILL', details: j.error });
+    return res.status(502).json({ error: 'Échec sync IOBILL', details: j.error, last_error: j.last_error, hint: j.hint, full_payload: j.full_payload });
   }
   return res.status(200).json({ ok: true, updated_fields: j.data.updated_fields });
 }
@@ -243,7 +243,7 @@ async function handlePushInvoice(garage, supabase, body, res) {
       iobill_sync_error: j.error || 'Erreur inconnue',
       iobill_synced_at: null
     }).eq('id', orderId);
-    return res.status(502).json({ error: 'Échec push IOBILL', details: j.error });
+    return res.status(502).json({ error: 'Échec push IOBILL', details: j.error, last_error: j.last_error, hint: j.hint, full_payload: j.full_payload });
   }
 
   // Succès : on stocke l'invoice IOBILL côté order
@@ -327,7 +327,7 @@ async function handlePushInvoiceDraft(garage, supabase, body, res) {
       iobill_sync_error: j.error || 'Erreur draft push',
       iobill_synced_at: null
     }).eq('id', orderId);
-    return res.status(502).json({ error: 'Échec push draft IOBILL', details: j.error });
+    return res.status(502).json({ error: 'Échec push draft IOBILL', details: j.error, last_error: j.last_error, hint: j.hint, full_payload: j.full_payload });
   }
 
   await supabase.from('orders').update({
@@ -405,7 +405,7 @@ async function handleMarkInvoicePaid(garage, supabase, body, res) {
       await supabase.from('orders').update({
         iobill_sync_error: j.error || 'Erreur update status',
       }).eq('id', orderId);
-      return res.status(502).json({ error: 'Échec update IOBILL', details: j.error });
+      return res.status(502).json({ error: 'Échec update IOBILL', details: j.error, last_error: j.last_error, hint: j.hint, full_payload: j.full_payload });
     }
 
     await supabase.from('orders').update({
@@ -438,7 +438,7 @@ async function handleMarkInvoicePaid(garage, supabase, body, res) {
       iobill_sync_error: j.error || 'Erreur push direct paid',
       iobill_synced_at: null
     }).eq('id', orderId);
-    return res.status(502).json({ error: 'Échec push IOBILL', details: j.error });
+    return res.status(502).json({ error: 'Échec push IOBILL', details: j.error, last_error: j.last_error, hint: j.hint, full_payload: j.full_payload });
   }
 
   await supabase.from('orders').update({
@@ -491,7 +491,16 @@ async function callIobill(payload) {
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok) {
       console.error('[callIobill] failed', r.status, data);
-      return { ok: false, error: data.error || `HTTP ${r.status}` };
+      // v8.37 hotfix5 — On forward TOUT le payload IOBILL pour avoir
+      // le détail (last_error, hint, etc.) côté DevTools IOCAR.
+      return {
+        ok: false,
+        error: data.error || `HTTP ${r.status}`,
+        details: data.details || null,
+        last_error: data.last_error || null,
+        hint: data.hint || null,
+        full_payload: data
+      };
     }
     return { ok: true, data };
   } catch (e) {
@@ -594,7 +603,8 @@ function mapOrderToInvoice(order, calc) {
   const v = order.vehicle_data || {};
   const vehicleLabel = [v.marque, v.modele, v.finition].filter(Boolean).join(' ')
     || (order.vehicle_label || 'Véhicule');
-  const vehiclePlate = v.immatriculation || order.vehicle_plate || '';
+  // ⚠️ Côté IOCAR, le champ d'immatriculation s'appelle `plate`, pas `immatriculation`
+  const vehiclePlate = v.plate || order.vehicle_plate || '';
   const km = v.kilometrage ? `${Number(v.kilometrage).toLocaleString('fr-FR')} km` : '';
   const description1 = `VENTE VÉHICULE — ${vehicleLabel}${vehiclePlate ? ' (' + vehiclePlate + ')' : ''}${km ? ' · ' + km : ''}`;
 
@@ -655,7 +665,7 @@ function mapOrderToInvoice(order, calc) {
       method: 'cash', // pas tracé côté IOCAR, on met cash par défaut
       paid_at: order.date_facture || order.date_creation || new Date().toISOString().slice(0, 10),
       notes: 'Acompte versé à la signature (IO CAR)',
-      reference: order.numero ? `Acompte ${order.numero}` : null
+      reference: order.ref ? `Acompte ${order.ref}` : null
     });
   }
   if (Array.isArray(order.paiements)) {
@@ -667,29 +677,56 @@ function mapOrderToInvoice(order, calc) {
         method: mapPaymentMethod(p.mode),
         paid_at: p.date || new Date().toISOString().slice(0, 10),
         notes: p.note || null,
-        reference: order.numero ? `${order.numero}` : null
+        reference: order.ref || null
       });
     }
   }
 
+  // ─── Client : structure IOCAR = order.client { name, address, phone, email, siren }
+  // Si siren rempli → société. Sinon particulier (on splite le name).
+  const cli = order.client || {};
+  const hasSiren = !!(cli.siren && String(cli.siren).trim());
+  let clientPayload;
+  if (hasSiren) {
+    clientPayload = {
+      legal_name: cli.name || null,
+      first_name: null,
+      last_name: null,
+      siret: String(cli.siren).replace(/\s/g, '') || null,
+      email: cli.email || null,
+      phone: cli.phone || null,
+      address_line1: cli.address || null,
+      postal_code: null,
+      city: null,
+      country: 'FR'
+    };
+  } else {
+    // Splite "Jean Dupont" en first=Jean / last=Dupont (heuristique simple)
+    const fullName = String(cli.name || '').trim();
+    const parts = fullName.split(/\s+/);
+    const firstName = parts.length > 1 ? parts.slice(0, -1).join(' ') : (parts[0] || null);
+    const lastName = parts.length > 1 ? parts[parts.length - 1] : null;
+    clientPayload = {
+      legal_name: null,
+      first_name: firstName || null,
+      last_name: lastName || null,
+      siret: null,
+      email: cli.email || null,
+      phone: cli.phone || null,
+      address_line1: cli.address || null,
+      postal_code: null,
+      city: null,
+      country: 'FR'
+    };
+  }
+
   return {
     external_id: order.id,
-    number: order.numero || `IOCAR-${order.id.slice(0, 8).toUpperCase()}`,
+    number: order.ref || `IOCAR-${String(order.id || '').slice(0, 8).toUpperCase()}`,
     issue_date: order.date_facture || order.date_creation || new Date().toISOString().slice(0, 10),
     // ⚠️ Toujours 'paid' : on n'a pushé que parce que calc.reste <= 0.01
     status: 'paid',
-    client: {
-      legal_name: order.client_societe || null,
-      first_name: order.client_prenom || null,
-      last_name: order.client_nom || null,
-      siret: order.client_siret || null,
-      email: order.client_email || null,
-      phone: order.client_telephone || null,
-      address_line1: order.client_adresse || null,
-      postal_code: order.client_cp || null,
-      city: order.client_ville || null,
-      country: 'FR'
-    },
+    client: clientPayload,
     lines,
     payments,
     totals: {
