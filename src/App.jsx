@@ -4843,6 +4843,36 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
   const [avoirChoice, setAvoirChoice] = useState(null); // { order, totalTtc } | null
   const [avoirPartiel, setAvoirPartiel] = useState(null); // { order, totalTtc } | null
 
+  // v8.41 — Helper réutilisable : pousse un avoir à IOBILL (draft ou finalize selon mode)
+  // mode : 'draft' (à la création) ou 'finalize' (au remboursement complet, ou auto)
+  const pushCreditNoteToIobill = (avoir, mode) => {
+    if (!token || !dealer?.iobill_auto_push || !dealer?.iobill_company_id) return;
+    if (!avoir.facture_origine) return;
+    fetch("/api/iobill-bridge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ action: "push_credit_note", order_id: avoir.id, mode })
+    })
+      .then(r => r.json())
+      .then(j => {
+        if (j.ok && j.credit_note_id) {
+          setOrders(prev => (prev || []).map(x => x.id === avoir.id ? {
+            ...x,
+            iobill_invoice_id: j.credit_note_id,
+            iobill_invoice_number: j.credit_note_number,
+            iobill_pdf_url: j.pdf_url || null,
+            iobill_status: j.status || (mode === 'draft' ? 'draft' : 'issued'),
+            iobill_synced_at: new Date().toISOString(),
+            iobill_sync_error: null
+          } : x));
+          console.log(`📝 Avoir ${j.status === 'draft' ? 'brouillon' : 'émis'} poussé à IOBILL :`, j.credit_note_number);
+        } else if (j.error) {
+          console.warn("Push avoir IOBILL : erreur", j.error);
+        }
+      })
+      .catch(e => console.warn("Push avoir IOBILL : échec réseau", e));
+  };
+
   const save = (o) => {
     // Sauvegarder le document — ajoute un timestamp de création à la 1re sauvegarde
     const exists = orders.find(x => x.id === o.id);
@@ -5047,38 +5077,15 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
         setPayment(null);
 
         // v8.41 — Hook IO BILL pour avoirs : push automatique quand un avoir
-        // vient d'être totalement remboursé (reste <= 0.01) et qu'il n'est pas
-        // encore poussé à IOBILL.
-        if (o.type === "avoir" && token && dealer?.iobill_auto_push && dealer?.iobill_company_id
-            && !o.iobill_invoice_id) {
-          // Calcul reste (inline pour ne pas appeler calcOrder du composant parent)
+        // vient d'être totalement remboursé (reste <= 0.01).
+        if (o.type === "avoir" && o.facture_origine) {
           const ttc = Math.abs(parseFloat(o.prix_ht) || 0);
           const paiements = (Array.isArray(o.paiements) ? o.paiements : [])
             .reduce((s, p) => s + (parseFloat(p.montant) || 0), 0);
           const reste = ttc - paiements;
-          if (reste <= 0.01 && o.facture_origine) {
-            fetch("/api/iobill-bridge", {
-              method: "POST",
-              headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-              body: JSON.stringify({ action: "push_credit_note", order_id: o.id })
-            })
-              .then(r => r.json())
-              .then(j => {
-                if (j.ok && j.credit_note_id) {
-                  setOrders(prev => (prev || []).map(x => x.id === o.id ? {
-                    ...x,
-                    iobill_invoice_id: j.credit_note_id,
-                    iobill_invoice_number: j.credit_note_number,
-                    iobill_pdf_url: j.pdf_url || null,
-                    iobill_synced_at: new Date().toISOString(),
-                    iobill_sync_error: null
-                  } : x));
-                  console.log("📝 Avoir poussé à IOBILL :", j.credit_note_number);
-                } else if (j.error) {
-                  console.warn("Push avoir IOBILL : erreur", j.error);
-                }
-              })
-              .catch(e => console.warn("Push avoir IOBILL : échec réseau", e));
+          if (reste <= 0.01) {
+            // Mode 'finalize' = avoir totalement remboursé → bascule en 'issued' côté IOBILL
+            pushCreditNoteToIobill(o, 'finalize');
           }
         }
       }} onClose={() => setPayment(null)} />}

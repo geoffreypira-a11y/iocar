@@ -52,10 +52,14 @@ export default function IobillInvoiceSync({ token, order, garage, onSync }) {
   const synced = !!order?.iobill_invoice_id && !order?.iobill_sync_error;
   const hasError = !!order?.iobill_sync_error;
   const orderIsPaid = computeIsPaid(order);
-  // v8.40.3 — Source de vérité = IOBILL
-  // Si le PDF Factur-X est généré, c'est que la facture est en paid côté IOBILL
-  // (le Factur-X n'est généré qu'au passage paid, pas en draft).
-  const isFinalized = !!order?.iobill_pdf_url;
+  // v8.42 — Source de vérité = iobill_status (retourné par IOBILL au moment du push)
+  // 'paid' (facture finalisée) ou 'issued' (avoir émis) → finalisé
+  // 'draft' → brouillon
+  // Fallback : si pas de iobill_status (anciennes données pré-v8.42), on regarde iobill_pdf_url
+  const iobillStatus = order?.iobill_status;
+  const isFinalized = iobillStatus
+    ? (iobillStatus === 'paid' || iobillStatus === 'issued')
+    : !!order?.iobill_pdf_url;
 
   if (order?.type !== "facture" && order?.type !== "avoir") return null;
 
@@ -78,6 +82,7 @@ export default function IobillInvoiceSync({ token, order, garage, onSync }) {
         iobill_invoice_id: j.invoice_id || j.credit_note_id || order.iobill_invoice_id,
         iobill_invoice_number: j.invoice_number || j.credit_note_number,
         iobill_pdf_url: j.pdf_url,
+        iobill_status: j.status || order.iobill_status || null, // v8.42 — signal d'état IOBILL
         iobill_synced_at: new Date().toISOString(),
         iobill_sync_error: null
       });
