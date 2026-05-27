@@ -74,8 +74,9 @@ export default function IobillInvoiceSync({ token, order, garage, onSync }) {
         return null;
       }
       if (onSync) onSync({
-        iobill_invoice_id: j.invoice_id || order.iobill_invoice_id,
-        iobill_invoice_number: j.invoice_number,
+        // v8.41 — push_credit_note retourne credit_note_id, on l'unifie ici
+        iobill_invoice_id: j.invoice_id || j.credit_note_id || order.iobill_invoice_id,
+        iobill_invoice_number: j.invoice_number || j.credit_note_number,
         iobill_pdf_url: j.pdf_url,
         iobill_synced_at: new Date().toISOString(),
         iobill_sync_error: null
@@ -91,6 +92,21 @@ export default function IobillInvoiceSync({ token, order, garage, onSync }) {
 
   async function pushDraft() { await callBridge("push_invoice_draft"); }
   async function markPaid()  { await callBridge("mark_invoice_paid"); }
+  // v8.41 — Pour les avoirs : action dédiée push_credit_note (route vers credit_notes IOBILL)
+  async function pushCreditNote() { await callBridge("push_credit_note"); }
+
+  // Action à déclencher selon le type d'order
+  // - facture : pushDraft (BC→Facture) ou markPaid (Livré)
+  // - avoir   : pushCreditNote (remboursement complet)
+  function smartPush() {
+    if (order.type === "avoir") {
+      pushCreditNote();
+    } else if (isFinalized || orderIsPaid) {
+      markPaid();
+    } else {
+      pushDraft();
+    }
+  }
 
   // ─── Pas lié : pilule grise ──────────────────────────────────
   if (!linked) {
@@ -222,7 +238,9 @@ export default function IobillInvoiceSync({ token, order, garage, onSync }) {
           )}
           {!isFinalized && (
             <div style={{ marginTop: 4, fontStyle: "italic" }}>
-              ⏳ Sera finalisée au passage « 🚗 Livré » du véhicule
+              {order.type === "avoir"
+                ? "⏳ Sera finalisé au remboursement complet"
+                : "⏳ Sera finalisée au passage « 🚗 Livré » du véhicule"}
             </div>
           )}
           {order.iobill_pdf_url ? (
@@ -253,9 +271,7 @@ export default function IobillInvoiceSync({ token, order, garage, onSync }) {
       <button
         onClick={(e) => {
           e.stopPropagation();
-          // Si pas finalisée, on tente mark_invoice_paid (forcera bascule paid si payée)
-          // Si finalisée, idem (re-push pour rafraîchir)
-          isFinalized || orderIsPaid ? markPaid() : pushDraft();
+          smartPush();
         }}
         disabled={busy}
         style={{
@@ -270,9 +286,9 @@ export default function IobillInvoiceSync({ token, order, garage, onSync }) {
       >
         {busy ? "⏳ …" :
          hasError ? "🔁 Réessayer" :
-         !synced ? "🦉 Transmettre" :
+         !synced ? (order.type === "avoir" ? "🦉 Transmettre l'avoir" : "🦉 Transmettre") :
          isFinalized ? "🔄 Re-transmettre" :
-         "🔄 Forcer la finalisation"}
+         (order.type === "avoir" ? "🔄 Forcer la transmission" : "🔄 Forcer la finalisation")}
       </button>
 
       {error && (

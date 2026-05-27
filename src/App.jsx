@@ -5042,7 +5042,46 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
         onClose={() => setCession(null)}
       />}
       {viewMode === "trial" && showDemoLimit && <DemoLimitModal type="orders" onClose={() => setShowDemoLimit(false)} />}
-      {payment && <PaymentModal order={payment} onSave={o => { setOrders(orders.map(x => x.id === o.id ? o : x)); setPayment(null); }} onClose={() => setPayment(null)} />}
+      {payment && <PaymentModal order={payment} onSave={o => {
+        setOrders(orders.map(x => x.id === o.id ? o : x));
+        setPayment(null);
+
+        // v8.41 — Hook IO BILL pour avoirs : push automatique quand un avoir
+        // vient d'être totalement remboursé (reste <= 0.01) et qu'il n'est pas
+        // encore poussé à IOBILL.
+        if (o.type === "avoir" && token && dealer?.iobill_auto_push && dealer?.iobill_company_id
+            && !o.iobill_invoice_id) {
+          // Calcul reste (inline pour ne pas appeler calcOrder du composant parent)
+          const ttc = Math.abs(parseFloat(o.prix_ht) || 0);
+          const paiements = (Array.isArray(o.paiements) ? o.paiements : [])
+            .reduce((s, p) => s + (parseFloat(p.montant) || 0), 0);
+          const reste = ttc - paiements;
+          if (reste <= 0.01 && o.facture_origine) {
+            fetch("/api/iobill-bridge", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+              body: JSON.stringify({ action: "push_credit_note", order_id: o.id })
+            })
+              .then(r => r.json())
+              .then(j => {
+                if (j.ok && j.credit_note_id) {
+                  setOrders(prev => (prev || []).map(x => x.id === o.id ? {
+                    ...x,
+                    iobill_invoice_id: j.credit_note_id,
+                    iobill_invoice_number: j.credit_note_number,
+                    iobill_pdf_url: j.pdf_url || null,
+                    iobill_synced_at: new Date().toISOString(),
+                    iobill_sync_error: null
+                  } : x));
+                  console.log("📝 Avoir poussé à IOBILL :", j.credit_note_number);
+                } else if (j.error) {
+                  console.warn("Push avoir IOBILL : erreur", j.error);
+                }
+              })
+              .catch(e => console.warn("Push avoir IOBILL : échec réseau", e));
+          }
+        }
+      }} onClose={() => setPayment(null)} />}
       {pendingDelete && (
         <ConfirmModal
           title="Supprimer le document"

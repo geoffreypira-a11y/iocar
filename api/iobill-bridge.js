@@ -43,6 +43,8 @@ export default async function handler(req, res) {
     if (action === 'push_invoice') return handlePushInvoice(garage, supabase, req.body, res);
     if (action === 'push_invoice_draft') return handlePushInvoiceDraft(garage, supabase, req.body, res);
     if (action === 'mark_invoice_paid') return handleMarkInvoicePaid(garage, supabase, req.body, res);
+    // v8.41 — Action dédiée pour les avoirs (route vers credit_notes côté IOBILL)
+    if (action === 'push_credit_note') return handlePushCreditNote(garage, supabase, req.body, res);
     if (action === 'set_auto_push') return handleSetAutoPush(garage, supabase, req.body, res);
 
     return res.status(400).json({ error: `Action inconnue : ${action}` });
@@ -477,6 +479,101 @@ async function handleMarkInvoicePaid(garage, supabase, body, res) {
 }
 
 // ───────────────────────────────────────────────────────────────────
+// v8.41 — PUSH_CREDIT_NOTE — pousse un avoir IOCAR vers credit_notes IOBILL
+// Body : { order_id }
+//
+// Pré-requis (garantis par IOCAR) :
+//   - L'avoir a un `facture_origine` qui pointe vers une facture déjà
+//     transmise et finalisée (status=paid) côté IOBILL.
+//   - L'avoir est entièrement remboursé côté IOCAR (reste <= 0.01).
+//
+// Comportement :
+//   - Si déjà pushé (iobill_invoice_id rempli) → idempotent
+//   - Sinon → call IOBILL push_credit_note qui :
+//       1. Cherche l'invoice source via (external_source, number = facture_origine)
+//       2. Insère dans credit_notes avec le bon invoice_id
+//       3. Trigger anti-dépassement vérifie le total
+//       4. Génère le PDF Factur-X en arrière-plan
+// ───────────────────────────────────────────────────────────────────
+async function handlePushCreditNote(garage, supabase, body, res) {
+  if (!garage.iobill_api_token) {
+    return res.status(400).json({ error: 'Compte IOBILL non lié' });
+  }
+  const orderId = body?.order_id;
+  if (!orderId) return res.status(400).json({ error: 'order_id requis' });
+
+  const { order, error: ordErr } = await loadOrder(supabase, orderId, garage.id);
+  if (ordErr || !order) {
+    return res.status(404).json({ error: 'Order introuvable ou non autorisé' });
+  }
+  if (order.type !== 'avoir') {
+    return res.status(400).json({ error: 'Cette action est réservée aux avoirs (type=avoir)' });
+  }
+  if (!order.facture_origine) {
+    return res.status(400).json({ error: "L'avoir n'a pas de facture d'origine — impossible de le pousser sans la rattacher à une facture" });
+  }
+
+  // Sécurité : avoir entièrement remboursé
+  const calc = calcOrderBackend(order);
+  if (calc.reste > 0.01) {
+    return res.status(400).json({
+      error: `Avoir non encore totalement remboursé (reste : ${calc.reste.toFixed(2)} €). Encaissez d'abord le remboursement complet.`,
+      code: 'NOT_PAID',
+      reste: calc.reste
+    });
+  }
+
+  // Idempotence : déjà poussé ?
+  if (order.iobill_invoice_id) {
+    return res.status(200).json({
+      ok: true,
+      already_pushed: true,
+      credit_note_id: order.iobill_invoice_id,
+      credit_note_number: order.iobill_invoice_number
+    });
+  }
+
+  const mappedCreditNote = mapOrderToCreditNote(order, calc);
+
+  const payload = {
+    action: 'push_credit_note',
+    token: garage.iobill_api_token,
+    credit_note: mappedCreditNote,
+    company_update: buildCompanyUpdateFromGarage(garage)
+  };
+  const j = await callIobill(payload);
+
+  if (!j.ok) {
+    await supabase.from('orders').update({
+      iobill_sync_error: j.error || 'Erreur push credit_note',
+      iobill_synced_at: null
+    }).eq('id', orderId);
+    return res.status(502).json({
+      error: 'Échec push avoir IOBILL',
+      details: j.error, last_error: j.last_error, hint: j.hint, full_payload: j.full_payload
+    });
+  }
+
+  // On stocke l'id du credit_note dans iobill_invoice_id (réutilise le champ).
+  // Côté front, on distinguera par order.type === 'avoir'.
+  await supabase.from('orders').update({
+    iobill_invoice_id: j.data.credit_note_id,
+    iobill_invoice_number: j.data.credit_note_number,
+    iobill_pdf_url: j.data.pdf_url || null,
+    iobill_synced_at: new Date().toISOString(),
+    iobill_sync_error: null
+  }).eq('id', orderId);
+
+  return res.status(200).json({
+    ok: true,
+    credit_note_id: j.data.credit_note_id,
+    credit_note_number: j.data.credit_note_number,
+    pdf_url: j.data.pdf_url || null,
+    facturx_status: j.data.facturx_status || 'pending'
+  });
+}
+
+// ───────────────────────────────────────────────────────────────────
 // SET_AUTO_PUSH
 // Body : { enabled: bool }
 // ───────────────────────────────────────────────────────────────────
@@ -886,6 +983,90 @@ function parseGarageAddress(addressText) {
     line1 = null;
   }
   return { line1, postal_code, city };
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// v8.41 — MAPPING : avoir IOCAR → credit_note IOBILL
+//
+// Structure attendue par IOBILL (table credit_notes) :
+//   - source_invoice_number : numéro de la facture source (ex: "FAC-2026-0001")
+//                             IOBILL fera le lookup pour retrouver invoice_id
+//   - external_id           : id UUID de l'order IOCAR
+//   - number                : numéro de l'avoir (ex: "AV-2026-0002")
+//   - lines                 : montants en VALEURS ABSOLUES (le signe négatif est
+//                             géré côté IOBILL par le statut credit_note)
+//   - reason                : motif de l'avoir (optionnel, libre)
+//   - status                : "issued" (= équivalent paid pour avoir)
+//
+// Convention IOCAR : un avoir n'a pas de débours ni de reprise. Il a juste
+// un montant (prix_ht en TTC en réalité). On simplifie le mapping.
+// ═══════════════════════════════════════════════════════════════════
+function mapOrderToCreditNote(order, calc) {
+  const avecTva = order.avec_tva !== false;
+  const tvaPct = avecTva ? (Number(order.tva_pct) || 20) : 0;
+
+  // Côté IOCAR : prix_ht stocke en réalité le montant TTC de l'avoir
+  const ttcAmount = Math.abs(Number(order.prix_ht) || 0);
+  const ttcToHt = (ttc) => avecTva ? ttc / (1 + tvaPct / 100) : ttc;
+
+  // Description ligne (réutilise le label véhicule si dispo)
+  const v = order.vehicle_data || {};
+  const vehicleLabel = sanitizeString([v.marque, v.modele, v.finition].filter(Boolean).join(' ')
+    || (order.vehicle_label || 'Véhicule'));
+  const vehiclePlate = sanitizeString(v.plate || order.vehicle_plate || '');
+  const description1 = order.facture_origine
+    ? sanitizeString(`Avoir sur ${order.facture_origine}${vehicleLabel ? ' — ' + vehicleLabel : ''}${vehiclePlate ? ' (' + vehiclePlate + ')' : ''}`)
+    : sanitizeString(`Avoir${vehicleLabel ? ' — ' + vehicleLabel : ''}`);
+
+  const lines = [{
+    description: description1,
+    quantity: 1,
+    unit_price_ht_cents: Math.round(ttcToHt(ttcAmount) * 100),
+    vat_rate: tvaPct,
+    discount_pct: 0
+  }];
+
+  // Client
+  const cli = order.client || {};
+  const hasSiren = !!(cli.siren && String(cli.siren).trim());
+  const cleanAddress = cli.address ? sanitizeString(cli.address, ' — ') : null;
+  let clientPayload;
+  if (hasSiren) {
+    clientPayload = {
+      legal_name: sanitizeString(cli.name) || null,
+      first_name: null, last_name: null,
+      siret: String(cli.siren).replace(/\s/g, '') || null,
+      email: sanitizeString(cli.email) || null,
+      phone: sanitizeString(cli.phone) || null,
+      address_line1: cleanAddress,
+      postal_code: null, city: null, country: 'FR'
+    };
+  } else {
+    const fullName = sanitizeString(String(cli.name || '').trim());
+    const parts = fullName.split(/\s+/);
+    const firstName = parts.length > 1 ? parts.slice(0, -1).join(' ') : (parts[0] || null);
+    const lastName = parts.length > 1 ? parts[parts.length - 1] : null;
+    clientPayload = {
+      legal_name: null,
+      first_name: firstName || null, last_name: lastName || null,
+      siret: null,
+      email: sanitizeString(cli.email) || null,
+      phone: sanitizeString(cli.phone) || null,
+      address_line1: cleanAddress,
+      postal_code: null, city: null, country: 'FR'
+    };
+  }
+
+  return {
+    external_id: order.id,
+    number: sanitizeString(order.ref) || `IOCAR-AV-${String(order.id || '').slice(0, 8).toUpperCase()}`,
+    issue_date: toIsoDate(order.date_facture || order.date_creation),
+    status: 'issued', // un avoir poussé est immédiatement émis
+    source_invoice_number: order.facture_origine || null, // ⚠ requis côté IOBILL
+    reason: sanitizeString(order.motif_avoir) || sanitizeString(order.notes) || null,
+    client: clientPayload,
+    lines
+  };
 }
 
 // Map les modes de paiement IOCAR → IOBILL
