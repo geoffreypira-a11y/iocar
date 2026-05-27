@@ -634,14 +634,19 @@ function mapOrderToInvoice(order, calc) {
       discount_pct: 0
     });
   }
-  // L3 — carte grise (HORS TVA toujours)
+  // v8.39 — L3 (CARTE GRISE) : SORTIE des lines, mise en débours séparés
+  // Conformément à l'art. 267 II 2° du CGI : la CG est un débours (le garage
+  // refacture EXACTEMENT ce qu'il a payé au Trésor Public, sans marge, sans TVA).
+  // Les débours apparaîtront dans un bloc séparé sous les totaux sur le PDF
+  // IOBILL, hors base TVA (donc hors subtotal_ht_cents / vat_total_cents,
+  // mais inclus dans le total à payer).
+  const debours = [];
   if (carteGrise > 0) {
-    lines.push({
-      description: 'Carte grise (hors TVA)',
-      quantity: 1,
-      unit_price_ht_cents: Math.round(carteGrise * 100 * sign),
-      vat_rate: 0,
-      discount_pct: 0
+    debours.push({
+      label: 'Carte grise',
+      amount_cents: Math.round(carteGrise * 100 * sign),
+      legal_basis: 'art. 267 II 2° du CGI',
+      reference: order.carte_grise_reference || null
     });
   }
   // L4 — reprise (ligne négative)
@@ -757,6 +762,8 @@ function mapOrderToInvoice(order, calc) {
     // dans Param\u00e8tres > Mentions garage). On les enrichit juste ici si l'order
     // a des sp\u00e9cificit\u00e9s qui surchargent les valeurs par d\u00e9faut.
     business_mentions: buildOrderSpecificMentions(order),
+    // v8.39 — Débours (CG, malus...) : hors TVA, sortis du tableau lignes
+    debours: debours.length > 0 ? debours : null,
     vat_regime: avecTva ? 'standard' : 'margin_297a'
   };
 }
@@ -807,7 +814,11 @@ function buildCompanyUpdateFromGarage(garage) {
       city: garage.ville || null,
       country: 'FR'
     },
-    business_mentions: garage.business_mentions || null
+    business_mentions: garage.business_mentions || null,
+    // v8.39 — Logo base64 (IOCAR stocke en base64 dans garages.logo).
+    // IOBILL uploadera vers son bucket company-logos UNIQUEMENT si logo_url
+    // est vide côté IOBILL (préserve un logo défini manuellement par l'user).
+    logo_base64: garage.logo || null
   };
 }
 

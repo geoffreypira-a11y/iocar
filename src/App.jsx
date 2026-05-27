@@ -2072,6 +2072,8 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
     options: Array.isArray(vehicle.options) ? vehicle.options.join(", ") : vehicle.options || "",
     // Si le véhicule a déjà un prix d'achat, on active le toggle tréso
     includeTreso: !!(parseFloat(vehicle.prix_achat) > 0),
+    // v8.39 — Régime TVA hérité ou défaut 'normal'
+    vat_regime: vehicle.vat_regime || "normal",
   } : {
     plate: "", marque: "", modele: "", finition: "", date_mise_en_circulation: "",
     motorisation: "", carburant: "Essence", puissance_cv: "", co2: "", boite: "Manuelle 6",
@@ -2080,6 +2082,8 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
     prix_achat: "", prix_vente: "",
     statut: "disponible", options: "", notes: "",
     includeTreso: false,
+    // v8.39 — Régime TVA : 'normal' (défaut) ou 'margin_297a' (achat à particulier)
+    vat_regime: "normal",
   });
   const [loading, setLoading] = useState(false);
 
@@ -2209,6 +2213,43 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
               <div style={{ fontSize: 10, color: quotaStatus.color, letterSpacing: 1, fontWeight: 600 }}>
                 {quotaStatus.text}
               </div>
+            </div>
+          </div>
+
+          {/* v8.39 — RÉGIME TVA — défini à l'acquisition, hérité au BC */}
+          <div style={{
+            background: form.vat_regime === "margin_297a" ? "rgba(229,151,60,.08)" : "rgba(212,168,67,.06)",
+            border: "1px solid " + (form.vat_regime === "margin_297a" ? "rgba(229,151,60,.3)" : "var(--border2)"),
+            borderRadius: 10, padding: "12px 18px", marginBottom: 14,
+            display: "flex", alignItems: "center", gap: 14
+          }}>
+            <div style={{ fontSize: 20 }}>{form.vat_regime === "margin_297a" ? "🧾" : "📑"}</div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 10, letterSpacing: 2, textTransform: "uppercase", color: "var(--gold)", fontWeight: 700, marginBottom: 4 }}>
+                Régime TVA à la revente
+              </div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", marginBottom: 4 }}>
+                {form.vat_regime === "margin_297a"
+                  ? "TVA sur la marge (art. 297 A CGI)"
+                  : "TVA normale (20% sur prix total)"}
+              </div>
+              <div style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.4 }}>
+                {form.vat_regime === "margin_297a"
+                  ? "Acheté à un particulier ou non-assujetti. La TVA ne sera pas mentionnée sur la facture client."
+                  : "Acheté à un pro avec TVA déductible. La TVA sera détaillée sur la facture client."}
+              </div>
+            </div>
+            <div style={{
+              width: 44, height: 24, borderRadius: 12, cursor: "pointer",
+              background: form.vat_regime === "margin_297a" ? "rgba(229,151,60,.6)" : "var(--gold)",
+              border: "1px solid var(--border2)", position: "relative", transition: "background .2s", flexShrink: 0
+            }} onClick={() => set("vat_regime", form.vat_regime === "margin_297a" ? "normal" : "margin_297a")}>
+              <div style={{
+                width: 18, height: 18, borderRadius: "50%", background: "#fff",
+                position: "absolute", top: 2,
+                left: form.vat_regime === "margin_297a" ? 23 : 3,
+                transition: "left .2s", boxShadow: "0 1px 3px rgba(0,0,0,.3)"
+              }} />
             </div>
           </div>
 
@@ -3194,6 +3235,11 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
   const selectVehicle = (id) => {
     const v = vehicles.find(x => x.id === id);
     if (!v) return set("vehicle_id", "");
+    // v8.39 — Hérite le régime TVA du véhicule (défini à l'acquisition)
+    //   normal      → avec_tva = true  (TVA visible sur facture)
+    //   margin_297a → avec_tva = false (TVA marge, pas mentionnée)
+    const vatRegime = v.vat_regime || "normal";
+    const heriteAvecTva = vatRegime !== "margin_297a";
     setForm(f => ({
       ...f,
       vehicle_id: id,
@@ -3208,6 +3254,9 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
         date_mise_en_circulation: v.date_mise_en_circulation, options: v.options,
       },
       prix_ht: f.prix_ht || v.prix_vente || "",
+      // Hérite régime TVA et synchronise avec_tva (sauf si l'user a déjà fait un choix manuel)
+      vehicle_vat_regime: vatRegime,
+      avec_tva: heriteAvecTva,
     }));
   };
 
