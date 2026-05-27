@@ -2,21 +2,22 @@
 // ═══════════════════════════════════════════════════════════════════
 // Bandeau d'état "🦉 Transmission IO BILL" sur une facture IOCAR.
 //
-// v8.40 — REFONTE COLLAPSIBLE :
-// Par défaut affiche une PILULE COMPACTE (statut + click pour expand).
-// Au clic, déploie le détail complet (date, n°, PDF, re-transmettre…).
-// Re-clic sur la pilule → re-replie.
+// v8.40.2 — Pilule entièrement cliquable + statut basé sur LIVRÉ
 //
 // Architecture : IOCAR = source de vérité, IOBILL = lecture seule.
 //   1. BC → Facture (auto hook front) : push status='draft'
-//   2. Clic "Livré" (auto hook FleetPage) : update vers status='paid'
+//   2. Clic "Livré" sur le véhicule (auto hook FleetPage) : update vers status='paid'
+//
+// Logique d'état :
+//   - vehicle.statut === "livré" → côté IOBILL : Transmise (vert)
+//   - sinon (même si payé)         → côté IOBILL : En brouillon (orange)
 //
 // Props :
-//   - token  : JWT Supabase IOCAR
-//   - order  : ligne `orders`
-//   - garage : ligne `garages`
-//   - isPaid : (optionnel) si true, le bouton pousse direct en paid
-//   - onSync : callback(patch) après sync pour rafraîchir l'order parent
+//   - token    : JWT Supabase IOCAR
+//   - order    : ligne `orders`
+//   - garage   : ligne `garages`
+//   - isLivre  : (optionnel) true si véhicule lié au statut "livré"
+//   - onSync   : callback(patch) après sync pour rafraîchir l'order parent
 // ═══════════════════════════════════════════════════════════════════
 import React, { useState } from "react";
 
@@ -37,15 +38,18 @@ function computeIsPaid(order) {
   return reste <= 0.01;
 }
 
-export default function IobillInvoiceSync({ token, order, garage, isPaid, onSync }) {
+export default function IobillInvoiceSync({ token, order, garage, isLivre, onSync }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [expanded, setExpanded] = useState(false);
+  const [hovered, setHovered] = useState(false);
 
   const linked = !!garage?.iobill_company_id;
   const synced = !!order?.iobill_invoice_id && !order?.iobill_sync_error;
   const hasError = !!order?.iobill_sync_error;
-  const orderIsPaid = (typeof isPaid === "boolean") ? isPaid : computeIsPaid(order);
+  const orderIsPaid = computeIsPaid(order);
+  // v8.40.2 — Le statut "Transmise" dépend de "livré", PAS du paiement
+  const reallyLivre = (typeof isLivre === "boolean") ? isLivre : false;
 
   if (order?.type !== "facture" && order?.type !== "avoir") return null;
 
@@ -87,7 +91,7 @@ export default function IobillInvoiceSync({ token, order, garage, isPaid, onSync
     return (
       <a href="/parametres" style={{
         display: "inline-flex", alignItems: "center", gap: 6,
-        padding: "4px 10px", borderRadius: 999,
+        padding: "5px 12px", borderRadius: 999,
         background: "rgba(255,255,255,0.04)",
         border: "1px dashed rgba(255,255,255,0.15)",
         fontSize: 11, color: "var(--muted)",
@@ -101,53 +105,60 @@ export default function IobillInvoiceSync({ token, order, garage, isPaid, onSync
   // ─── Détermine l'état actuel pour la pilule ──────────────────
   let pillBg, pillBorder, pillColor, pillLabel, pillIcon;
   if (hasError) {
-    pillBg = "rgba(229,73,73,0.10)";
-    pillBorder = "rgba(229,73,73,0.35)";
+    pillBg = "rgba(229,73,73,0.12)";
+    pillBorder = "rgba(229,73,73,0.40)";
     pillColor = "var(--red, #e54949)";
     pillLabel = "Échec transmission";
     pillIcon = "❌";
   } else if (!synced) {
-    pillBg = "rgba(212,168,67,0.10)";
-    pillBorder = "rgba(212,168,67,0.30)";
+    pillBg = "rgba(212,168,67,0.12)";
+    pillBorder = "rgba(212,168,67,0.40)";
     pillColor = "var(--gold, #d4a843)";
     pillLabel = "Non transmise";
     pillIcon = "🦉";
-  } else if (!orderIsPaid) {
-    // Brouillon
-    pillBg = "rgba(229,151,60,0.10)";
-    pillBorder = "rgba(229,151,60,0.30)";
+  } else if (!reallyLivre) {
+    // Synchro OK mais véhicule pas encore livré → toujours en brouillon
+    pillBg = "rgba(229,151,60,0.12)";
+    pillBorder = "rgba(229,151,60,0.40)";
     pillColor = "var(--orange, #e5973c)";
     pillLabel = "En brouillon";
     pillIcon = "📝";
   } else {
-    // Transmise et payée
-    pillBg = "rgba(62,207,122,0.10)";
-    pillBorder = "rgba(62,207,122,0.30)";
+    // Synchro OK et véhicule livré → transmise et finalisée
+    pillBg = "rgba(62,207,122,0.12)";
+    pillBorder = "rgba(62,207,122,0.40)";
     pillColor = "var(--green, #3ecf7a)";
     pillLabel = "Transmise";
     pillIcon = "✅";
   }
 
-  // ─── Mode compacté (pilule cliquable) ─────────────────────────
+  // ─── Mode compacté (pilule cliquable EN ENTIER) ──────────────
   if (!expanded) {
     return (
       <button
         onClick={() => setExpanded(true)}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
         title="Cliquer pour voir le détail"
         style={{
-          display: "inline-flex", alignItems: "center", gap: 6,
-          padding: "4px 12px", borderRadius: 999,
-          background: pillBg,
+          display: "inline-flex", alignItems: "center", gap: 8,
+          padding: "6px 14px", borderRadius: 999,
+          background: hovered ? pillBg.replace("0.12", "0.20") : pillBg,
           border: `1px solid ${pillBorder}`,
           color: pillColor,
-          fontSize: 11, fontWeight: 600,
+          fontSize: 12, fontWeight: 600,
           cursor: "pointer",
-          fontFamily: "inherit"
+          fontFamily: "inherit",
+          transition: "background 0.15s, transform 0.1s",
+          transform: hovered ? "scale(1.02)" : "scale(1)",
+          boxShadow: hovered ? "0 2px 8px rgba(0,0,0,0.2)" : "none",
+          // Important : tous ces éléments enfants ne bloquent pas le click
+          userSelect: "none"
         }}
       >
-        <span>{pillIcon}</span>
-        <span>{pillLabel}</span>
-        <span style={{ fontSize: 9, opacity: 0.6, marginLeft: 2 }}>▾</span>
+        <span style={{ pointerEvents: "none" }}>{pillIcon}</span>
+        <span style={{ pointerEvents: "none" }}>{pillLabel}</span>
+        <span style={{ fontSize: 9, opacity: 0.7, marginLeft: 2, pointerEvents: "none" }}>▾</span>
       </button>
     );
   }
@@ -155,36 +166,37 @@ export default function IobillInvoiceSync({ token, order, garage, isPaid, onSync
   // ─── Mode déployé (détail complet) ────────────────────────────
   return (
     <div style={{
-      padding: "10px 14px",
+      padding: "12px 14px",
       borderRadius: 8,
       background: pillBg,
       border: `1px solid ${pillBorder}`,
       fontSize: 12,
-      maxWidth: 320,
-      display: "flex", flexDirection: "column", gap: 8
+      maxWidth: 340,
+      display: "flex", flexDirection: "column", gap: 10
     }}>
-      {/* Header avec bouton replier */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      {/* Header cliquable pour replier */}
+      <div
+        onClick={() => setExpanded(false)}
+        style={{
+          display: "flex", alignItems: "center", gap: 8,
+          cursor: "pointer",
+          userSelect: "none"
+        }}
+        title="Replier"
+      >
         <span style={{ color: pillColor, fontWeight: 600 }}>
           {pillIcon} {pillLabel === "Transmise" ? "Transmise à IO BILL" :
                      pillLabel === "En brouillon" ? "En brouillon IO BILL" :
                      pillLabel === "Échec transmission" ? "Échec transmission" :
                      "Non transmise"}
         </span>
-        <button
-          onClick={() => setExpanded(false)}
-          title="Replier"
-          style={{
-            marginLeft: "auto",
-            background: "transparent", border: 0, cursor: "pointer",
-            color: "var(--muted)", fontSize: 11, padding: "2px 6px"
-          }}
-        >
-          ▴
-        </button>
+        <span style={{
+          marginLeft: "auto",
+          color: "var(--muted)", fontSize: 12,
+          opacity: 0.7
+        }}>▴</span>
       </div>
 
-      {/* Détails selon état */}
       {hasError && (
         <div style={{ color: "var(--muted)", fontSize: 11, lineHeight: 1.4 }}>
           {order.iobill_sync_error}
@@ -203,6 +215,11 @@ export default function IobillInvoiceSync({ token, order, garage, isPaid, onSync
           {order.iobill_invoice_number && (
             <div>· N° {order.iobill_invoice_number}</div>
           )}
+          {!reallyLivre && (
+            <div style={{ marginTop: 4, fontStyle: "italic" }}>
+              ⏳ Sera finalisée au passage « 🚗 Livré » du véhicule
+            </div>
+          )}
           {order.iobill_pdf_url ? (
             <a
               href={order.iobill_pdf_url}
@@ -211,12 +228,13 @@ export default function IobillInvoiceSync({ token, order, garage, isPaid, onSync
               style={{
                 color: "var(--gold, #d4a843)",
                 textDecoration: "underline",
-                marginTop: 2
+                marginTop: 4
               }}
+              onClick={(e) => e.stopPropagation()}
             >
               Voir le PDF Factur-X ↗
             </a>
-          ) : (orderIsPaid && (
+          ) : (reallyLivre && (
             <div style={{ marginTop: 2 }}>⏳ PDF Factur-X en génération</div>
           ))}
         </div>
@@ -228,12 +246,17 @@ export default function IobillInvoiceSync({ token, order, garage, isPaid, onSync
         </div>
       )}
 
-      {/* Action */}
+      {/* Bouton action */}
       <button
-        onClick={orderIsPaid ? markPaid : pushDraft}
+        onClick={(e) => {
+          e.stopPropagation();
+          // Si véhicule pas encore livré : on push juste en draft (ou re-draft)
+          // Si véhicule livré : on push en paid
+          reallyLivre ? markPaid() : pushDraft();
+        }}
         disabled={busy}
         style={{
-          padding: "6px 12px", borderRadius: 6,
+          padding: "7px 14px", borderRadius: 6,
           border: "1px solid var(--border, rgba(255,255,255,0.15))",
           background: hasError || !synced ? "var(--gold, #d4a843)" : "transparent",
           color: hasError || !synced ? "#0b0c10" : "var(--muted)",
@@ -245,8 +268,8 @@ export default function IobillInvoiceSync({ token, order, garage, isPaid, onSync
         {busy ? "⏳ …" :
          hasError ? "🔁 Réessayer" :
          !synced ? "🦉 Transmettre" :
-         orderIsPaid ? "🔄 Re-transmettre" :
-         "Forcer émission"}
+         reallyLivre ? "🔄 Re-transmettre" :
+         "🔄 Re-transmettre brouillon"}
       </button>
 
       {error && (
