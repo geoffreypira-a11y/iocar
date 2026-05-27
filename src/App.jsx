@@ -7180,7 +7180,14 @@ function CrmPage({ clients, setClients, orders, viewMode, dealer, setDealer, tok
               </thead>
               <tbody>
                 {filtered.map(c => {
-                  const nbDocs = orders.filter(o => o.client?.name?.toLowerCase() === `${c.nom} ${c.prenom}`.toLowerCase().trim() || o.client_id === c.id).length;
+                  // v8.45 — Match robuste : prioritairement par client_id, fallback nom (dans n'importe quel sens)
+                  const cFullName = `${c.nom || ''} ${c.prenom || ''}`.toLowerCase().trim();
+                  const cFullNameRev = `${c.prenom || ''} ${c.nom || ''}`.toLowerCase().trim();
+                  const nbDocs = orders.filter(o => {
+                    if (o.client_id === c.id) return true;
+                    const orderName = (o.client?.name || '').toLowerCase().trim();
+                    return orderName && (orderName === cFullName || orderName === cFullNameRev);
+                  }).length;
                   return (
                     <tr
                       key={c.id}
@@ -7232,7 +7239,14 @@ function CrmPage({ clients, setClients, orders, viewMode, dealer, setDealer, tok
         // ─── MODE CAPSULES (par défaut) ─────────────────────────
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 14 }}>
           {filtered.map(c => {
-            const nbDocs = orders.filter(o => o.client?.name?.toLowerCase() === `${c.nom} ${c.prenom}`.toLowerCase().trim() || o.client_id === c.id).length;
+            // v8.45 — Match robuste : prioritairement par client_id, fallback nom (dans n'importe quel sens)
+            const cFullName = `${c.nom || ''} ${c.prenom || ''}`.toLowerCase().trim();
+            const cFullNameRev = `${c.prenom || ''} ${c.nom || ''}`.toLowerCase().trim();
+            const nbDocs = orders.filter(o => {
+              if (o.client_id === c.id) return true;
+              const orderName = (o.client?.name || '').toLowerCase().trim();
+              return orderName && (orderName === cFullName || orderName === cFullNameRev);
+            }).length;
             const lastAnnot = c.annotations?.length > 0 ? c.annotations[c.annotations.length - 1] : null;
             return (
               <div key={c.id} className="card" style={{ transition: "border-color .15s" }}
@@ -9221,6 +9235,50 @@ export default function App() {
     else setViewMode("subscriber");
   }, [isRealDemo, isRealAdmin]);
 
+  // v8.45 — Polling 5s : sync miroir des clients IOCAR → IOBILL en continu.
+  // Tant que l'onglet est ouvert et le pont IOBILL configuré, on pousse tous
+  // les clients toutes les 5 secondes. Le hash JSON évite les appels inutiles.
+  const lastSyncHashRef = useRef("");
+  useEffect(() => {
+    if (!token || !garage?.iobill_auto_push || !garage?.iobill_company_id) return;
+    const POLLING_INTERVAL_MS = 5000;
+
+    const tick = () => {
+      // Construit un hash léger de la liste pour skipper si rien n'a changé
+      const minimalSnapshot = JSON.stringify((clients || []).map(c => ({
+        id: c.id, name: c.name, phone: c.phone, email: c.email,
+        siren: c.siren, address: c.address
+      })));
+      if (minimalSnapshot === lastSyncHashRef.current) return; // No-op
+      lastSyncHashRef.current = minimalSnapshot;
+
+      fetch("/api/iobill-bridge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: "sync_clients_batch" })
+      })
+        .then(r => r.json())
+        .then(j => {
+          if (j.ok) {
+            console.log(`🔄 Sync clients : ${j.sent} envoyés, ${j.synced} synchros, ${j.removed} supprimés, ${j.unlocked} déverrouillés`);
+          } else {
+            console.warn("Sync batch IOBILL erreur :", j.error);
+            // En cas d'erreur, on reset le hash pour réessayer au prochain tick
+            lastSyncHashRef.current = "";
+          }
+        })
+        .catch(e => {
+          console.warn("Sync batch IOBILL réseau :", e.message);
+          lastSyncHashRef.current = "";
+        });
+    };
+
+    // Premier tick immédiat puis polling régulier
+    tick();
+    const interval = setInterval(tick, POLLING_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [token, garage?.iobill_auto_push, garage?.iobill_company_id, clients]);
+
   // ── Écrans d'auth ─────────────────────────────────────────
   if (!token || !user) return <LoginScreen onLogin={handleLogin} />;
 
@@ -9256,52 +9314,9 @@ export default function App() {
 
   const setVehiclesRaw    = useTrial ? setDemoVehicles    : setVehicles;
   const setOrdersRaw      = useTrial ? setDemoOrders      : setOrders;
-  const setClientsRawBase = useTrial ? setDemoClients     : setClients;
+  const setClientsRaw     = useTrial ? setDemoClients     : setClients;
   const setLivrePoliceRaw = useTrial ? setDemoLivrePolice : setLivrePolice;
   const setDealerRaw      = saveDealer;
-
-  // v8.44.1 — Wrapper setClients : intercepte chaque modif et sync à IOBILL automatiquement.
-  // ⚠️ PAS un hook (pas de useCallback) car il y a des returns conditionnels au-dessus
-  // (loading screen, suspended screen) qui changeraient l'ordre des hooks → React error #310.
-  // Une fonction normale est suffisante : elle se référence aux closures du render courant.
-  const setClientsRaw = (newOrFn) => {
-    setClientsRawBase((prev) => {
-      const next = typeof newOrFn === "function" ? newOrFn(prev) : newOrFn;
-      if (!useTrial && token && dealer?.iobill_auto_push && dealer?.iobill_company_id) {
-        const prevById = new Map((prev || []).map(c => [c.id, c]));
-        const nextById = new Map((next || []).map(c => [c.id, c]));
-        // Créations + modifs
-        for (const [id, cli] of nextById) {
-          const old = prevById.get(id);
-          if (!old || JSON.stringify(old) !== JSON.stringify(cli)) {
-            setTimeout(() => {
-              fetch("/api/iobill-bridge", {
-                method: "POST",
-                headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-                body: JSON.stringify({ action: "sync_client", client_id: id })
-              }).then(r => r.json()).then(j => {
-                if (j.ok) console.log("👥 Client sync IOBILL :", id);
-                else console.warn("Sync client IOBILL erreur :", j.error);
-              }).catch(e => console.warn("Sync client IOBILL réseau :", e.message));
-            }, 800);
-          }
-        }
-        // Suppressions
-        for (const id of prevById.keys()) {
-          if (!nextById.has(id)) {
-            fetch("/api/iobill-bridge", {
-              method: "POST",
-              headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-              body: JSON.stringify({ action: "delete_client", client_id: id })
-            }).then(r => r.json()).then(j => {
-              if (j.ok) console.log("👥 Client supprimé IOBILL :", id);
-            }).catch(() => {});
-          }
-        }
-      }
-      return next;
-    });
-  };
 
   const navItems = [
     { id: "dashboard",   icon: "📊", label: "Dashboard" },

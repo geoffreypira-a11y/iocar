@@ -50,6 +50,8 @@ export default async function handler(req, res) {
     if (action === 'delete_client') return handleDeleteClient(garage, supabase, req.body, res);
     // v8.44 — Backfill : sync TOUS les clients IOCAR vers IOBILL en une fois
     if (action === 'sync_all_clients') return handleSyncAllClients(garage, supabase, req.body, res);
+    // v8.45 — Polling : envoie TOUS les clients en 1 seul appel batch à IOBILL
+    if (action === 'sync_clients_batch') return handleSyncClientsBatchFromIocar(garage, supabase, req.body, res);
     if (action === 'set_auto_push') return handleSetAutoPush(garage, supabase, req.body, res);
 
     return res.status(400).json({ error: `Action inconnue : ${action}` });
@@ -749,6 +751,61 @@ async function handleSyncAllClients(garage, supabase, body, res) {
     success,
     failed,
     errors: errors.slice(0, 10) // Garde max 10 erreurs pour le retour
+  });
+}
+
+// ───────────────────────────────────────────────────────────────────
+// v8.45 — SYNC_CLIENTS_BATCH — Polling : envoie TOUS les clients en 1 seul appel
+// Body : { } (pas de paramètres)
+//
+// Lit tous les clients IOCAR, mappe chacun via mapClientToIobill, envoie
+// la liste complète à IOBILL action 'sync_clients_batch'. IOBILL upsert
+// chaque client et supprime ceux qui ne sont plus dans la liste.
+//
+// Appelé par le polling 5s côté front IOCAR (App.jsx setInterval).
+// ───────────────────────────────────────────────────────────────────
+async function handleSyncClientsBatchFromIocar(garage, supabase, body, res) {
+  if (!garage.iobill_api_token) {
+    return res.status(400).json({ error: 'Compte IOBILL non lié' });
+  }
+
+  // Récupère tous les clients du garage
+  const { data: rows, error } = await supabase
+    .from('clients')
+    .select('*')
+    .eq('garage_id', garage.id);
+
+  if (error) {
+    return res.status(500).json({ error: 'Erreur lecture clients : ' + error.message });
+  }
+
+  const mappedClients = [];
+  for (const row of (rows || [])) {
+    const client = (row.data && typeof row.data === 'object')
+      ? { ...row.data, ...row, id: row.id }
+      : row;
+    const m = mapClientToIobill(client);
+    if (m && m.external_id) mappedClients.push(m);
+  }
+
+  const payload = {
+    action: 'sync_clients_batch',
+    token: garage.iobill_api_token,
+    clients: mappedClients
+  };
+  const j = await callIobill(payload);
+
+  if (!j.ok) {
+    return res.status(502).json({
+      error: 'Échec batch sync IOBILL',
+      details: j.error, last_error: j.last_error
+    });
+  }
+
+  return res.status(200).json({
+    ok: true,
+    sent: mappedClients.length,
+    ...j.data
   });
 }
 
