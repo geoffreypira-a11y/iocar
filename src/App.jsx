@@ -9260,11 +9260,11 @@ export default function App() {
   const setLivrePoliceRaw = useTrial ? setDemoLivrePolice : setLivrePolice;
   const setDealerRaw      = saveDealer;
 
-  // v8.44 — Wrapper setClients : intercepte chaque modif et sync à IOBILL automatiquement
-  // Détecte créations (id absent dans prev), modifs (id existant mais data différente) et
-  // suppressions (id présent dans prev mais absent dans next). Délai 800ms pour laisser
-  // Supabase IOCAR persister d'abord.
-  const setClientsRaw = useCallback((newOrFn) => {
+  // v8.44.1 — Wrapper setClients : intercepte chaque modif et sync à IOBILL automatiquement.
+  // ⚠️ PAS un hook (pas de useCallback) car il y a des returns conditionnels au-dessus
+  // (loading screen, suspended screen) qui changeraient l'ordre des hooks → React error #310.
+  // Une fonction normale est suffisante : elle se référence aux closures du render courant.
+  const setClientsRaw = (newOrFn) => {
     setClientsRawBase((prev) => {
       const next = typeof newOrFn === "function" ? newOrFn(prev) : newOrFn;
       if (!useTrial && token && dealer?.iobill_auto_push && dealer?.iobill_company_id) {
@@ -9301,7 +9301,7 @@ export default function App() {
       }
       return next;
     });
-  }, [setClientsRawBase, useTrial, token, dealer]);
+  };
 
   const navItems = [
     { id: "dashboard",   icon: "📊", label: "Dashboard" },
