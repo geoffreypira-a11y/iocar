@@ -28,7 +28,11 @@ export default async function handler(req, res) {
   try {
     const auth = await verifyUser(req);
     if (!auth) return res.status(401).json({ error: 'Non authentifié' });
-    const { user, garage, supabase } = auth;
+    const { user, supabase } = auth;
+    // v8.40 — Aplatissement des champs JSONB data dans le garage pour
+    // que tous les handlers puissent lire garage.adresse, garage.nom, etc.
+    // directement (et pas seulement garage.data.adresse).
+    const garage = flattenGarage(auth.garage);
     if (!garage) return res.status(403).json({ error: 'Garage introuvable' });
 
     const { action } = req.body || {};
@@ -799,6 +803,9 @@ function buildOrderSpecificMentions(order) {
 // v8.39 — Construit un objet company_update à envoyer à IOBILL à chaque push.
 // IOBILL utilisera ces champs pour remplir les valeurs vides côté companies
 // (au cas où link_account initial avait des données incomplètes).
+//
+// v8.40 — flattenGarage en amont aplatit data JSONB, donc on peut lire
+// garage.xxx directement (pas besoin de garage.data?.xxx).
 function buildCompanyUpdateFromGarage(garage) {
   return {
     legal_name: garage.nom || null,
@@ -815,7 +822,7 @@ function buildCompanyUpdateFromGarage(garage) {
       country: 'FR'
     },
     business_mentions: garage.business_mentions || null,
-    // v8.39 — Logo base64 (IOCAR stocke en base64 dans garages.logo).
+    // v8.39 — Logo base64 (IOCAR stocke en base64 dans garages.data.logo).
     // IOBILL uploadera vers son bucket company-logos UNIQUEMENT si logo_url
     // est vide côté IOBILL (préserve un logo défini manuellement par l'user).
     logo_base64: garage.logo || null
@@ -911,6 +918,17 @@ function toIsoDate(input) {
 // Les colonnes iobill_* qu'on a ajoutées à `orders` directement (pour pouvoir
 // les indexer/requêter) restent au top-level — on les préserve.
 // ═══════════════════════════════════════════════════════════════════
+// v8.40 — flattenGarage : équivalent de flattenOrder pour les garages.
+// Les champs comme nom, siret, adresse, téléphone sont stockés dans
+// data JSONB côté Supabase. On les remonte au top-level pour que le
+// reste du code puisse lire garage.adresse plutôt que garage.data.adresse.
+function flattenGarage(row) {
+  if (!row) return null;
+  if (!row.data || typeof row.data !== 'object') return row;
+  const { data: nested, ...topLevel } = row;
+  return { ...nested, ...topLevel };
+}
+
 function flattenOrder(row) {
   if (!row) return null;
   if (!row.data || typeof row.data !== 'object') return row;
