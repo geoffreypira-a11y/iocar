@@ -2616,14 +2616,29 @@ function FleetPage({ vehicles, setVehicles, orders, setOrders, apiKey, usage, se
       const clientName = linkedOrder?.client?.name || "";
       const clientAddress = linkedOrder?.client?.address || "";
       const clientPhone = linkedOrder?.client?.phone || "";
-      console.log("🚗 Livré → recherche client:", { vehicleId: v.id, plate: v.plate, found: !!linkedOrder, clientName, ordersCount: (orders || []).length });
+
+      // v8.37 — Calcul du prix de vente final pour propagation au LP
+      // Convention IOCAR : `prix_ht` est en fait le prix de vente TTC après remise
+      // (cf. calcOrder ligne 733). On reprend la même logique.
+      let prixVenteFinal = "";
+      if (linkedOrder) {
+        const prixVenteRaw = parseFloat(linkedOrder.prix_ht) || 0;
+        const remiseAmt = parseFloat(linkedOrder.remise_ttc) || 0;
+        const fraisMD = parseFloat(linkedOrder.frais_mise_dispo) || 0;
+        const carteGrise = parseFloat(linkedOrder.carte_grise) || 0;
+        const reprise = linkedOrder.reprise_active ? (parseFloat(linkedOrder.reprise_valeur) || 0) : 0;
+        // Total TTC encaissé par le garage = prix vente TTC - remise + frais + CG - reprise
+        prixVenteFinal = ((prixVenteRaw - remiseAmt) + fraisMD + carteGrise - reprise).toFixed(2);
+      }
+
+      console.log("🚗 Livré → recherche client:", { vehicleId: v.id, plate: v.plate, found: !!linkedOrder, clientName, prixVenteFinal, ordersCount: (orders || []).length });
       
       if (setLivrePolice) {
         setLivrePolice(currentLP => {
           const lp = currentLP || [];
           const lpEntry = lp.find(e => e.vehicle_id === v.id || (v.plate && e.immat === v.plate));
           if (lpEntry && !lpEntry.date_sortie) {
-            console.log("🚗 Livré → LP mise à jour:", v.plate, "→ acheteur:", clientName);
+            console.log("🚗 Livré → LP mise à jour:", v.plate, "→ acheteur:", clientName, "prix_vente:", prixVenteFinal);
             return lp.map(e =>
               e.id === lpEntry.id ? { 
                 ...e, 
@@ -2631,6 +2646,10 @@ function FleetPage({ vehicles, setVehicles, orders, setOrders, apiKey, usage, se
                 acheteur_nom: clientName,
                 acheteur_adresse: clientAddress,
                 acheteur_phone: clientPhone,
+                // v8.37 — On ne touche PAS au prix_achat (info historique)
+                // mais on remplit prix_vente avec le total TTC final si vide
+                // (si déjà rempli manuellement, on respecte la valeur saisie)
+                prix_vente: e.prix_vente || prixVenteFinal,
               } : e
             );
           }
@@ -5512,6 +5531,101 @@ function SettingsPage({ token, dealer, setDealer, usage, isRealAdmin }) {
           onUpdate={(patch) => setDealer({ ...dealer, ...patch })}
         />
       </div>
+
+      {/* ─── v8.39 — Mentions garage (apparaissent en bas du PDF IO BILL) ─── */}
+      {dealer.iobill_company_id && (
+        <div style={{ maxWidth: 900, marginBottom: 20 }}>
+          <div className="card card-pad">
+            <div style={{ fontFamily: "Syne", fontSize: 14, fontWeight: 700, letterSpacing: 1, color: "var(--gold)", textTransform: "uppercase", marginBottom: 8 }}>
+              📋 Mentions garage (pour IO BILL)
+            </div>
+            <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 18, lineHeight: 1.5 }}>
+              Ces mentions apparaîtront automatiquement en bas du PDF Factur-X de toutes vos factures côté IO BILL.
+              Elles seront utiles pour votre comptable et pour les contrôles. Rédigez-les une fois pour toutes.
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "var(--muted)", marginBottom: 6, letterSpacing: 0.3 }}>
+                GARANTIE
+              </label>
+              <textarea
+                className="form-input"
+                rows={3}
+                placeholder="Exemple : Garantie contractuelle de 12 mois à compter de la livraison. Pièces et main d'œuvre. La garantie légale de conformité (art. L.217-3 du Code de la consommation) et la garantie des vices cachés (art. 1641 du Code civil) s'appliquent en sus."
+                value={(dealer.business_mentions || {}).garantie || ""}
+                onChange={e => {
+                  const newMentions = { ...(dealer.business_mentions || {}), garantie: e.target.value };
+                  setDealer({ ...dealer, business_mentions: newMentions });
+                }}
+                style={{ fontSize: 13, lineHeight: 1.5, width: "100%" }}
+              />
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "var(--muted)", marginBottom: 6, letterSpacing: 0.3 }}>
+                CONDITIONS DE VENTE
+              </label>
+              <textarea
+                className="form-input"
+                rows={3}
+                placeholder="Exemple : Paiement intégral exigé à la livraison du véhicule. Le transfert de propriété s'opère au paiement complet du prix. Les risques sont transférés à l'acquéreur dès la livraison."
+                value={(dealer.business_mentions || {}).conditions_vente || ""}
+                onChange={e => {
+                  const newMentions = { ...(dealer.business_mentions || {}), conditions_vente: e.target.value };
+                  setDealer({ ...dealer, business_mentions: newMentions });
+                }}
+                style={{ fontSize: 13, lineHeight: 1.5, width: "100%" }}
+              />
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "var(--muted)", marginBottom: 6, letterSpacing: 0.3 }}>
+                CESSION
+              </label>
+              <textarea
+                className="form-input"
+                rows={2}
+                placeholder="Exemple : Certificat de cession Cerfa 15776 fourni séparément à la livraison."
+                value={(dealer.business_mentions || {}).cession || ""}
+                onChange={e => {
+                  const newMentions = { ...(dealer.business_mentions || {}), cession: e.target.value };
+                  setDealer({ ...dealer, business_mentions: newMentions });
+                }}
+                style={{ fontSize: 13, lineHeight: 1.5, width: "100%" }}
+              />
+            </div>
+
+            <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 18, paddingTop: 16, borderTop: "1px solid var(--border2)" }}>
+              <button
+                className="btn btn-primary"
+                onClick={async () => {
+                  // Pousser à IOBILL via sync_company
+                  try {
+                    const r = await fetch("/api/iobill-bridge", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+                      body: JSON.stringify({ action: "sync_company" })
+                    });
+                    const j = await r.json();
+                    if (j.ok) {
+                      alert("✅ Mentions transmises à IO BILL !");
+                    } else {
+                      alert("❌ Erreur : " + (j.error || j.details || "inconnue"));
+                    }
+                  } catch (e) {
+                    alert("❌ Erreur réseau : " + e.message);
+                  }
+                }}
+              >
+                🦉 Pousser à IO BILL
+              </button>
+              <div style={{ fontSize: 11, color: "var(--muted)" }}>
+                Sauvegarde locale auto. Cliquez pour propager à IO BILL.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="settings-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, maxWidth: 900 }}>
 

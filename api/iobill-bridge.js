@@ -115,7 +115,9 @@ async function handleLink(user, garage, supabase, body, res) {
       postal_code: garage.code_postal || null,
       city: garage.ville || null,
       country: 'FR'
-    }
+    },
+    // v8.39 — Mentions garage (saisies dans Paramètres > Mentions garage côté IOCAR)
+    business_mentions: garage.business_mentions || null
   };
 
   const j = await callIobill(linkPayload);
@@ -171,7 +173,9 @@ async function handleSyncCompany(garage, supabase, res) {
       postal_code: garage.code_postal || null,
       city: garage.ville || null,
       country: 'FR'
-    }
+    },
+    // v8.39 — Mentions garage (saisies dans Paramètres > Mentions garage côté IOCAR)
+    business_mentions: garage.business_mentions || null
   };
 
   const j = await callIobill(payload);
@@ -232,7 +236,8 @@ async function handlePushInvoice(garage, supabase, body, res) {
   const payload = {
     action: 'push_invoice',
     token: garage.iobill_api_token,
-    invoice: mappedInvoice
+    invoice: mappedInvoice,
+    company_update: buildCompanyUpdateFromGarage(garage)
   };
 
   const j = await callIobill(payload);
@@ -318,7 +323,8 @@ async function handlePushInvoiceDraft(garage, supabase, body, res) {
   const payload = {
     action: 'push_invoice',
     token: garage.iobill_api_token,
-    invoice: mappedInvoice
+    invoice: mappedInvoice,
+    company_update: buildCompanyUpdateFromGarage(garage)
   };
   const j = await callIobill(payload);
 
@@ -429,7 +435,8 @@ async function handleMarkInvoicePaid(garage, supabase, body, res) {
   const payload = {
     action: 'push_invoice',
     token: garage.iobill_api_token,
-    invoice: mappedInvoice
+    invoice: mappedInvoice,
+    company_update: buildCompanyUpdateFromGarage(garage)
   };
   const j = await callIobill(payload);
 
@@ -746,51 +753,62 @@ function mapOrderToInvoice(order, calc) {
       carburant: sanitizeString(v.carburant) || null,
       genre: sanitizeString(v.genre) || null
     },
-    // v8.38 — Mentions garage construites depuis l'order (durée garantie variable, etc.)
-    business_mentions: buildGarageMentions(order),
+    // v8.39 — Les mentions sont stock\u00e9es au niveau company (saisies une fois
+    // dans Param\u00e8tres > Mentions garage). On les enrichit juste ici si l'order
+    // a des sp\u00e9cificit\u00e9s qui surchargent les valeurs par d\u00e9faut.
+    business_mentions: buildOrderSpecificMentions(order),
     vat_regime: avecTva ? 'standard' : 'margin_297a'
   };
 }
 
-// v8.38 — Construit les mentions garage à partir de l'order IOCAR.
-// Génère 3 mentions standardisées : garantie, conditions de vente, cession.
-function buildGarageMentions(order) {
+// v8.39 — Construit les mentions SP\u00c9CIFIQUES \u00e0 cet order qui surchargent
+// les mentions globales du garage. Renvoie null si rien de sp\u00e9cifique
+// \u2192 le PDF utilisera alors company.business_mentions par d\u00e9faut.
+function buildOrderSpecificMentions(order) {
+  const overrides = {};
   const garantieMois = parseInt(order.garantie_mois) || 0;
-  const mentions = {};
 
-  // GARANTIE — selon la durée définie sur la facture
-  if (garantieMois > 0) {
-    mentions.garantie = sanitizeString(
-      `Garantie contractuelle de ${garantieMois} mois à compter de la date de livraison, ` +
-      `couvrant les pièces et la main d'œuvre selon les conditions générales de vente. ` +
-      `La garantie légale de conformité (art. L.217-3 et suivants du Code de la consommation) ` +
-      `et la garantie des vices cachés (art. 1641 du Code civil) s'appliquent en sus.`
+  // Si l'order a une dur\u00e9e de garantie diff\u00e9rente de la valeur par d\u00e9faut
+  // garage, on peut g\u00e9n\u00e9rer une note de surcharge. Pour l'instant on
+  // se contente d'ajouter une mention discr\u00e8te quand la garantie est
+  // explicitement \u00e0 0 (vendu sans garantie commerciale).
+  if (garantieMois === 0 && order.garantie_mois !== undefined) {
+    overrides.garantie_override = sanitizeString(
+      'V\u00e9hicule vendu sans garantie commerciale (uniquement les garanties l\u00e9gales).'
     );
-  } else {
-    mentions.garantie = sanitizeString(
-      `Véhicule vendu sans garantie commerciale. La garantie légale de conformité ` +
-      `(art. L.217-3 du Code de la consommation) et la garantie des vices cachés ` +
-      `(art. 1641 du Code civil) s'appliquent.`
-    );
+  } else if (garantieMois > 0) {
+    overrides.garantie_duree = `${garantieMois} mois`;
   }
 
-  // CONDITIONS — paiement intégral à la livraison
-  mentions.conditions_vente = sanitizeString(
-    `Paiement intégral exigé à la livraison du véhicule. ` +
-    `Le transfert de propriété s'opère au paiement complet du prix. ` +
-    `Les risques sont transférés à l'acquéreur dès la livraison.`
-  );
-
-  // CESSION — date de cession si fournie
+  // Date de cession sp\u00e9cifique \u00e0 cet order
   if (order.cession_date) {
-    mentions.cession = sanitizeString(
-      `Cession du véhicule effectuée le ${order.cession_date}` +
-      (order.cession_heure ? ` à ${order.cession_heure}` : '') +
-      `. Certificat de cession Cerfa 15776 fourni séparément.`
-    );
+    overrides.cession_date = order.cession_date;
+    if (order.cession_heure) overrides.cession_heure = order.cession_heure;
   }
 
-  return mentions;
+  return Object.keys(overrides).length > 0 ? overrides : null;
+}
+
+// v8.39 — Construit un objet company_update à envoyer à IOBILL à chaque push.
+// IOBILL utilisera ces champs pour remplir les valeurs vides côté companies
+// (au cas où link_account initial avait des données incomplètes).
+function buildCompanyUpdateFromGarage(garage) {
+  return {
+    legal_name: garage.nom || null,
+    trade_name: garage.nom_commercial || null,
+    siret: garage.siret || null,
+    vat_number: garage.tva_intra || null,
+    ape_code: garage.code_ape || null,
+    phone: garage.telephone || null,
+    website: garage.site_web || null,
+    address: {
+      line1: garage.adresse || null,
+      postal_code: garage.code_postal || null,
+      city: garage.ville || null,
+      country: 'FR'
+    },
+    business_mentions: garage.business_mentions || null
+  };
 }
 
 // Map les modes de paiement IOCAR → IOBILL
