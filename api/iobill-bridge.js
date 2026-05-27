@@ -746,8 +746,51 @@ function mapOrderToInvoice(order, calc) {
       carburant: sanitizeString(v.carburant) || null,
       genre: sanitizeString(v.genre) || null
     },
+    // v8.38 — Mentions garage construites depuis l'order (durée garantie variable, etc.)
+    business_mentions: buildGarageMentions(order),
     vat_regime: avecTva ? 'standard' : 'margin_297a'
   };
+}
+
+// v8.38 — Construit les mentions garage à partir de l'order IOCAR.
+// Génère 3 mentions standardisées : garantie, conditions de vente, cession.
+function buildGarageMentions(order) {
+  const garantieMois = parseInt(order.garantie_mois) || 0;
+  const mentions = {};
+
+  // GARANTIE — selon la durée définie sur la facture
+  if (garantieMois > 0) {
+    mentions.garantie = sanitizeString(
+      `Garantie contractuelle de ${garantieMois} mois à compter de la date de livraison, ` +
+      `couvrant les pièces et la main d'œuvre selon les conditions générales de vente. ` +
+      `La garantie légale de conformité (art. L.217-3 et suivants du Code de la consommation) ` +
+      `et la garantie des vices cachés (art. 1641 du Code civil) s'appliquent en sus.`
+    );
+  } else {
+    mentions.garantie = sanitizeString(
+      `Véhicule vendu sans garantie commerciale. La garantie légale de conformité ` +
+      `(art. L.217-3 du Code de la consommation) et la garantie des vices cachés ` +
+      `(art. 1641 du Code civil) s'appliquent.`
+    );
+  }
+
+  // CONDITIONS — paiement intégral à la livraison
+  mentions.conditions_vente = sanitizeString(
+    `Paiement intégral exigé à la livraison du véhicule. ` +
+    `Le transfert de propriété s'opère au paiement complet du prix. ` +
+    `Les risques sont transférés à l'acquéreur dès la livraison.`
+  );
+
+  // CESSION — date de cession si fournie
+  if (order.cession_date) {
+    mentions.cession = sanitizeString(
+      `Cession du véhicule effectuée le ${order.cession_date}` +
+      (order.cession_heure ? ` à ${order.cession_heure}` : '') +
+      `. Certificat de cession Cerfa 15776 fourni séparément.`
+    );
+  }
+
+  return mentions;
 }
 
 // Map les modes de paiement IOCAR → IOBILL
