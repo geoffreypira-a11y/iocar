@@ -7075,45 +7075,19 @@ function CrmPage({ clients, setClients, orders, viewMode, dealer, setDealer, tok
     return matchS && matchF;
   });
 
-  // v8.43 — Helper réutilisable : pousser un client à IOBILL (sync proactive CRM mono-source)
-  // NB : on délaie de 600ms pour laisser le temps à sb.upsert IOCAR de persister
-  // (sinon le handler côté backend lirait la version stale ou rien du tout).
-  const syncClientToIobill = (clientId, action = 'sync_client') => {
-    if (!token || !dealer?.iobill_auto_push || !dealer?.iobill_company_id) return;
-    if (!clientId) return;
-    setTimeout(() => {
-      fetch("/api/iobill-bridge", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ action, client_id: clientId })
-      })
-        .then(r => r.json())
-        .then(j => {
-          if (j.ok) {
-            console.log(`👥 Client ${action === 'sync_client' ? 'synchronisé' : 'supprimé'} côté IOBILL`);
-          } else if (j.error) {
-            console.warn(`Sync client IOBILL (${action}) : erreur`, j.error);
-          }
-        })
-        .catch(e => console.warn(`Sync client IOBILL (${action}) : échec réseau`, e));
-    }, 600);
-  };
-
   const save = (c) => {
     const exists = clients.find(x => x.id === c.id);
     setClients(exists ? clients.map(x => x.id === c.id ? c : x) : [c, ...clients]);
     setModal(null);
     if (fiche?.id === c.id) setFiche(c);
-    // v8.43 — Sync immédiat vers IOBILL (créa ou modif)
-    syncClientToIobill(c.id, 'sync_client');
+    // v8.44 — Sync IOBILL géré automatiquement par le wrapper setClientsRaw au niveau App
   };
 
   const del = (id) => {
     setClients(clients.filter(c => c.id !== id));
     if (fiche?.id === id) setFiche(null);
     setPendingDelete(null);
-    // v8.43 — Suppression propagée à IOBILL (soft si factures liées, hard sinon)
-    syncClientToIobill(id, 'delete_client');
+    // v8.44 — Suppression IOBILL gérée automatiquement par le wrapper setClientsRaw au niveau App
   };
 
   const clientOrders = (clientId) => orders.filter(o => o.client_id === clientId || (fiche && o.client?.name?.toLowerCase() === fiche.nom?.toLowerCase()));
@@ -9282,9 +9256,52 @@ export default function App() {
 
   const setVehiclesRaw    = useTrial ? setDemoVehicles    : setVehicles;
   const setOrdersRaw      = useTrial ? setDemoOrders      : setOrders;
-  const setClientsRaw     = useTrial ? setDemoClients     : setClients;
+  const setClientsRawBase = useTrial ? setDemoClients     : setClients;
   const setLivrePoliceRaw = useTrial ? setDemoLivrePolice : setLivrePolice;
   const setDealerRaw      = saveDealer;
+
+  // v8.44 — Wrapper setClients : intercepte chaque modif et sync à IOBILL automatiquement
+  // Détecte créations (id absent dans prev), modifs (id existant mais data différente) et
+  // suppressions (id présent dans prev mais absent dans next). Délai 800ms pour laisser
+  // Supabase IOCAR persister d'abord.
+  const setClientsRaw = useCallback((newOrFn) => {
+    setClientsRawBase((prev) => {
+      const next = typeof newOrFn === "function" ? newOrFn(prev) : newOrFn;
+      if (!useTrial && token && dealer?.iobill_auto_push && dealer?.iobill_company_id) {
+        const prevById = new Map((prev || []).map(c => [c.id, c]));
+        const nextById = new Map((next || []).map(c => [c.id, c]));
+        // Créations + modifs
+        for (const [id, cli] of nextById) {
+          const old = prevById.get(id);
+          if (!old || JSON.stringify(old) !== JSON.stringify(cli)) {
+            setTimeout(() => {
+              fetch("/api/iobill-bridge", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ action: "sync_client", client_id: id })
+              }).then(r => r.json()).then(j => {
+                if (j.ok) console.log("👥 Client sync IOBILL :", id);
+                else console.warn("Sync client IOBILL erreur :", j.error);
+              }).catch(e => console.warn("Sync client IOBILL réseau :", e.message));
+            }, 800);
+          }
+        }
+        // Suppressions
+        for (const id of prevById.keys()) {
+          if (!nextById.has(id)) {
+            fetch("/api/iobill-bridge", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+              body: JSON.stringify({ action: "delete_client", client_id: id })
+            }).then(r => r.json()).then(j => {
+              if (j.ok) console.log("👥 Client supprimé IOBILL :", id);
+            }).catch(() => {});
+          }
+        }
+      }
+      return next;
+    });
+  }, [setClientsRawBase, useTrial, token, dealer]);
 
   const navItems = [
     { id: "dashboard",   icon: "📊", label: "Dashboard" },

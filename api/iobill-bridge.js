@@ -48,6 +48,8 @@ export default async function handler(req, res) {
     // v8.43 — CRM mono-source : sync proactive
     if (action === 'sync_client') return handleSyncClient(garage, supabase, req.body, res);
     if (action === 'delete_client') return handleDeleteClient(garage, supabase, req.body, res);
+    // v8.44 — Backfill : sync TOUS les clients IOCAR vers IOBILL en une fois
+    if (action === 'sync_all_clients') return handleSyncAllClients(garage, supabase, req.body, res);
     if (action === 'set_auto_push') return handleSetAutoPush(garage, supabase, req.body, res);
 
     return res.status(400).json({ error: `Action inconnue : ${action}` });
@@ -686,6 +688,70 @@ async function handleDeleteClient(garage, supabase, body, res) {
   });
 }
 
+// ───────────────────────────────────────────────────────────────────
+// v8.44 — SYNC_ALL_CLIENTS — Backfill : pousse tous les clients IOCAR vers IOBILL
+// Body : { } (pas de paramètres)
+//
+// Itère sur tous les clients du garage et appelle sync_client pour chacun.
+// Retourne un compte des succès/échecs. À utiliser après le déploiement v8.44
+// pour rattraper les clients déjà existants côté IOCAR.
+// ───────────────────────────────────────────────────────────────────
+async function handleSyncAllClients(garage, supabase, body, res) {
+  if (!garage.iobill_api_token) {
+    return res.status(400).json({ error: 'Compte IOBILL non lié' });
+  }
+
+  // Récupère tous les clients du garage
+  const { data: rows, error } = await supabase
+    .from('clients')
+    .select('*')
+    .eq('garage_id', garage.id);
+
+  if (error) {
+    return res.status(500).json({ error: 'Erreur lecture clients : ' + error.message });
+  }
+
+  let success = 0;
+  let failed = 0;
+  const errors = [];
+
+  for (const row of (rows || [])) {
+    // Flatten le data JSONB si applicable
+    const client = (row.data && typeof row.data === 'object')
+      ? { ...row.data, ...row, id: row.id }
+      : row;
+
+    const mappedClient = mapClientToIobill(client);
+    if (!mappedClient) {
+      failed++;
+      errors.push({ id: row.id, error: 'Mapping impossible' });
+      continue;
+    }
+
+    const payload = {
+      action: 'sync_client',
+      token: garage.iobill_api_token,
+      client: mappedClient
+    };
+    const j = await callIobill(payload);
+
+    if (j.ok) {
+      success++;
+    } else {
+      failed++;
+      errors.push({ id: row.id, error: j.error || 'Unknown' });
+    }
+  }
+
+  return res.status(200).json({
+    ok: true,
+    total: (rows || []).length,
+    success,
+    failed,
+    errors: errors.slice(0, 10) // Garde max 10 erreurs pour le retour
+  });
+}
+
 async function handleSetAutoPush(garage, supabase, body, res) {
   const enabled = !!body?.enabled;
   const { error } = await supabase
@@ -912,14 +978,19 @@ function mapOrderToInvoice(order, calc) {
 
   // ─── Client : structure IOCAR = order.client { name, address, phone, email, siren }
   // Si siren rempli → société. Sinon particulier (on splite le name).
+  // v8.44 — On extrait aussi l'external_id du client (id IOCAR) pour permettre
+  // à IOBILL de matcher par (external_source, external_id) → ZÉRO doublon, même
+  // si l'email/téléphone change.
   const cli = order.client || {};
   const hasSiren = !!(cli.siren && String(cli.siren).trim());
-  // Adresse : peut contenir des \n (saisie multi-lignes). On garde le texte
-  // mais en single-line séparé par " — " pour rester compatible pdf-lib.
   const cleanAddress = cli.address ? sanitizeString(cli.address, ' — ') : null;
+  // L'external_id du client : prioritairement order.client_id (réf stable en BDD),
+  // sinon order.client.id (cas où le client est embedded directement).
+  const clientExternalId = order.client_id || cli.id || null;
   let clientPayload;
   if (hasSiren) {
     clientPayload = {
+      external_id: clientExternalId ? String(clientExternalId) : null,
       legal_name: sanitizeString(cli.name) || null,
       first_name: null,
       last_name: null,
@@ -938,6 +1009,7 @@ function mapOrderToInvoice(order, calc) {
     const firstName = parts.length > 1 ? parts.slice(0, -1).join(' ') : (parts[0] || null);
     const lastName = parts.length > 1 ? parts[parts.length - 1] : null;
     clientPayload = {
+      external_id: clientExternalId ? String(clientExternalId) : null,
       legal_name: null,
       first_name: firstName || null,
       last_name: lastName || null,
@@ -1185,13 +1257,15 @@ function mapOrderToCreditNote(order, calc, overrideStatus = null) {
     discount_pct: 0
   }];
 
-  // Client
+  // Client — v8.44 ajout external_id pour matching fiable
   const cli = order.client || {};
   const hasSiren = !!(cli.siren && String(cli.siren).trim());
   const cleanAddress = cli.address ? sanitizeString(cli.address, ' — ') : null;
+  const clientExternalId = order.client_id || cli.id || null;
   let clientPayload;
   if (hasSiren) {
     clientPayload = {
+      external_id: clientExternalId ? String(clientExternalId) : null,
       legal_name: sanitizeString(cli.name) || null,
       first_name: null, last_name: null,
       siret: String(cli.siren).replace(/\s/g, '') || null,
@@ -1206,6 +1280,7 @@ function mapOrderToCreditNote(order, calc, overrideStatus = null) {
     const firstName = parts.length > 1 ? parts.slice(0, -1).join(' ') : (parts[0] || null);
     const lastName = parts.length > 1 ? parts[parts.length - 1] : null;
     clientPayload = {
+      external_id: clientExternalId ? String(clientExternalId) : null,
       legal_name: null,
       first_name: firstName || null, last_name: lastName || null,
       siret: null,
