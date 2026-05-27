@@ -45,6 +45,9 @@ export default async function handler(req, res) {
     if (action === 'mark_invoice_paid') return handleMarkInvoicePaid(garage, supabase, req.body, res);
     // v8.41 — Action dédiée pour les avoirs (route vers credit_notes côté IOBILL)
     if (action === 'push_credit_note') return handlePushCreditNote(garage, supabase, req.body, res);
+    // v8.43 — CRM mono-source : sync proactive
+    if (action === 'sync_client') return handleSyncClient(garage, supabase, req.body, res);
+    if (action === 'delete_client') return handleDeleteClient(garage, supabase, req.body, res);
     if (action === 'set_auto_push') return handleSetAutoPush(garage, supabase, req.body, res);
 
     return res.status(400).json({ error: `Action inconnue : ${action}` });
@@ -590,6 +593,99 @@ async function handlePushCreditNote(garage, supabase, body, res) {
 // SET_AUTO_PUSH
 // Body : { enabled: bool }
 // ───────────────────────────────────────────────────────────────────
+// ───────────────────────────────────────────────────────────────────
+// v8.43 — SYNC_CLIENT — Pousse un client IOCAR vers IOBILL
+// Body : { client_id }  (id du client côté table IOCAR clients)
+//
+// Charge le client depuis IOCAR clients, le mappe via mapClientToIobill,
+// et appelle l'action sync_client côté pont IOBILL.
+// ───────────────────────────────────────────────────────────────────
+async function handleSyncClient(garage, supabase, body, res) {
+  if (!garage.iobill_api_token) {
+    return res.status(400).json({ error: 'Compte IOBILL non lié' });
+  }
+  const clientId = body?.client_id;
+  if (!clientId) return res.status(400).json({ error: 'client_id requis' });
+
+  // Charger le client depuis IOCAR (table clients, architecture similaire à orders)
+  const { data: row, error } = await supabase
+    .from('clients')
+    .select('*')
+    .eq('id', clientId)
+    .eq('garage_id', garage.id)
+    .single();
+
+  if (error || !row) {
+    return res.status(404).json({ error: 'Client introuvable' });
+  }
+
+  // Si la table clients utilise un data JSONB comme orders, flatten d'abord
+  const client = (row.data && typeof row.data === 'object')
+    ? { ...row.data, ...row, id: row.id }
+    : row;
+
+  const mappedClient = mapClientToIobill(client);
+  if (!mappedClient) {
+    return res.status(400).json({ error: 'Impossible de mapper le client' });
+  }
+
+  const payload = {
+    action: 'sync_client',
+    token: garage.iobill_api_token,
+    client: mappedClient
+  };
+  const j = await callIobill(payload);
+
+  if (!j.ok) {
+    return res.status(502).json({
+      error: 'Échec sync client IOBILL',
+      details: j.error, last_error: j.last_error, full_payload: j.full_payload
+    });
+  }
+
+  return res.status(200).json({
+    ok: true,
+    client_id: j.data.client_id,
+    external_managed: j.data.external_managed
+  });
+}
+
+// ───────────────────────────────────────────────────────────────────
+// v8.43 — DELETE_CLIENT — Supprime un client côté IOBILL
+// Body : { client_id } (id IOCAR du client à supprimer)
+//
+// Appelé quand on supprime un client dans IOCAR. Si le client a des
+// factures liées côté IOBILL, soft delete (déverrouille la lecture seule).
+// Sinon, hard delete.
+// ───────────────────────────────────────────────────────────────────
+async function handleDeleteClient(garage, supabase, body, res) {
+  if (!garage.iobill_api_token) {
+    return res.status(400).json({ error: 'Compte IOBILL non lié' });
+  }
+  const clientId = body?.client_id;
+  if (!clientId) return res.status(400).json({ error: 'client_id requis' });
+
+  const payload = {
+    action: 'delete_client',
+    token: garage.iobill_api_token,
+    external_id: String(clientId)
+  };
+  const j = await callIobill(payload);
+
+  if (!j.ok) {
+    return res.status(502).json({
+      error: 'Échec delete client IOBILL',
+      details: j.error, last_error: j.last_error, full_payload: j.full_payload
+    });
+  }
+
+  return res.status(200).json({
+    ok: true,
+    soft_deleted: !!j.data.soft_deleted,
+    hard_deleted: !!j.data.hard_deleted
+  });
+}
+
 async function handleSetAutoPush(garage, supabase, body, res) {
   const enabled = !!body?.enabled;
   const { error } = await supabase
@@ -914,6 +1010,56 @@ function buildOrderSpecificMentions(order) {
   }
 
   return Object.keys(overrides).length > 0 ? overrides : null;
+}
+
+// v8.43 — Helper : mappe un client IOCAR vers la structure attendue par IOBILL.
+// Réutilisable pour push_invoice (snapshot) + sync_client (proactif).
+//
+// Convention IOCAR : un client a { id, name, address, phone, email, siren }
+// - name est "Prénom Nom" pour particuliers ou raison sociale pour pros
+// - siren rempli (9 chiffres) → société
+// - address est un texte multiligne (rue \n CP ville)
+function mapClientToIobill(cli) {
+  if (!cli) return null;
+  const hasSiren = !!(cli.siren && String(cli.siren).trim());
+  // Adresse multi-ligne : on parse en line1/postal_code/city (réutilise parseGarageAddress)
+  const addrParsed = parseGarageAddress(cli.address);
+
+  if (hasSiren) {
+    return {
+      external_id: String(cli.id || ''),
+      legal_name: sanitizeString(cli.name) || null,
+      first_name: null,
+      last_name: null,
+      siret: String(cli.siren).replace(/\s/g, '') || null,
+      email: sanitizeString(cli.email) || null,
+      phone: sanitizeString(cli.phone) || null,
+      address_line1: addrParsed.line1,
+      postal_code: addrParsed.postal_code,
+      city: addrParsed.city,
+      country: 'FR'
+    };
+  }
+
+  // Particulier : splite "Jean Dupont" en first=Jean / last=Dupont
+  const fullName = sanitizeString(String(cli.name || '').trim());
+  const parts = fullName.split(/\s+/);
+  const firstName = parts.length > 1 ? parts.slice(0, -1).join(' ') : (parts[0] || null);
+  const lastName = parts.length > 1 ? parts[parts.length - 1] : null;
+
+  return {
+    external_id: String(cli.id || ''),
+    legal_name: null,
+    first_name: firstName || null,
+    last_name: lastName || null,
+    siret: null,
+    email: sanitizeString(cli.email) || null,
+    phone: sanitizeString(cli.phone) || null,
+    address_line1: addrParsed.line1,
+    postal_code: addrParsed.postal_code,
+    city: addrParsed.city,
+    country: 'FR'
+  };
 }
 
 // v8.39 — Construit un objet company_update à envoyer à IOBILL à chaque push.

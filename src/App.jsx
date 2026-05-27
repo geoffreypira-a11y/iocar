@@ -7031,7 +7031,7 @@ const STATUTS_CLIENT = {
   inactif:     { label: "Inactif",        cls: "badge-muted",   icon: "💤" },
 };
 
-function CrmPage({ clients, setClients, orders, viewMode, dealer, setDealer }) {
+function CrmPage({ clients, setClients, orders, viewMode, dealer, setDealer, token }) {
   const [search, setSearch]         = useState("");
   const [filterStatut, setFilter]   = useState("all");
   const [modal, setModal]           = useState(null);
@@ -7075,17 +7075,45 @@ function CrmPage({ clients, setClients, orders, viewMode, dealer, setDealer }) {
     return matchS && matchF;
   });
 
+  // v8.43 — Helper réutilisable : pousser un client à IOBILL (sync proactive CRM mono-source)
+  // NB : on délaie de 600ms pour laisser le temps à sb.upsert IOCAR de persister
+  // (sinon le handler côté backend lirait la version stale ou rien du tout).
+  const syncClientToIobill = (clientId, action = 'sync_client') => {
+    if (!token || !dealer?.iobill_auto_push || !dealer?.iobill_company_id) return;
+    if (!clientId) return;
+    setTimeout(() => {
+      fetch("/api/iobill-bridge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action, client_id: clientId })
+      })
+        .then(r => r.json())
+        .then(j => {
+          if (j.ok) {
+            console.log(`👥 Client ${action === 'sync_client' ? 'synchronisé' : 'supprimé'} côté IOBILL`);
+          } else if (j.error) {
+            console.warn(`Sync client IOBILL (${action}) : erreur`, j.error);
+          }
+        })
+        .catch(e => console.warn(`Sync client IOBILL (${action}) : échec réseau`, e));
+    }, 600);
+  };
+
   const save = (c) => {
     const exists = clients.find(x => x.id === c.id);
     setClients(exists ? clients.map(x => x.id === c.id ? c : x) : [c, ...clients]);
     setModal(null);
     if (fiche?.id === c.id) setFiche(c);
+    // v8.43 — Sync immédiat vers IOBILL (créa ou modif)
+    syncClientToIobill(c.id, 'sync_client');
   };
 
   const del = (id) => {
     setClients(clients.filter(c => c.id !== id));
     if (fiche?.id === id) setFiche(null);
     setPendingDelete(null);
+    // v8.43 — Suppression propagée à IOBILL (soft si factures liées, hard sinon)
+    syncClientToIobill(id, 'delete_client');
   };
 
   const clientOrders = (clientId) => orders.filter(o => o.client_id === clientId || (fiche && o.client?.name?.toLowerCase() === fiche.nom?.toLowerCase()));
@@ -9492,7 +9520,7 @@ export default function App() {
             {tab === "dashboard"   && <Dashboard vehicles={activeVehicles} setVehicles={setVehiclesRaw} orders={activeOrders} setTab={setTab} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} livrePolice={livrePolice} dealer={dealer} setDealer={setDealerRaw} />}
             {tab === "fleet"       && <FleetPage vehicles={activeVehicles} setVehicles={setVehiclesRaw} orders={activeOrders} setOrders={setOrdersRaw} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} livrePolice={activeLivrePolice} setLivrePolice={setLivrePoliceRaw} viewMode={viewMode} garageId={garageId} dealer={dealer} token={token} />}
             {tab === "orders"      && <OrdersPage orders={activeOrders} setOrders={setOrdersRaw} vehicles={activeVehicles} setVehiclesRaw={setVehiclesRaw} dealer={dealer} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} clients={activeClients} setClients={setClientsRaw} viewMode={viewMode} token={token} />}
-            {tab === "crm"         && <CrmPage clients={activeClients} setClients={setClientsRaw} orders={activeOrders} viewMode={viewMode} dealer={dealer} setDealer={setDealerRaw} />}
+            {tab === "crm"         && <CrmPage clients={activeClients} setClients={setClientsRaw} orders={activeOrders} viewMode={viewMode} dealer={dealer} setDealer={setDealerRaw} token={token} />}
             {tab === "livrepolice" && (viewMode === "trial" ? (
               <div className="page" style={{ textAlign: "center", paddingTop: 80 }}>
                 <div style={{ fontSize: 48, marginBottom: 16 }}>📋</div>
