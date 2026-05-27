@@ -2,21 +2,25 @@
 // ═══════════════════════════════════════════════════════════════════
 // Bandeau d'état "🦉 Transmission IO BILL" sur une facture IOCAR.
 //
-// v8.40.2 — Pilule entièrement cliquable + statut basé sur LIVRÉ
-//
-// Architecture : IOCAR = source de vérité, IOBILL = lecture seule.
-//   1. BC → Facture (auto hook front) : push status='draft'
-//   2. Clic "Livré" sur le véhicule (auto hook FleetPage) : update vers status='paid'
+// v8.40.3 — Source de vérité = IOBILL
 //
 // Logique d'état :
-//   - vehicle.statut === "livré" → côté IOBILL : Transmise (vert)
-//   - sinon (même si payé)         → côté IOBILL : En brouillon (orange)
+//   - iobill_pdf_url rempli → IOBILL a généré le Factur-X final
+//                              (= la facture est passée en status='paid'
+//                                côté IOBILL au clic Livré côté IOCAR)
+//                              → ✅ Transmise (vert)
+//   - synchronisée mais sans pdf_url → toujours en draft chez IOBILL
+//                              → 📝 En brouillon (orange)
+//
+// Architecture : IOCAR = source de vérité métier, IOBILL = source de vérité statut
+//   1. BC → Facture (auto hook front) : push_invoice_draft → status='draft'
+//   2. Clic "Livré" sur le véhicule (hook FleetPage) : mark_invoice_paid → status='paid'
+//      + iobill_pdf_url se remplit (Factur-X généré)
 //
 // Props :
 //   - token    : JWT Supabase IOCAR
 //   - order    : ligne `orders`
 //   - garage   : ligne `garages`
-//   - isLivre  : (optionnel) true si véhicule lié au statut "livré"
 //   - onSync   : callback(patch) après sync pour rafraîchir l'order parent
 // ═══════════════════════════════════════════════════════════════════
 import React, { useState } from "react";
@@ -38,7 +42,7 @@ function computeIsPaid(order) {
   return reste <= 0.01;
 }
 
-export default function IobillInvoiceSync({ token, order, garage, isLivre, onSync }) {
+export default function IobillInvoiceSync({ token, order, garage, onSync }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [expanded, setExpanded] = useState(false);
@@ -48,8 +52,10 @@ export default function IobillInvoiceSync({ token, order, garage, isLivre, onSyn
   const synced = !!order?.iobill_invoice_id && !order?.iobill_sync_error;
   const hasError = !!order?.iobill_sync_error;
   const orderIsPaid = computeIsPaid(order);
-  // v8.40.2 — Le statut "Transmise" dépend de "livré", PAS du paiement
-  const reallyLivre = (typeof isLivre === "boolean") ? isLivre : false;
+  // v8.40.3 — Source de vérité = IOBILL
+  // Si le PDF Factur-X est généré, c'est que la facture est en paid côté IOBILL
+  // (le Factur-X n'est généré qu'au passage paid, pas en draft).
+  const isFinalized = !!order?.iobill_pdf_url;
 
   if (order?.type !== "facture" && order?.type !== "avoir") return null;
 
@@ -116,15 +122,15 @@ export default function IobillInvoiceSync({ token, order, garage, isLivre, onSyn
     pillColor = "var(--gold, #d4a843)";
     pillLabel = "Non transmise";
     pillIcon = "🦉";
-  } else if (!reallyLivre) {
-    // Synchro OK mais véhicule pas encore livré → toujours en brouillon
+  } else if (!isFinalized) {
+    // Sync OK mais Factur-X pas encore généré → toujours en draft chez IOBILL
     pillBg = "rgba(229,151,60,0.12)";
     pillBorder = "rgba(229,151,60,0.40)";
     pillColor = "var(--orange, #e5973c)";
     pillLabel = "En brouillon";
     pillIcon = "📝";
   } else {
-    // Synchro OK et véhicule livré → transmise et finalisée
+    // Factur-X généré → IOBILL a basculé en paid
     pillBg = "rgba(62,207,122,0.12)";
     pillBorder = "rgba(62,207,122,0.40)";
     pillColor = "var(--green, #3ecf7a)";
@@ -152,7 +158,6 @@ export default function IobillInvoiceSync({ token, order, garage, isLivre, onSyn
           transition: "background 0.15s, transform 0.1s",
           transform: hovered ? "scale(1.02)" : "scale(1)",
           boxShadow: hovered ? "0 2px 8px rgba(0,0,0,0.2)" : "none",
-          // Important : tous ces éléments enfants ne bloquent pas le click
           userSelect: "none"
         }}
       >
@@ -215,7 +220,7 @@ export default function IobillInvoiceSync({ token, order, garage, isLivre, onSyn
           {order.iobill_invoice_number && (
             <div>· N° {order.iobill_invoice_number}</div>
           )}
-          {!reallyLivre && (
+          {!isFinalized && (
             <div style={{ marginTop: 4, fontStyle: "italic" }}>
               ⏳ Sera finalisée au passage « 🚗 Livré » du véhicule
             </div>
@@ -234,9 +239,7 @@ export default function IobillInvoiceSync({ token, order, garage, isLivre, onSyn
             >
               Voir le PDF Factur-X ↗
             </a>
-          ) : (reallyLivre && (
-            <div style={{ marginTop: 2 }}>⏳ PDF Factur-X en génération</div>
-          ))}
+          ) : null}
         </div>
       )}
 
@@ -250,9 +253,9 @@ export default function IobillInvoiceSync({ token, order, garage, isLivre, onSyn
       <button
         onClick={(e) => {
           e.stopPropagation();
-          // Si véhicule pas encore livré : on push juste en draft (ou re-draft)
-          // Si véhicule livré : on push en paid
-          reallyLivre ? markPaid() : pushDraft();
+          // Si pas finalisée, on tente mark_invoice_paid (forcera bascule paid si payée)
+          // Si finalisée, idem (re-push pour rafraîchir)
+          isFinalized || orderIsPaid ? markPaid() : pushDraft();
         }}
         disabled={busy}
         style={{
@@ -268,8 +271,8 @@ export default function IobillInvoiceSync({ token, order, garage, isLivre, onSyn
         {busy ? "⏳ …" :
          hasError ? "🔁 Réessayer" :
          !synced ? "🦉 Transmettre" :
-         reallyLivre ? "🔄 Re-transmettre" :
-         "🔄 Re-transmettre brouillon"}
+         isFinalized ? "🔄 Re-transmettre" :
+         "🔄 Forcer la finalisation"}
       </button>
 
       {error && (

@@ -5231,17 +5231,13 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
                       )}
                     </div>
                     {/* v8.37 — État de transmission IO BILL (factures/avoirs uniquement) */}
-                    {/* v8.40.2 — Le statut "Transmise" dépend du véhicule LIVRÉ, pas du paiement */}
+                    {/* v8.40.3 — Le statut est calculé depuis order.iobill_pdf_url (source de vérité IOBILL) */}
                     {(o.type === "facture" || o.type === "avoir") && viewMode !== "trial" && (
                       <div style={{ marginTop: 6 }}>
                         <IobillInvoiceSync
                           token={token}
                           order={o}
                           garage={dealer}
-                          isLivre={(() => {
-                            const v = o.vehicle_id ? vehicles.find(x => x.id === o.vehicle_id) : null;
-                            return !!(v && v.statut === "livré");
-                          })()}
                           onSync={(patch) => setOrders(prev => (prev || []).map(x => x.id === o.id ? { ...x, ...patch } : x))}
                         />
                       </div>

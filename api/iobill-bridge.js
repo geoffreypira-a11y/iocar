@@ -29,9 +29,9 @@ export default async function handler(req, res) {
     const auth = await verifyUser(req);
     if (!auth) return res.status(401).json({ error: 'Non authentifié' });
     const { user, supabase } = auth;
-    // v8.40 — Aplatissement des champs JSONB data dans le garage pour
-    // que tous les handlers puissent lire garage.adresse, garage.nom, etc.
-    // directement (et pas seulement garage.data.adresse).
+    // v8.40.3 — flattenGarage défensif. Note : les champs IOCAR sont au
+    // top-level (name, address, phone, siret, tva_num, logo, business_mentions),
+    // PAS dans data JSONB. La fonction est conservée par sécurité.
     const garage = flattenGarage(auth.garage);
     if (!garage) return res.status(403).json({ error: 'Garage introuvable' });
 
@@ -100,24 +100,26 @@ async function handleLink(user, garage, supabase, body, res) {
   }
 
   // Construit le payload pour IOBILL en envoyant tous les champs disponibles
+  // v8.40.3 — bonnes colonnes IOCAR (name, address, phone, tva_num, etc.)
+  const addrLinkParsed = parseGarageAddress(garage.address);
   const linkPayload = {
     action: 'link_account',
     source_app: 'iocar',
     external_ref: garage.id,
     email: user.email || garage.email,
     password: password || undefined,
-    legal_name: garage.nom || garage.email || 'Garage',
-    trade_name: garage.nom_commercial || null,
+    legal_name: garage.name || garage.email || 'Garage',
+    trade_name: null,
     siret: garage.siret || null,
-    vat_number: garage.tva_intra || null,
-    ape_code: garage.code_ape || null,
-    phone: garage.telephone || null,
-    website: garage.site_web || null,
+    vat_number: garage.tva_num || null,
+    ape_code: null,
+    phone: garage.phone || null,
+    website: null,
     logo_url: null, // base64 → on traite séparément en phase ultérieure
     address: {
-      line1: garage.adresse || null,
-      postal_code: garage.code_postal || null,
-      city: garage.ville || null,
+      line1: addrLinkParsed.line1,
+      postal_code: addrLinkParsed.postal_code,
+      city: addrLinkParsed.city,
       country: 'FR'
     },
     // v8.39 — Mentions garage (saisies dans Paramètres > Mentions garage côté IOCAR)
@@ -162,24 +164,28 @@ async function handleSyncCompany(garage, supabase, res) {
     return res.status(400).json({ error: 'Compte IOBILL non lié' });
   }
 
+  // v8.40.3 — bonnes colonnes IOCAR
+  const addrSyncParsed = parseGarageAddress(garage.address);
   const payload = {
     action: 'sync_company',
     token: garage.iobill_api_token,
-    legal_name: garage.nom || null,
-    trade_name: garage.nom_commercial || null,
+    legal_name: garage.name || null,
+    trade_name: null,
     siret: garage.siret || null,
-    vat_number: garage.tva_intra || null,
-    ape_code: garage.code_ape || null,
-    phone: garage.telephone || null,
-    website: garage.site_web || null,
+    vat_number: garage.tva_num || null,
+    ape_code: null,
+    phone: garage.phone || null,
+    website: null,
     address: {
-      line1: garage.adresse || null,
-      postal_code: garage.code_postal || null,
-      city: garage.ville || null,
+      line1: addrSyncParsed.line1,
+      postal_code: addrSyncParsed.postal_code,
+      city: addrSyncParsed.city,
       country: 'FR'
     },
     // v8.39 — Mentions garage (saisies dans Paramètres > Mentions garage côté IOCAR)
-    business_mentions: garage.business_mentions || null
+    business_mentions: garage.business_mentions || null,
+    // v8.40.3 — Logo base64 (au cas où IOBILL ait perdu son logo_url)
+    logo_base64: garage.logo || null
   };
 
   const j = await callIobill(payload);
@@ -804,29 +810,82 @@ function buildOrderSpecificMentions(order) {
 // IOBILL utilisera ces champs pour remplir les valeurs vides côté companies
 // (au cas où link_account initial avait des données incomplètes).
 //
-// v8.40 — flattenGarage en amont aplatit data JSONB, donc on peut lire
-// garage.xxx directement (pas besoin de garage.data?.xxx).
+// v8.40.3 — CORRECTION CRITIQUE : les colonnes IOCAR sont au top-level
+// avec les noms suivants (voir migration garages) :
+//   - name (raison sociale, pas "nom")
+//   - address (adresse complète multiligne, pas "adresse")
+//   - phone (pas "telephone")
+//   - tva_num (pas "tva_intra")
+//   - siret, email, logo, business_mentions
+//
+// Et l'adresse est un texte MULTILIGNE :
+//   "ROUTE NATIONALE 568
+//    13740 LE ROVE"
+// → On parse pour extraire ligne1, code_postal, ville.
 function buildCompanyUpdateFromGarage(garage) {
+  // Parse l'adresse multiligne IOCAR pour extraire line1 / CP / ville
+  const addrParsed = parseGarageAddress(garage.address);
   return {
-    legal_name: garage.nom || null,
-    trade_name: garage.nom_commercial || null,
+    legal_name: garage.name || null,
+    trade_name: null,  // pas de champ dédié côté IOCAR
     siret: garage.siret || null,
-    vat_number: garage.tva_intra || null,
-    ape_code: garage.code_ape || null,
-    phone: garage.telephone || null,
-    website: garage.site_web || null,
+    vat_number: garage.tva_num || null,
+    ape_code: null,    // pas de champ dédié côté IOCAR
+    phone: garage.phone || null,
+    website: null,     // pas de champ dédié côté IOCAR
     address: {
-      line1: garage.adresse || null,
-      postal_code: garage.code_postal || null,
-      city: garage.ville || null,
+      line1: addrParsed.line1,
+      postal_code: addrParsed.postal_code,
+      city: addrParsed.city,
       country: 'FR'
     },
     business_mentions: garage.business_mentions || null,
-    // v8.39 — Logo base64 (IOCAR stocke en base64 dans garages.data.logo).
+    // v8.39 — Logo base64 stocké au top-level dans garages.logo
     // IOBILL uploadera vers son bucket company-logos UNIQUEMENT si logo_url
     // est vide côté IOBILL (préserve un logo défini manuellement par l'user).
     logo_base64: garage.logo || null
   };
+}
+
+// Parse une adresse multiligne style :
+//   "ROUTE NATIONALE 568
+//    13740 LE ROVE"
+// → { line1: "ROUTE NATIONALE 568", postal_code: "13740", city: "LE ROVE" }
+//
+// Tolère aussi une seule ligne avec CP + ville à la fin, ou inversement,
+// ou des lignes intermédiaires (qui sont ajoutées à line1).
+function parseGarageAddress(addressText) {
+  if (!addressText || typeof addressText !== 'string') {
+    return { line1: null, postal_code: null, city: null };
+  }
+  const lines = addressText.split('\n').map(s => s.trim()).filter(Boolean);
+  if (lines.length === 0) return { line1: null, postal_code: null, city: null };
+
+  // Cherche la ligne qui contient le code postal (5 chiffres en début)
+  const cpRegex = /^(\d{5})\s+(.+)$/;
+  let cpLineIdx = -1;
+  let postal_code = null, city = null;
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(cpRegex);
+    if (m) {
+      postal_code = m[1];
+      city = m[2];
+      cpLineIdx = i;
+      break;
+    }
+  }
+  // Toutes les lignes AVANT le CP forment l'adresse (line1)
+  let line1 = null;
+  if (cpLineIdx > 0) {
+    line1 = lines.slice(0, cpLineIdx).join(', ');
+  } else if (cpLineIdx === -1) {
+    // Pas de CP trouvé, on prend tout en line1
+    line1 = lines.join(', ');
+  } else {
+    // CP sur la 1ère ligne, on n'a pas de line1
+    line1 = null;
+  }
+  return { line1, postal_code, city };
 }
 
 // Map les modes de paiement IOCAR → IOBILL
@@ -918,10 +977,12 @@ function toIsoDate(input) {
 // Les colonnes iobill_* qu'on a ajoutées à `orders` directement (pour pouvoir
 // les indexer/requêter) restent au top-level — on les préserve.
 // ═══════════════════════════════════════════════════════════════════
-// v8.40 — flattenGarage : équivalent de flattenOrder pour les garages.
-// Les champs comme nom, siret, adresse, téléphone sont stockés dans
-// data JSONB côté Supabase. On les remonte au top-level pour que le
-// reste du code puisse lire garage.adresse plutôt que garage.data.adresse.
+// v8.40.3 — flattenGarage : utilitaire défensif.
+// IOCAR stocke les champs garage au TOP-LEVEL (name, address, phone, siret,
+// tva_num, logo, business_mentions...), pas dans data JSONB comme les orders.
+// Cette fonction reste là par sécurité au cas où certaines rows auraient
+// quand même un champ `data` à aplatir (rétrocompatibilité). Si pas de data,
+// retourne la row inchangée.
 function flattenGarage(row) {
   if (!row) return null;
   if (!row.data || typeof row.data !== 'object') return row;
