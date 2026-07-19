@@ -2640,6 +2640,30 @@ function FleetPage({ vehicles, setVehicles, orders, setOrders, apiKey, usage, se
     prevVehicleIdsRef.current = new Set(vehicles.map(v => v.id));
   }, [vehicles]); // Se déclenche quand les véhicules changent
 
+  // v8.48.6 — SYNC PRIX_ACHAT : quand un prix_achat est saisi/modifié côté véhicule
+  // et que l'entrée LP existe déjà avec prix_achat vide, on synchronise.
+  // Sécurité : on ne touche PAS aux entrées LP déjà sorties (historique inaltérable).
+  React.useEffect(() => {
+    if (!setLivrePolice || !vehicles) return;
+    setLivrePolice(currentLP => {
+      const lp = currentLP || [];
+      let changed = false;
+      const next = lp.map(e => {
+        // Skip si LP déjà sorti (historique figé), skip si prix_achat déjà renseigné
+        if (e.date_sortie) return e;
+        if (parseFloat(e.prix_achat) > 0) return e;
+        // Trouve le véhicule correspondant
+        const v = vehicles.find(x => x.id === e.vehicle_id || (x.plate && e.immat && x.plate === e.immat));
+        if (!v) return e;
+        const vPrix = parseFloat(v.prix_achat) || 0;
+        if (vPrix <= 0) return e;
+        changed = true;
+        return { ...e, prix_achat: v.prix_achat };
+      });
+      return changed ? next : lp;
+    });
+  }, [vehicles]);
+
   const filtered = vehicles.filter(v => {
     const matchS = !search || `${v.marque} ${v.modele} ${v.plate} ${v.finition}`.toLowerCase().includes(search.toLowerCase());
     const matchF = filter === "all" || v.statut === filter;
@@ -2687,8 +2711,15 @@ function FleetPage({ vehicles, setVehicles, orders, setOrders, apiKey, usage, se
                 acheteur_nom: clientName,
                 acheteur_adresse: clientAddress,
                 acheteur_phone: clientPhone,
-                // v8.37 — On ne touche PAS au prix_achat (info historique)
-                // mais on remplit prix_vente avec le total TTC final si vide
+                // v8.37 — On ne touche PAS au prix_achat SAUF si l'entrée LP a été créée
+                //         sans prix (import, reprise mal renseignée, etc.)
+                //         → on récupère la valeur véhicule courante à ce moment-là.
+                // v8.48.6 — Fix : si prix_achat vide côté LP mais renseigné côté véhicule,
+                //           on le synchronise pour permettre le calcul de marge.
+                prix_achat: (parseFloat(e.prix_achat) > 0)
+                  ? e.prix_achat
+                  : (parseFloat(v.prix_achat) || e.prix_achat || ""),
+                // v8.37 — On remplit prix_vente avec le total TTC final si vide
                 // (si déjà rempli manuellement, on respecte la valeur saisie)
                 prix_vente: e.prix_vente || prixVenteFinal,
               } : e
@@ -6585,7 +6616,7 @@ function LivreDePolice({ vehicles, livrePolice, setLivrePolice, dealer, viewMode
               <th>VIN</th>
               <th>Km</th>
               <th>Vendeur / Provenance</th>
-              <th>Prix achat</th>
+              <th>Prix achat / Marge</th>
               <th>Date sortie</th>
               <th>Acheteur</th>
               <th>Actions</th>
@@ -6617,7 +6648,37 @@ function LivreDePolice({ vehicles, livrePolice, setLivrePolice, dealer, viewMode
                   <div style={{ fontWeight: 600, fontSize: 12 }}>{e.vendeur_nom || "—"}</div>
                   <div style={{ fontSize: 11, color: "var(--muted)" }}>{e.vendeur_type === "pro" ? "🏢 Pro" : "👤 Particulier"} · {e.vendeur_piece_id}</div>
                 </td>
-                <td style={{ fontFamily: "DM Mono", color: "var(--red)" }}>{e.prix_achat ? fmt(e.prix_achat) : "—"}</td>
+                <td style={{ fontFamily: "DM Mono" }}>{(() => {
+                  // v8.48.6 — Affichage dynamique :
+                  //   - Véhicule en stock (pas de date_sortie) → prix d'achat
+                  //   - Véhicule livré → marge = prix_vente - prix_achat
+                  const prixA = parseFloat(e.prix_achat) || 0;
+                  const prixV = parseFloat(e.prix_vente) || 0;
+                  if (!e.date_sortie) {
+                    // En stock : affiche prix achat en rouge
+                    return prixA > 0
+                      ? <span style={{ color: "var(--red)" }}>{fmt(prixA)}</span>
+                      : <span style={{ color: "var(--muted)" }}>—</span>;
+                  }
+                  // Livré : affiche la marge
+                  if (prixA > 0 && prixV > 0) {
+                    const marge = prixV - prixA;
+                    return (
+                      <>
+                        <span style={{ color: marge >= 0 ? "var(--green)" : "var(--red)", fontWeight: 700 }}>
+                          {marge >= 0 ? "+" : ""}{fmt(marge)}
+                        </span>
+                        <div style={{ fontSize: 9, color: "var(--muted)", marginTop: 2 }}>
+                          {fmt(prixV)} − {fmt(prixA)}
+                        </div>
+                      </>
+                    );
+                  }
+                  // Fallback : au moins un des 2 est vide
+                  return prixA > 0
+                    ? <span style={{ color: "var(--red)" }}>{fmt(prixA)}</span>
+                    : <span style={{ color: "var(--muted)" }}>—</span>;
+                })()}</td>
                 <td style={{ fontSize: 12, color: e.date_sortie ? "var(--green)" : "var(--muted)" }}>
                   {e.date_sortie || "En stock"}
                   {e.date_sortie && e.motif_sortie && e.motif_sortie !== "vente" && (
