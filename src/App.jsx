@@ -747,13 +747,18 @@ function calcOrder(o) {
 
   let ht, tvaAmt;
   if (avecTva) {
-    // TVA calculée "en dedans" : HT = TTC / (1 + taux)
+    // TVA classique "en dedans" sur tout : HT = TTC / (1 + taux)
     ht = montantTTC_soumis / (1 + tvaPct / 100);
     tvaAmt = montantTTC_soumis - ht;
   } else {
-    // Pas de TVA (régime marge art. 297A)
-    ht = montantTTC_soumis;
-    tvaAmt = 0;
+    // v8.48.9 — Régime marge occasion (Art. 297A CGI) :
+    //   Le VÉHICULE est vendu sans TVA visible (elle est prélevée sur la marge du
+    //   garage, hors facture). Les FRAIS de mise à disposition restent taxables
+    //   au taux normal (prestation accessoire indépendante du véhicule d'occasion).
+    //   → HT = prixVehicule + (frais/1.20), TVA = (frais - frais/1.20)
+    const fraisHt = fraisMiseDispo / (1 + tvaPct / 100);
+    ht = prixApresRemise + fraisHt;
+    tvaAmt = fraisMiseDispo - fraisHt;
   }
 
   // Total TTC = montant soumis + carte grise (hors TVA) − reprise véhicule
@@ -2523,7 +2528,7 @@ function VehicleFiche({ v, dealer, onClose }) {
               <div>
                 <div className="fiche-price-label">Prix de vente</div>
                 <div className="fiche-price-val">{fmt(v.prix_vente)}</div>
-                <div style={{ fontSize: 11, color: "#6b6a7a", marginTop: 4 }}>TTC · Financement disponible</div>
+                <div style={{ fontSize: 11, color: "#6b6a7a", marginTop: 4 }}>TTC · Extension de garantie possible</div>
               </div>
               <div style={{ textAlign: "right", fontSize: 11, color: "#6b6a7a" }}>
                 <div style={{ fontWeight: 700, fontSize: 14, color: "#f0ede8" }}>{dealer?.name || "AUTO DEALER"}</div>
@@ -2570,7 +2575,9 @@ function FleetPage({ vehicles, setVehicles, orders, setOrders, apiKey, usage, se
           if (alreadyInLP) continue;
           
           const nums = lpCopy.map(e => parseInt(e.num_ordre) || 0);
-          const nextNum = nums.length > 0 ? Math.max(0, ...nums) + 1 : 1;
+          // v8.48.8 — Le num de départ peut être défini par le garage (registre papier existant)
+          const startOffset = parseInt(dealer?.lp_start_offset) || 1;
+          const nextNum = nums.length > 0 ? Math.max(0, ...nums) + 1 : startOffset;
 
           // Si le véhicule provient d'une reprise, on utilise les infos du client
           // qui a cédé le véhicule pour pré-remplir les champs vendeur du LP.
@@ -3371,7 +3378,7 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
               <input className="form-input" value={form.date_creation} onChange={e => set("date_creation", e.target.value)} />
             </div>
             <div className="form-group">
-              <label className="form-label">Échéance</label>
+              <label className="form-label">Livraison le</label>
               <input className="form-input" value={form.date_echeance} onChange={e => set("date_echeance", e.target.value)} placeholder="jj/mm/aaaa" />
             </div>
           </div>
@@ -4110,7 +4117,7 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
                 <div className="pdoc-type">{order.type === "facture" ? "FACTURE" : order.type === "avoir" ? "AVOIR" : "BON DE COMMANDE"}</div>
                 <div className="pdoc-ref">N° {order.ref}</div>
                 <div className="pdoc-ref">Date : {order.date_creation}</div>
-                {order.date_echeance && <div className="pdoc-ref">Échéance : {order.date_echeance}</div>}
+                {order.date_echeance && <div className="pdoc-ref">Livraison le : {order.date_echeance}</div>}
 
                 {/* Bloc CLIENT directement sous FACTURE/Ref pour gagner de la place verticale */}
                 <div style={{ marginTop: 16, paddingTop: 12, borderTop: "1px solid #e8e8e8", textAlign: "right" }}>
@@ -4203,12 +4210,14 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
                   <th style={{ textAlign: "center", width: 40 }}>Qté</th>
                   <th style={{ textAlign: "center", width: 50 }}>Unité</th>
                   <th style={{ textAlign: "right", width: 80 }}>P.U. HT</th>
-                  {c.avecTva && <th style={{ textAlign: "center", width: 50 }}>TVA</th>}
+                  <th style={{ textAlign: "center", width: 50 }}>TVA</th>
                   <th style={{ textAlign: "right", width: 90 }}>Total HT</th>
                 </tr>
               </thead>
               <tbody>
-                {/* L1 - Véhicule */}
+                {/* L1 - Véhicule
+                    v8.48.9 — En régime marge (avecTva=false), le véhicule n'a pas de TVA
+                    visible (elle est prélevée sur la marge). PU HT = TTC. */}
                 <tr>
                   <td style={{ fontSize: 11 }}>
                     VENTE VÉHICULE - {(() => {
@@ -4221,20 +4230,22 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
                   <td style={{ textAlign: "center", fontSize: 11 }}>1</td>
                   <td style={{ textAlign: "center", fontSize: 11 }}>u</td>
                   <td style={{ textAlign: "right", fontSize: 11 }}>{fmtDec(c.avecTva ? c.base / (1 + (c.tvaPct || 20) / 100) : c.base)}</td>
-                  {c.avecTva && <td style={{ textAlign: "center", fontSize: 11 }}>{c.tvaPct || 20}%</td>}
+                  <td style={{ textAlign: "center", fontSize: 11, color: c.avecTva ? undefined : "#888" }}>{c.avecTva ? `${c.tvaPct || 20}%` : "—"}</td>
                   <td style={{ textAlign: "right", fontSize: 11, fontWeight: 600 }}>{fmtDec(c.avecTva ? c.base / (1 + (c.tvaPct || 20) / 100) : c.base)}</td>
                 </tr>
-                {/* L2 - Frais de mise à disposition */}
+                {/* L2 - Frais de mise à disposition
+                    v8.48.9 — Les frais sont TOUJOURS taxables au taux normal, même en régime marge */}
                 {(parseFloat(order.frais_mise_dispo) || 0) > 0 && (() => {
                   const fmd = parseFloat(order.frais_mise_dispo) || 0;
-                  const fmdHt = c.avecTva ? fmd / (1 + (c.tvaPct || 20) / 100) : fmd;
+                  // En régime marge OU classique, les frais sont taxables au taux normal
+                  const fmdHt = fmd / (1 + (c.tvaPct || 20) / 100);
                   return (
                     <tr>
                       <td style={{ fontSize: 11 }}>Frais de mise à disposition</td>
                       <td style={{ textAlign: "center", fontSize: 11 }}>1</td>
                       <td style={{ textAlign: "center", fontSize: 11 }}>u</td>
                       <td style={{ textAlign: "right", fontSize: 11 }}>{fmtDec(fmdHt)}</td>
-                      {c.avecTva && <td style={{ textAlign: "center", fontSize: 11 }}>{c.tvaPct || 20}%</td>}
+                      <td style={{ textAlign: "center", fontSize: 11 }}>{c.tvaPct || 20}%</td>
                       <td style={{ textAlign: "right", fontSize: 11, fontWeight: 600 }}>{fmtDec(fmdHt)}</td>
                     </tr>
                   );
@@ -4256,8 +4267,10 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
                   </>
                 ) : (
                   <>
-                    <div className="pdoc-trow"><span>Montant TTC</span><span>{fmtDec(c.baseTotal)}</span></div>
-                    <div className="pdoc-trow" style={{ fontSize: 10, color: "#aaa" }}><span>TVA non applicable</span><span>Art. 297A CGI</span></div>
+                    {/* v8.48.9 — Régime marge : véhicule sans TVA + frais avec TVA sur taux normal */}
+                    <div className="pdoc-trow"><span>Montant HT</span><span>{fmtDec(c.ht)}</span></div>
+                    {c.tvaAmt > 0 && <div className="pdoc-trow"><span>TVA {c.tvaPct || 20}% (frais uniquement)</span><span>{fmtDec(c.tvaAmt)}</span></div>}
+                    <div className="pdoc-trow" style={{ fontSize: 10, color: "#aaa" }}><span>Véhicule hors TVA</span><span>Art. 297A CGI</span></div>
                     {c.remAmt > 0 && <div className="pdoc-trow" style={{ color: "#e5973c" }}><span>Remise</span><span>- {fmtDec(c.remAmt)}</span></div>}
                     {c.carteGrise > 0 && <div className="pdoc-trow"><span>Carte grise</span><span>{fmtDec(c.carteGrise)}</span></div>}
                     {c.repriseValeur > 0 && <div className="pdoc-trow" style={{ color: "#c79528" }}><span>Reprise véhicule</span><span>- {fmtDec(c.repriseValeur)}</span></div>}
@@ -6253,7 +6266,7 @@ function printRegistre(entries, dealer) {
   setTimeout(() => { win.print(); }, 800);
 }
 
-function LivreDePolice({ vehicles, livrePolice, setLivrePolice, dealer, viewMode }) {
+function LivreDePolice({ vehicles, livrePolice, setLivrePolice, dealer, setDealer, viewMode }) {
   const [modal, setModal] = useState(null);
   const [search, setSearch] = useState("");
   const [pendingDelete, setPendingDelete] = useState(null);
@@ -6272,7 +6285,11 @@ function LivreDePolice({ vehicles, livrePolice, setLivrePolice, dealer, viewMode
     !search || `${e.marque} ${e.modele} ${e.immat} ${e.vendeur_nom} ${e.acheteur_nom}`.toLowerCase().includes(search.toLowerCase())
   );
 
-  const nextNum = (entries.length > 0 ? Math.max(...entries.map(e => e.num_ordre || 0)) : 0) + 1;
+  // v8.48.8 — Le num de départ peut être défini par le garage (registre papier existant)
+  const startOffset = parseInt(dealer?.lp_start_offset) || 1;
+  const nextNum = entries.length > 0
+    ? Math.max(...entries.map(e => e.num_ordre || 0)) + 1
+    : startOffset;
 
   // ── HISTORIQUE LP — champs sensibles à tracer ──
   // Ces champs sont surveillés à chaque modification : si leur valeur change,
@@ -6589,6 +6606,36 @@ function LivreDePolice({ vehicles, livrePolice, setLivrePolice, dealer, viewMode
           <div className="page-sub">Registre obligatoire — art. R321-3 à R321-5 Code Pénal · Conservation 5 ans</div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
+          {entries.length === 0 && (
+            <button
+              className="btn btn-ghost btn-sm"
+              title="Définir le premier numéro d'ordre du registre (utile si vous continuez un registre papier existant)"
+              onClick={() => {
+                const current = parseInt(dealer?.lp_start_offset) || 1;
+                const val = prompt(
+                  "Premier numéro d'ordre du registre\n\n"
+                  + "Si vous continuez un registre papier existant, saisissez ici le numéro à partir duquel démarrer.\n"
+                  + "Exemple : si votre dernier numéro papier était 247, saisissez 248.\n\n"
+                  + "Numéro actuel de départ : " + current,
+                  String(current)
+                );
+                if (val === null) return;
+                const num = parseInt(val);
+                if (!Number.isInteger(num) || num < 1) {
+                  alert("Numéro invalide. Le numéro doit être un entier ≥ 1.");
+                  return;
+                }
+                if (typeof setDealer === "function") {
+                  setDealer({ ...(dealer || {}), lp_start_offset: num });
+                  alert("✅ Le prochain numéro d'ordre créé sera " + num + ".");
+                } else {
+                  alert("⚠️ Impossible de sauvegarder (setDealer non disponible). Rechargez l'app.");
+                }
+              }}
+            >
+              🔢 Définir n° d'ordre initial
+            </button>
+          )}
           <button className="btn btn-ghost btn-sm" onClick={() => printRegistre(filtered, dealer)}>
             🖨 Imprimer le registre
           </button>
@@ -9710,7 +9757,7 @@ export default function App() {
                 <div style={{ fontSize: 14, color: "var(--muted)", marginBottom: 24 }}>Disponible avec un abonnement IO Car.</div>
                 <button className="btn btn-primary" onClick={handleLogout}>🚀 S'abonner — 34,99€/mois</button>
               </div>
-            ) : <LivreDePolice vehicles={activeVehicles} livrePolice={activeLivrePolice} setLivrePolice={setLivrePoliceRaw} dealer={dealer} viewMode={viewMode} />)}
+            ) : <LivreDePolice vehicles={activeVehicles} livrePolice={activeLivrePolice} setLivrePolice={setLivrePoliceRaw} dealer={dealer} setDealer={setDealer} viewMode={viewMode} />)}
             {tab === "settings"    && <SettingsPage dealer={dealer} setDealer={setDealerRaw} usage={usage} isRealAdmin={isRealAdmin} token={token} />}
           </main>
         </div>

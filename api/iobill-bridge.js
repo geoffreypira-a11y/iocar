@@ -955,20 +955,27 @@ function mapOrderToInvoice(order, calc) {
   const description1 = sanitizeString(`VENTE VÉHICULE — ${vehicleLabel}${vehiclePlate ? ' (' + vehiclePlate + ')' : ''}${km ? ' · ' + km : ''}`);
 
   const lines = [];
+  // v8.48.9 — Régime TVA :
+  //   - avecTva=true (régime normal) : véhicule + frais taxables au taux normal
+  //   - avecTva=false (régime marge 297A CGI) : véhicule vat_rate=0 (TTC pur),
+  //     frais taxables au taux normal quand même (prestation accessoire indépendante)
   // L1 — véhicule
+  const vehVatRate = avecTva ? tvaPct : 0;
+  const vehHt = avecTva ? ttcToHt(baseApresRem) : baseApresRem; // en marge : HT = TTC pur
   lines.push({
     description: description1,
     quantity: 1,
-    unit_price_ht_cents: Math.round(ttcToHt(baseApresRem) * 100 * sign),
-    vat_rate: tvaPct,
+    unit_price_ht_cents: Math.round(vehHt * 100 * sign),
+    vat_rate: vehVatRate,
     discount_pct: 0
   });
-  // L2 — frais
+  // L2 — frais de mise à disposition : TOUJOURS au taux normal (même en régime marge)
   if (fraisMD > 0) {
+    const fraisHt = fraisMD / (1 + tvaPct / 100);
     lines.push({
       description: 'Frais de mise à disposition',
       quantity: 1,
-      unit_price_ht_cents: Math.round(ttcToHt(fraisMD) * 100 * sign),
+      unit_price_ht_cents: Math.round(fraisHt * 100 * sign),
       vat_rate: tvaPct,
       discount_pct: 0
     });
@@ -997,11 +1004,13 @@ function mapOrderToInvoice(order, calc) {
         ? `· ${[order.reprise_marque, order.reprise_modele].filter(Boolean).join(' ')}`
         : ''
     ].filter(Boolean).join(' '));
+    // Reprise : contre-partie du véhicule, donc même régime TVA
+    const reprHt = avecTva ? ttcToHt(reprise) : reprise;
     lines.push({
       description: reprDesc,
       quantity: 1,
-      unit_price_ht_cents: -Math.round(ttcToHt(reprise) * 100 * sign),
-      vat_rate: tvaPct,
+      unit_price_ht_cents: -Math.round(reprHt * 100 * sign),
+      vat_rate: vehVatRate,
       discount_pct: 0
     });
   }
