@@ -797,15 +797,33 @@ function nextRef(orders, type) {
   const next = existing.length > 0 ? Math.max(...existing) + 1 : 1;
   return `${prefix}-${year}-${String(next).padStart(4, "0")}`;
 }
+// v8.48.10 — Codes SIV officiels étendus (Système d'Immatriculation des Véhicules)
 const CARBURANT_MAP = {
-  "ES": "Essence", "GO": "Diesel", "EL": "Électrique",
-  "GH": "Hybride", "FE": "Hybride rechargeable", "GP": "GPL",
-  "GN": "GNV", "HY": "Hydrogène", "ESSENCE": "Essence",
-  "DIESEL": "Diesel", "GAZOLE": "Diesel", "ELECTRIQUE": "Électrique",
+  // Essence
+  "ES": "Essence", "ESS": "Essence", "ESSENCE": "Essence",
+  // Diesel
+  "GO": "Diesel", "GAZOLE": "Diesel", "DIESEL": "Diesel", "DI": "Diesel",
+  // Électrique
+  "EL": "Électrique", "ELEC": "Électrique", "ELECTRIQUE": "Électrique", "ÉLECTRIQUE": "Électrique",
+  // Hybrides essence
+  "EE": "Hybride essence", "EH": "Hybride essence rechargeable",
+  "GH": "Hybride essence",
+  // Hybrides diesel
+  "GL": "Hybride diesel", "GM": "Hybride diesel rechargeable",
+  "EM": "Hybride diesel",
+  // GPL / GNV / bicarburation
+  "GP": "GPL", "EG": "Bicarburation essence-GPL",
+  "GN": "GNV", "GNV": "GNV", "NE": "Bicarburation essence-GNV", "NH": "GNV",
+  // Éthanol / Flex-Fuel
+  "FE": "Superéthanol E85", "FL": "Bioéthanol",
+  // Hydrogène
+  "HY": "Hydrogène", "H2": "Hydrogène", "PH": "Hydrogène",
+  // Autres
+  "PL": "Pétrole lampant",
 };
 function mapCarburant(raw) {
   if (!raw) return "—";
-  const k = raw.toUpperCase().trim();
+  const k = String(raw).toUpperCase().trim();
   return CARBURANT_MAP[k] || raw;
 }
 

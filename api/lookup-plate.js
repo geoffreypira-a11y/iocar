@@ -126,15 +126,67 @@ export default async function handler(req, res) {
       dateMEC_fr = dateMEC.replace(/-/g, '/');
     }
 
-    const mapCarburant = (e) => {
-      const s = (e || '').toLowerCase();
-      if (s.includes('gaz') || s === 'es') return 'Essence';
-      if (s === 'go' || s.includes('diesel')) return 'Diesel';
-      if (s.includes('elec') || s.includes('élec')) return 'Électrique';
-      if (s.includes('hyb')) return 'Hybride';
-      if (s.includes('gpl')) return 'GPL';
-      return '—';
+    // v8.48.10 — Mapping codes SIV officiels (Système d'Immatriculation des Véhicules)
+    //   Bug 1 corrigé : "gaz" matchait "gazole" (Diesel) et retournait "Essence" par erreur.
+    //   Bug 2 corrigé : fallback "Essence" quand code inconnu → maintenant on retourne
+    //   la valeur brute pour au moins l'afficher (le user peut corriger).
+    //   Codes officiels : https://immatriculation.ants.gouv.fr/
+    const CARBURANT_CODES = {
+      // Essence
+      'ES': 'Essence', 'ESS': 'Essence', 'ESSENCE': 'Essence',
+      // Diesel
+      'GO': 'Diesel', 'GAZOLE': 'Diesel', 'DIESEL': 'Diesel', 'DI': 'Diesel',
+      // Électrique
+      'EL': 'Électrique', 'ELEC': 'Électrique', 'ELECTRIQUE': 'Électrique', 'ÉLECTRIQUE': 'Électrique',
+      // Hybrides essence
+      'EE': 'Hybride essence', 'EH': 'Hybride essence rechargeable',
+      'GH': 'Hybride essence', 'ES/EL': 'Hybride essence',
+      // Hybrides diesel
+      'GL': 'Hybride diesel', 'GM': 'Hybride diesel rechargeable',
+      'EM': 'Hybride diesel', 'GO/EL': 'Hybride diesel',
+      // GPL / GNV / bicarburation
+      'GP': 'GPL', 'ES/GP': 'Bicarburation essence-GPL',
+      'EG': 'Bicarburation essence-GPL',
+      'GN': 'GNV', 'GNV': 'GNV', 'ES/GN': 'Bicarburation essence-GNV',
+      'NE': 'Bicarburation essence-GNV', 'NH': 'GNV',
+      // Éthanol / Flex-Fuel
+      'FE': 'Superéthanol E85', 'EE85': 'Superéthanol E85',
+      'FL': 'Bioéthanol', 'ES/FE': 'Flex-fuel',
+      // Hydrogène
+      'HY': 'Hydrogène', 'H2': 'Hydrogène', 'PH': 'Hydrogène',
+      // Autres
+      'PL': 'Pétrole lampant',
     };
+    const mapCarburant = (e) => {
+      if (!e) return '';
+      const raw = String(e).trim();
+      // 1. Match exact sur code SIV (majuscules)
+      const upperCode = raw.toUpperCase();
+      if (CARBURANT_CODES[upperCode]) return CARBURANT_CODES[upperCode];
+      // 2. Fallback intelligent sur mots-clés (ordre critique : diesel AVANT essence
+      //    pour éviter que "gazole" match "gaz" ; électrique avant hybride, etc.)
+      const s = raw.toLowerCase();
+      if (s.includes('gazole') || s.includes('diesel')) return 'Diesel';
+      if (s.includes('élec') || s.includes('elec')) return 'Électrique';
+      if (s.includes('hydrog')) return 'Hydrogène';
+      if (s.includes('hybride') && s.includes('diesel')) return 'Hybride diesel';
+      if (s.includes('hybride')) return 'Hybride essence';
+      if (s.includes('éthan') || s.includes('ethan') || s.includes('e85')) return 'Superéthanol E85';
+      if (s.includes('gpl')) return 'GPL';
+      if (s.includes('gnv')) return 'GNV';
+      if (s.includes('essence')) return 'Essence';
+      // 3. Aucun match : on retourne le brut (au moins visible, l'user peut corriger)
+      return raw;
+    };
+
+    // Calcul carburant avec fallback intelligent :
+    //   1. Mapping AWN_energie
+    //   2. Détection "kWh" dans label moteur → Électrique
+    //   3. Aucun fallback muet à "Essence" (source du bug) — on laisse vide, le user choisit
+    const carburantMapped = mapCarburant(v.AWN_energie);
+    const isElecFromLabel = /kwh|electric|électric/i.test(v.AWN_label_moteur || v.AWN_version || '');
+    const carburant = carburantMapped
+      || (isElecFromLabel ? 'Électrique' : '');
 
     const vehicle = {
       marque:                   v.AWN_marque              || '',
@@ -142,9 +194,7 @@ export default async function handler(req, res) {
       finition:                 v.AWN_label_moteur        || v.AWN_version || '',
       annee:                    annee                     || '',
       motorisation:             v.AWN_code_moteur         || '',
-      carburant:                mapCarburant(v.AWN_energie) !== '—'
-                                  ? mapCarburant(v.AWN_energie)
-                                  : (/kwh/i.test(v.AWN_label_moteur || v.AWN_version || '') ? 'Électrique' : 'Essence'),
+      carburant:                carburant,
       puissance_cv:             v.AWN_puissance_chevaux   || '',
       puissance_fiscale:        v.AWN_puissance_fiscale   || '',
       puissance_kw:             v.AWN_puissance_KW        || '',
