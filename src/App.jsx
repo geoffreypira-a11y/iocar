@@ -3236,6 +3236,9 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
       client_id: c.id,
       client: {
         name: `${c.prenom || ""} ${c.nom}`.trim(),
+        // v8.48.7 — On stocke aussi nom/prénom séparés pour le Cerfa (ordre NOM Prénom obligatoire)
+        nom: c.nom || "",
+        prenom: c.prenom || "",
         address: fullAddr || c.adresse || "",
         phone: c.phone || "",
         email: c.email || "",
@@ -4545,7 +4548,22 @@ function CessionDoc({ order, dealer, vehicles, clients, onUpdateOrder, onClose }
         setRadio(p("Groupe_de_boutons_radio5"), "2");  // Personne physique
         if (client.civilite === "M") setRadio(p("Groupe_de_boutons_radio6"), "1");
         if (client.civilite === "F") setRadio(p("Groupe_de_boutons_radio6"), "2");
-        setText(p("txt_IdentitéAcheteur"), client.name);
+        // v8.48.7 — Ordre Cerfa officiel : "NOM Prénom" (nom en majuscules d'abord)
+        // Fallback : si nom/prénom séparés absents, on splitte client.name (qui est "Prénom Nom" par défaut)
+        const identiteAcheteur = (() => {
+          if (client.nom || client.prenom) {
+            return `${(client.nom || "").toUpperCase()} ${client.prenom || ""}`.trim();
+          }
+          // Fallback : split "Prénom Nom" → "NOM Prénom"
+          const parts = (client.name || "").trim().split(/\s+/);
+          if (parts.length >= 2) {
+            const nom = parts[parts.length - 1];
+            const prenom = parts.slice(0, -1).join(" ");
+            return `${nom.toUpperCase()} ${prenom}`.trim();
+          }
+          return client.name || "";
+        })();
+        setText(p("txt_IdentitéAcheteur"), identiteAcheteur);
         if (client.siren) setText(p("num_SiretAcheteur"), client.siren);
         setText(p("num_VoieAdresseAcheteur"), cA.num);
         setText(p("txt_ExtensionAdresseAcheteur"), cA.ext);
