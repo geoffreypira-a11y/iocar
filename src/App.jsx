@@ -4086,55 +4086,124 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
               </div>
             </div>
             <hr className="pdoc-divider" />
-            <table className="pdoc-table">
+            {/* ═══ v8.48 — ENCADRÉ VÉHICULE style IOBILL (encadré jaune) ═══ */}
+            {order.vehicle_data && (() => {
+              const vd = order.vehicle_data;
+              const vehLabel = [vd.marque, vd.modele, vd.finition].filter(Boolean).join(" ");
+              const plate = vd.plate || order.vehicle_plate || "";
+              const infosLeft = [];
+              const infosRight = [];
+              if (vd.annee) infosLeft.push(`Année : ${vd.annee}`);
+              if (vd.date_mise_en_circulation) infosLeft.push(`1ère circ. : ${vd.date_mise_en_circulation}`);
+              if (vd.kilometrage) infosLeft.push(`Kilométrage : ${Number(vd.kilometrage).toLocaleString("fr-FR")} km`);
+              if (vd.genre) infosLeft.push(`Genre : ${vd.genre}`);
+              const optionsStr = Array.isArray(vd.options) ? vd.options.join(", ") : (vd.options || "");
+              if (optionsStr) infosLeft.push(`Options : ${optionsStr}`);
+              if (vd.vin) infosRight.push(`VIN : ${vd.vin}`);
+              if (vd.carburant) infosRight.push(`Carburant : ${vd.carburant}`);
+              if (vd.puissance_cv || vd.puissance_fiscale) {
+                const powerParts = [];
+                if (vd.puissance_cv) powerParts.push(`${vd.puissance_cv} ch`);
+                if (vd.puissance_fiscale) powerParts.push(`${vd.puissance_fiscale} CV`);
+                infosRight.push(`Puissance : ${powerParts.join(" · ")}`);
+              }
+              return (
+                <div style={{
+                  position: "relative",
+                  border: "0.8px solid #d4a843",
+                  background: "#fcfbf4",
+                  padding: "18px 14px 12px 14px",
+                  marginBottom: 14,
+                  borderRadius: 2
+                }}>
+                  {/* Label VÉHICULE en haut à gauche */}
+                  <div style={{
+                    position: "absolute",
+                    top: -8,
+                    left: 8,
+                    background: "#d4a843",
+                    color: "#fff",
+                    fontSize: 8,
+                    fontWeight: 700,
+                    letterSpacing: 1,
+                    padding: "2px 8px"
+                  }}>VÉHICULE</div>
+                  {/* Ligne titre : marque/modèle + plaque badge */}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "#1a1a1a" }}>{vehLabel || "Véhicule"}</div>
+                    {plate && (
+                      <div style={{
+                        background: "#1a1a1a",
+                        border: "0.5px solid #d4a843",
+                        color: "#d4a843",
+                        padding: "3px 10px",
+                        fontSize: 11,
+                        fontWeight: 700,
+                        fontFamily: "monospace",
+                        letterSpacing: 0.5
+                      }}>{String(plate).toUpperCase()}</div>
+                    )}
+                  </div>
+                  {/* Infos sur 2 colonnes */}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "2px 20px" }}>
+                    <div>
+                      {infosLeft.map((info, i) => (
+                        <div key={i} style={{ fontSize: 9, color: "#6b6b78", marginBottom: 1 }}>{info}</div>
+                      ))}
+                    </div>
+                    <div>
+                      {infosRight.map((info, i) => (
+                        <div key={i} style={{ fontSize: 9, color: "#6b6b78", marginBottom: 1 }}>{info}</div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+            {/* ═══ v8.48 — TABLEAU LIGNES style IOBILL ═══ */}
+            <table className="pdoc-table" style={{ marginBottom: 14 }}>
               <thead>
-                <tr><th>Description véhicule</th><th>Plaque</th><th>VIN / Réf.</th><th style={{ textAlign: "right" }}>Prix HT</th></tr>
+                <tr>
+                  <th>Désignation</th>
+                  <th style={{ textAlign: "center", width: 40 }}>Qté</th>
+                  <th style={{ textAlign: "center", width: 50 }}>Unité</th>
+                  <th style={{ textAlign: "right", width: 80 }}>P.U. HT</th>
+                  {c.avecTva && <th style={{ textAlign: "center", width: 50 }}>TVA</th>}
+                  <th style={{ textAlign: "right", width: 90 }}>Total HT</th>
+                </tr>
               </thead>
               <tbody>
-                {/* Désignation détaillée du véhicule */}
-                {order.vehicle_data ? (
-                  <>
-                    {[
-                      ["Immatriculation", order.vehicle_data.plate],
-                      ["Date 1ère circ.", order.vehicle_data.date_mise_en_circulation],
-                      ["Année", order.vehicle_data.annee],
-                      ["Genre", order.vehicle_data.genre || "VP"],
-                      ["Marque", order.vehicle_data.marque],
-                      ["Modèle", `${order.vehicle_data.modele || ""} ${order.vehicle_data.finition || ""}`.trim()],
-                      ["N° série", order.vehicle_data.vin],
-                      ["Énergie", order.vehicle_data.carburant],
-                      ["Puissance", order.vehicle_data.puissance_cv ? `${order.vehicle_data.puissance_cv} ch (${order.vehicle_data.puissance_fiscale || "?"} CV)` : ""],
-                      ["Kilométrage", order.vehicle_data.kilometrage ? `${Number(order.vehicle_data.kilometrage).toLocaleString("fr-FR")} km` : ""],
-                      ["Options", Array.isArray(order.vehicle_data.options) ? order.vehicle_data.options.join(", ") : (order.vehicle_data.options || "")],
-                    ].map(([label, val], i) => (
-                      <tr key={i} style={{ borderBottom: "none" }}>
-                        <td style={{ padding: "3px 14px", fontSize: 11, color: "#555", fontWeight: label === "Immatriculation" ? 700 : 400, borderBottom: "none" }}>
-                          {label}
-                        </td>
-                        <td colSpan={2} style={{ padding: "3px 14px", fontSize: 11, color: "#333", borderBottom: "none" }}>
-                          {val || "—"}
-                        </td>
-                        {i === 0 ? (
-                          <td rowSpan={11} style={{ textAlign: "right", fontWeight: 700, verticalAlign: "middle", borderBottom: "none" }}>{fmtDec(c.avecTva ? c.base / (1 + (c.tvaPct || 20) / 100) : c.base)}</td>
-                        ) : null}
-                      </tr>
-                    ))}
-                  </>
-                ) : (
-                  <tr>
-                    <td style={{ fontWeight: 700 }}>{order.vehicle_label || "Véhicule"}</td>
-                    <td><PlateBadge plate={order.vehicle_plate} /></td>
-                    <td style={{ fontFamily: "monospace", fontSize: 11 }}>—</td>
-                    <td style={{ textAlign: "right", fontWeight: 700 }}>{fmtDec(c.avecTva ? c.base / (1 + (c.tvaPct || 20) / 100) : c.base)}</td>
-                  </tr>
-                )}
-                {/* Frais de mise à disposition */}
-                {(parseFloat(order.frais_mise_dispo) || 0) > 0 && (
-                  <tr style={{ borderTop: "1px solid #e8e8e8" }}>
-                    <td colSpan={3} style={{ fontWeight: 600, fontSize: 11 }}>Frais de mise à disposition</td>
-                    <td style={{ textAlign: "right", fontWeight: 600, fontSize: 11 }}>{fmtDec(c.avecTva ? (parseFloat(order.frais_mise_dispo) || 0) / (1 + (c.tvaPct || 20) / 100) : (parseFloat(order.frais_mise_dispo) || 0))}</td>
-                  </tr>
-                )}
+                {/* L1 - Véhicule */}
+                <tr>
+                  <td style={{ fontSize: 11 }}>
+                    VENTE VÉHICULE - {(() => {
+                      const vd = order.vehicle_data || {};
+                      const vehLabel = [vd.marque, vd.modele, vd.finition].filter(Boolean).join(" ") || (order.vehicle_label || "Véhicule");
+                      const plate = vd.plate || order.vehicle_plate || "";
+                      return plate ? `${vehLabel} (${plate})` : vehLabel;
+                    })()}
+                  </td>
+                  <td style={{ textAlign: "center", fontSize: 11 }}>1</td>
+                  <td style={{ textAlign: "center", fontSize: 11 }}>u</td>
+                  <td style={{ textAlign: "right", fontSize: 11 }}>{fmtDec(c.avecTva ? c.base / (1 + (c.tvaPct || 20) / 100) : c.base)}</td>
+                  {c.avecTva && <td style={{ textAlign: "center", fontSize: 11 }}>{c.tvaPct || 20}%</td>}
+                  <td style={{ textAlign: "right", fontSize: 11, fontWeight: 600 }}>{fmtDec(c.avecTva ? c.base / (1 + (c.tvaPct || 20) / 100) : c.base)}</td>
+                </tr>
+                {/* L2 - Frais de mise à disposition */}
+                {(parseFloat(order.frais_mise_dispo) || 0) > 0 && (() => {
+                  const fmd = parseFloat(order.frais_mise_dispo) || 0;
+                  const fmdHt = c.avecTva ? fmd / (1 + (c.tvaPct || 20) / 100) : fmd;
+                  return (
+                    <tr>
+                      <td style={{ fontSize: 11 }}>Frais de mise à disposition</td>
+                      <td style={{ textAlign: "center", fontSize: 11 }}>1</td>
+                      <td style={{ textAlign: "center", fontSize: 11 }}>u</td>
+                      <td style={{ textAlign: "right", fontSize: 11 }}>{fmtDec(fmdHt)}</td>
+                      {c.avecTva && <td style={{ textAlign: "center", fontSize: 11 }}>{c.tvaPct || 20}%</td>}
+                      <td style={{ textAlign: "right", fontSize: 11, fontWeight: 600 }}>{fmtDec(fmdHt)}</td>
+                    </tr>
+                  );
+                })()}
               </tbody>
             </table>
 
