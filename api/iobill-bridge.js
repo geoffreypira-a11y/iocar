@@ -1101,7 +1101,14 @@ function mapOrderToInvoice(order, calc) {
       annee: v.annee || null,
       kilometrage: v.kilometrage || null,
       carburant: sanitizeString(v.carburant) || null,
-      genre: sanitizeString(v.genre) || null
+      genre: sanitizeString(v.genre) || null,
+      // v8.47 — Champs enrichis pour reproduire le layout PDF IOCAR
+      date_mise_en_circulation: sanitizeString(v.date_mise_en_circulation) || null,
+      puissance_cv: v.puissance_cv || null,              // Chevaux (ex: 143)
+      puissance_fiscale: v.puissance_fiscale || null,    // CV fiscaux (ex: 5)
+      options: sanitizeString(v.options) || null,
+      // Garantie : issue de l'order (pas du véhicule)
+      garantie_mois: order.garantie_mois || 0
     },
     // v8.39 — Les mentions sont stock\u00e9es au niveau company (saisies une fois
     // dans Param\u00e8tres > Mentions garage). On les enrichit juste ici si l'order
