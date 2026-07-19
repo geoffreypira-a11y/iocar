@@ -2733,6 +2733,7 @@ function FleetPage({ vehicles, setVehicles, orders, setOrders, apiKey, usage, se
                   iobill_invoice_id: j.invoice_id,
                   iobill_invoice_number: j.invoice_number,
                   iobill_pdf_url: j.pdf_url || o.iobill_pdf_url,
+                  iobill_status: j.status || 'paid', // v8.48.2 — propage le status pour que la pilule passe de "brouillon" à "finalisé"
                   iobill_synced_at: new Date().toISOString(),
                   iobill_sync_error: null
                 } : o));
@@ -5044,6 +5045,7 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
               ...x,
               iobill_invoice_id: j.invoice_id,
               iobill_invoice_number: j.invoice_number,
+              iobill_status: j.status || 'draft', // v8.48.2 — propage le status brouillon
               iobill_synced_at: new Date().toISOString(),
               iobill_sync_error: null
             } : x));
