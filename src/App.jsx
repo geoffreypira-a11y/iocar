@@ -32,6 +32,17 @@ const sb = {
     return r.json();
   },
 
+  // v8.49 — Renouvelle l'access_token à partir du refresh_token
+  // Retourne { access_token, refresh_token, user } ou { error }
+  async refresh(refreshToken) {
+    if (!refreshToken) return { error: "no_refresh_token" };
+    const r = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+      method: "POST", headers: { ...this.headers },
+      body: JSON.stringify({ refresh_token: refreshToken })
+    });
+    return r.json();
+  },
+
   async signOut(token) {
     await fetch(`${SUPABASE_URL}/auth/v1/logout`, {
       method: "POST", headers: { ...this.headers, "Authorization": `Bearer ${token}` }
@@ -109,15 +120,43 @@ const sb = {
 
 // Persistance token dans localStorage
 const TOKEN_KEY = "iocar_token";
+const REFRESH_KEY = "iocar_refresh_token";  // v8.49 — refresh token Supabase pour auto-renouveler
 const USER_KEY  = "iocar_user";
-function saveSession(token, user) {
-  try { localStorage.setItem(TOKEN_KEY, token); localStorage.setItem(USER_KEY, JSON.stringify(user)); } catch(e) {}
+function saveSession(token, user, refreshToken) {
+  try {
+    localStorage.setItem(TOKEN_KEY, token);
+    localStorage.setItem(USER_KEY, JSON.stringify(user));
+    // v8.49 — sauvegarde refresh_token si fourni (peut être omis lors du bootstrap)
+    if (refreshToken) localStorage.setItem(REFRESH_KEY, refreshToken);
+  } catch(e) {}
 }
 function loadSession() {
-  try { return { token: localStorage.getItem(TOKEN_KEY), user: JSON.parse(localStorage.getItem(USER_KEY) || "null") }; } catch(e) { return { token: null, user: null }; }
+  try {
+    return {
+      token: localStorage.getItem(TOKEN_KEY),
+      refreshToken: localStorage.getItem(REFRESH_KEY),  // v8.49
+      user: JSON.parse(localStorage.getItem(USER_KEY) || "null")
+    };
+  } catch(e) { return { token: null, refreshToken: null, user: null }; }
 }
 function clearSession() {
-  try { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY); } catch(e) {}
+  try {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(REFRESH_KEY);  // v8.49
+    localStorage.removeItem(USER_KEY);
+  } catch(e) {}
+}
+
+// v8.49 — Décoder l'expiration du JWT (sans lib, sans vérification de signature — juste lire exp)
+function decodeJwtExp(token) {
+  if (!token || typeof token !== "string") return 0;
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return 0;
+    // JWT payload est du base64url
+    const payload = JSON.parse(atob(parts[1].replace(/-/g, "+").replace(/_/g, "/")));
+    return (payload.exp || 0) * 1000;  // ms
+  } catch(e) { return 0; }
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -797,33 +836,15 @@ function nextRef(orders, type) {
   const next = existing.length > 0 ? Math.max(...existing) + 1 : 1;
   return `${prefix}-${year}-${String(next).padStart(4, "0")}`;
 }
-// v8.48.10 — Codes SIV officiels étendus (Système d'Immatriculation des Véhicules)
 const CARBURANT_MAP = {
-  // Essence
-  "ES": "Essence", "ESS": "Essence", "ESSENCE": "Essence",
-  // Diesel
-  "GO": "Diesel", "GAZOLE": "Diesel", "DIESEL": "Diesel", "DI": "Diesel",
-  // Électrique
-  "EL": "Électrique", "ELEC": "Électrique", "ELECTRIQUE": "Électrique", "ÉLECTRIQUE": "Électrique",
-  // Hybrides essence
-  "EE": "Hybride essence", "EH": "Hybride essence rechargeable",
-  "GH": "Hybride essence",
-  // Hybrides diesel
-  "GL": "Hybride diesel", "GM": "Hybride diesel rechargeable",
-  "EM": "Hybride diesel",
-  // GPL / GNV / bicarburation
-  "GP": "GPL", "EG": "Bicarburation essence-GPL",
-  "GN": "GNV", "GNV": "GNV", "NE": "Bicarburation essence-GNV", "NH": "GNV",
-  // Éthanol / Flex-Fuel
-  "FE": "Superéthanol E85", "FL": "Bioéthanol",
-  // Hydrogène
-  "HY": "Hydrogène", "H2": "Hydrogène", "PH": "Hydrogène",
-  // Autres
-  "PL": "Pétrole lampant",
+  "ES": "Essence", "GO": "Diesel", "EL": "Électrique",
+  "GH": "Hybride", "FE": "Hybride rechargeable", "GP": "GPL",
+  "GN": "GNV", "HY": "Hydrogène", "ESSENCE": "Essence",
+  "DIESEL": "Diesel", "GAZOLE": "Diesel", "ELECTRIQUE": "Électrique",
 };
 function mapCarburant(raw) {
   if (!raw) return "—";
-  const k = String(raw).toUpperCase().trim();
+  const k = raw.toUpperCase().trim();
   return CARBURANT_MAP[k] || raw;
 }
 
@@ -8139,7 +8160,7 @@ function LoginScreen({ onLogin }) {
       // Login
       const res = await sb.signIn(email, password);
       if (res.error) { setError("Email ou mot de passe incorrect"); setLoading(false); return; }
-      saveSession(res.access_token, res.user);
+      saveSession(res.access_token, res.user, res.refresh_token); // v8.49 — refresh_token stocké
       onLogin(res.access_token, res.user);
     } catch(e) {
       setError("Erreur réseau — vérifiez votre connexion");
@@ -9232,6 +9253,102 @@ export default function App() {
   const [appLoading, setAppLoading] = useState(true);
 
   const isRealDemo = token === "demo";
+
+  // v8.49 — AUTO-REFRESH JWT ────────────────────────────────────
+  // Renouvelle silencieusement l'access_token Supabase avant qu'il expire.
+  // Sans ça, au bout d'1h les appels aux API Vercel (iobill-bridge, lookup-plate, etc.)
+  // renvoient 401 "Non authentifié" en pleine session.
+  //
+  // Deux mécanismes complémentaires :
+  //   1. Proactif : timer qui refresh 5 min avant l'expiration du JWT courant
+  //   2. Réactif : fonction globale window.__iocarRefreshNow() exposée pour retry
+  //      depuis n'importe quel composant qui reçoit un 401
+  //
+  // Migration silencieuse : les users connectés avant v8.49 n'ont pas de refresh_token
+  // stocké — on gère gracefully (pas de refresh proactif, mais pas de crash non plus).
+  const refreshTokenRef = React.useRef(loadSession().refreshToken);
+
+  // Fonction de refresh partagée entre le timer proactif et le retry réactif.
+  // Retourne { access_token, refresh_token } ou null si échec.
+  const refreshTokenNow = React.useCallback(async () => {
+    const rt = refreshTokenRef.current || localStorage.getItem(REFRESH_KEY);
+    if (!rt) return null;
+    try {
+      const res = await sb.refresh(rt);
+      if (res && res.access_token) {
+        refreshTokenRef.current = res.refresh_token || rt;
+        saveSession(res.access_token, res.user || user, res.refresh_token || rt);
+        setToken(res.access_token);
+        return { access_token: res.access_token, refresh_token: res.refresh_token || rt };
+      }
+    } catch(e) {}
+    return null;
+  }, [user]);
+
+  // Expose la fonction globalement pour que les composants puissent l'appeler sur 401
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.__iocarRefreshNow = refreshTokenNow;
+    }
+    return () => {
+      if (typeof window !== "undefined") delete window.__iocarRefreshNow;
+    };
+  }, [refreshTokenNow]);
+
+  // Timer proactif : refresh 5 min avant expiration
+  useEffect(() => {
+    if (!token || token === "demo") return;
+
+    let cancelled = false;
+    let timer = null;
+
+    const scheduleNextRefresh = (currentToken) => {
+      const expMs = decodeJwtExp(currentToken);
+      if (!expMs) return; // token invalide/vide, on n'essaie même pas
+      const now = Date.now();
+      // Refresh 5 min avant expiration
+      const delay = expMs - now - 5 * 60 * 1000;
+      if (delay <= 0) {
+        // Déjà expiré ou proche : refresh IMMÉDIAT (pas de setTimeout minimum)
+        // Ça évite qu'un appel API parte avec un token expiré au boot.
+        (async () => {
+          if (cancelled) return;
+          const res = await refreshTokenNow();
+          if (cancelled) return;
+          if (res && res.access_token) {
+            scheduleNextRefresh(res.access_token);
+          } else {
+            timer = setTimeout(async () => {
+              if (cancelled) return;
+              await refreshTokenNow();
+            }, 60_000);
+          }
+        })();
+        return;
+      }
+      // Programmation normale
+      timer = setTimeout(async () => {
+        if (cancelled) return;
+        const res = await refreshTokenNow();
+        if (cancelled) return;
+        if (res && res.access_token) {
+          scheduleNextRefresh(res.access_token);
+        } else {
+          if (!cancelled) timer = setTimeout(async () => {
+            if (cancelled) return;
+            await refreshTokenNow();
+          }, 60_000);
+        }
+      }, delay);
+    };
+
+    scheduleNextRefresh(token);
+
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [token, refreshTokenNow]);
 
   // ─── DÉTECTION DU RÉSEAU ────────────────────────────────────
   // Affiche un bandeau quand l'abonné est offline.

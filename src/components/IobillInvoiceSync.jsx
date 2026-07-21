@@ -66,11 +66,28 @@ export default function IobillInvoiceSync({ token, order, garage, onSync }) {
   async function callBridge(action) {
     setBusy(true); setError("");
     try {
-      const r = await fetch("/api/iobill-bridge", {
+      // v8.49 — Utilise toujours le token le plus récent (peut avoir été refreshé
+      // par le timer proactif du App root pendant que ce composant était monté).
+      const currentToken = localStorage.getItem("iocar_token") || token;
+
+      const doFetch = (tok) => fetch("/api/iobill-bridge", {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${tok}` },
         body: JSON.stringify({ action, order_id: order.id })
       });
+
+      let r = await doFetch(currentToken);
+
+      // v8.49 — Filet réactif : si 401, on demande au App de refresher puis on retry UNE fois
+      if (r.status === 401 && typeof window !== "undefined" && typeof window.__iocarRefreshNow === "function") {
+        try {
+          const refreshed = await window.__iocarRefreshNow();
+          if (refreshed && refreshed.access_token) {
+            r = await doFetch(refreshed.access_token);
+          }
+        } catch(e) { /* silencieux : on affichera l'erreur d'origine */ }
+      }
+
       const j = await r.json().catch(() => ({}));
       if (!r.ok || j.error) {
         setError(j.error || j.details || `HTTP ${r.status}`);
