@@ -9529,6 +9529,19 @@ export default function App() {
         return;
       }
 
+      // v8.49 — Refresh l'URL signée du logo au chargement.
+      // garage.logo est stockée comme URL signée temporaire (~1h). Après
+      // reconnexion, l'URL est expirée → <img src="URL périmée"> renvoie 401
+      // → icône cassée. On regénère une URL fraîche depuis logo_path.
+      if (g.logo_path) {
+        try {
+          const freshUrl = await getImageSignedUrl({ bucket: 'logos', path: g.logo_path });
+          if (freshUrl) g.logo = freshUrl;
+        } catch (e) {
+          console.warn('[garage load] refresh logo URL failed:', e.message);
+        }
+      }
+
       setGarage(g);
       setGarageId(g.id);
       // Source de vérité : la colonne is_admin en DB (protégée par RLS)
