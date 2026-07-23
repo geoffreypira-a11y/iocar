@@ -826,13 +826,33 @@ function calcOrder(o) {
 }
 
 // ─── NUMÉROTATION SÉQUENTIELLE ──────────────────────────────
-// Format : BC-2026-0001 / FAC-2026-0001 / AV-2026-0001
+// v8.49.9 — Séries distinctes pour éviter les collisions IOCAR ↔ IOBILL.
+//   BC-YYYY-NNNN       : Bons de commande IOCAR (pas poussés à IOBILL, aucun risque)
+//   VEH-YYYY-NNNN      : Factures IOCAR (véhicules) — poussées à IOBILL en insert propre
+//   AV-VEH-YYYY-NNNN   : Avoirs IOCAR (avoirs sur véhicules) — poussés à IOBILL en credit_note
+// Côté IOBILL les factures natives restent en FAC-YYYY-NNNN et les nouveaux avoirs
+// natifs deviennent AV-FAC-YYYY-NNNN pour la symétrie. Les avoirs IOBILL antérieurs
+// à ce patch (AV-YYYY-NNNN) restent tels quels — pas de renumérotation rétroactive.
+// Comme les préfixes diffèrent, aucun conflit possible.
+// Conforme fiscalement : art. 242 nonies A CGI + BOI-TVA-DECLA-30-20-20-10 §120
+// autorisent explicitement plusieurs séries de numérotation dès qu'elles sont
+// chronologiques et identifiables.
+//
+// ⚠️ Les anciennes factures IOCAR au format FAC-YYYY-NNNN restent intactes.
+// Elles n'apparaîtront simplement plus dans le compteur des VEH- (nouvelle série)
+// et n'entrent plus en conflit avec IOBILL puisqu'à la prochaine facture IOCAR,
+// on démarre en VEH-YYYY-0001.
 function nextRef(orders, type) {
   const year = new Date().getFullYear();
-  const prefix = type === "bc" ? "BC" : type === "avoir" ? "AV" : "FAC";
+  const prefix = type === "bc" ? "BC"
+               : type === "avoir" ? "AV-VEH"
+               : "VEH";
   const existing = (orders || [])
     .filter(o => o.type === type && o.ref?.startsWith(`${prefix}-${year}-`))
-    .map(o => parseInt(o.ref.split("-")[2]) || 0);
+    // v8.49.9 — .pop() prend le DERNIER segment après split (le numéro),
+    // ce qui marche que le préfixe ait 1 tiret (VEH-2026-0001)
+    // ou 2 tirets (AV-VEH-2026-0001).
+    .map(o => parseInt(o.ref.split("-").pop()) || 0);
   const next = existing.length > 0 ? Math.max(...existing) + 1 : 1;
   return `${prefix}-${year}-${String(next).padStart(4, "0")}`;
 }
@@ -3984,7 +4004,7 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
                     <input className="form-input" style={{ fontFamily: "DM Mono" }}
                       value={form.facture_origine || ""}
                       onChange={e => set("facture_origine", e.target.value)}
-                      placeholder="ex: FAC-2026-0001" />
+                      placeholder="ex: VEH-2026-0001" />
                   </div>
                 )}
               </div>
