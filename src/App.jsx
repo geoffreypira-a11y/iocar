@@ -671,8 +671,9 @@ function parseFr(dateStr) {
 }
 
 // Renvoie true si dateStr (au format "DD/MM/YYYY") tombe dans la période demandée.
-// period ∈ {"day", "month", "year", "all"}. "all" → true sans regarder la date.
+// period ∈ {"day", "month", "6months", "year", "all"}. "all" → true sans regarder la date.
 // Une date invalide ou manquante renvoie false (sauf pour "all").
+// v8.49 — Ajout de "6months" (glissant sur les 6 derniers mois complets).
 function inPeriod(dateStr, period) {
   if (period === "all") return true;
   const d = parseFr(dateStr);
@@ -683,6 +684,11 @@ function inPeriod(dateStr, period) {
   }
   if (period === "month") {
     return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+  }
+  if (period === "6months") {
+    // Glissant : entre (aujourd'hui − 6 mois) et aujourd'hui
+    const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 6, now.getDate());
+    return d >= sixMonthsAgo && d <= now;
   }
   if (period === "year") {
     return d.getFullYear() === now.getFullYear();
@@ -706,6 +712,12 @@ function inPreviousPeriod(dateStr, period) {
   if (period === "month") {
     const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
     return d.getMonth() === prev.getMonth() && d.getFullYear() === prev.getFullYear();
+  }
+  if (period === "6months") {
+    // Précédente : entre −12 mois et −6 mois
+    const twelveMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 12, now.getDate());
+    const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 6, now.getDate());
+    return d >= twelveMonthsAgo && d < sixMonthsAgo;
   }
   if (period === "year") {
     return d.getFullYear() === now.getFullYear() - 1;
@@ -1400,6 +1412,37 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
     return s + local * sign;
   }, 0);
 
+  // v8.49 — TVA COLLECTÉE (période) et DÉBOURS REFACTURÉS (période)
+  // Base : orders émis (factures + avoirs) dont date_creation ∈ période.
+  // - TVA collectée : somme des c.tvaAmt (avoirs → négatifs via calcOrder sign)
+  // - Débours refacturés : somme des c.debourTotal (hors CA, art. 267 II 2° CGI)
+  // On exclut les BC (bons de commande) car ils ne sont pas encore émis fiscalement.
+  const tvaCollectee = orders.reduce((s, o) => {
+    if (o.type === "bc") return s;
+    if (!inPeriod(o.date_creation, period)) return s;
+    const c = calcOrder(o);
+    return s + (c.tvaAmt || 0);
+  }, 0);
+  const debourRefacture = orders.reduce((s, o) => {
+    if (o.type === "bc") return s;
+    if (!inPeriod(o.date_creation, period)) return s;
+    const c = calcOrder(o);
+    return s + (c.debourTotal || 0);
+  }, 0);
+  // Périodes précédentes (comparatif ↗/↘)
+  const tvaCollecteePrev = orders.reduce((s, o) => {
+    if (o.type === "bc") return s;
+    if (!inPreviousPeriod(o.date_creation, period)) return s;
+    const c = calcOrder(o);
+    return s + (c.tvaAmt || 0);
+  }, 0);
+  const debourRefacturePrev = orders.reduce((s, o) => {
+    if (o.type === "bc") return s;
+    if (!inPreviousPeriod(o.date_creation, period)) return s;
+    const c = calcOrder(o);
+    return s + (c.debourTotal || 0);
+  }, 0);
+
   // ACHATS véhicules — instantané, tous les véhicules en stock + frais docs.
   const totalAchats = vehicles.reduce((s, v) => s + (parseFloat(v.prix_achat) || 0), 0);
   const totalFraisDocs = vehicles.reduce((s, v) => s + (v.documents || []).reduce((s2, d) => s2 + (parseFloat(d.montant) || 0), 0), 0);
@@ -1456,7 +1499,7 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
   }, 0);
 
   // Helpers pour formatter les variations
-  const periodLabel = period === "day" ? "hier" : period === "month" ? "mois dernier" : period === "year" ? "an dernier" : "";
+  const periodLabel = period === "day" ? "hier" : period === "month" ? "mois dernier" : period === "6months" ? "6 mois précédents" : period === "year" ? "an dernier" : "";
   const variationPct = (current, previous) => {
     if (previous === 0) return current > 0 ? null : 0; // null = pas de précédent significatif
     return Math.round((current - previous) / Math.abs(previous) * 100);
@@ -1792,6 +1835,7 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
           {[
             { key: "day", label: "Aujourd'hui" },
             { key: "month", label: "Ce mois" },
+            { key: "6months", label: "6 mois" },
             { key: "year", label: "Cette année" },
             { key: "all", label: "Depuis le début" },
           ].map(opt => {
@@ -1848,6 +1892,32 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
               return <div className="kpi-val gold">{fmt(panier)}</div>;
             })()}
             <div className="kpi-foot">{vendu > 0 ? `${vendu} vente${vendu > 1 ? "s" : ""}` : "aucune vente"}</div>
+          </div>
+          {/* v8.49 — TVA collectée (par période, art. 269 CGI) */}
+          <div className="kpi" style={{ borderLeft: "3px solid var(--gold)" }}>
+            <div className="kpi-label">📊 TVA collectée</div>
+            <div className="kpi-val" style={{ color: "var(--gold)" }}>{fmt(tvaCollectee)}</div>
+            {period !== "all" ? (() => {
+              const pct = variationPct(tvaCollectee, tvaCollecteePrev);
+              if (pct === null) return <div className="kpi-foot" style={{ color: "var(--muted)" }}>nouveau · pas de {periodLabel}</div>;
+              const color = pct > 0 ? "var(--green)" : pct < 0 ? "var(--red)" : "var(--muted)";
+              const arrow = pct > 0 ? "↗" : pct < 0 ? "↘" : "→";
+              return <div className="kpi-foot" style={{ color }}>{arrow} {pct >= 0 ? "+" : ""}{pct}% vs {periodLabel}</div>;
+            })() : <div className="kpi-foot">à reverser à l'État</div>}
+          </div>
+          {/* v8.49 — Débours refacturés (HORS CA, art. 267 II 2° CGI)
+              Info séparée : montre le volume que le garage a avancé et refacturé
+              aux clients (essentiellement cartes grises). Ne fait pas partie du CA. */}
+          <div className="kpi" style={{ borderLeft: "3px solid var(--gold)" }}>
+            <div className="kpi-label">🪪 Débours refacturés</div>
+            <div className="kpi-val" style={{ color: "var(--muted2)" }}>{fmt(debourRefacture)}</div>
+            {period !== "all" ? (() => {
+              const pct = variationPct(debourRefacture, debourRefacturePrev);
+              if (pct === null) return <div className="kpi-foot" style={{ color: "var(--muted)" }}>hors CA (art. 267 II 2°)</div>;
+              const color = pct > 0 ? "var(--green)" : pct < 0 ? "var(--red)" : "var(--muted)";
+              const arrow = pct > 0 ? "↗" : pct < 0 ? "↘" : "→";
+              return <div className="kpi-foot" style={{ color }}>{arrow} {pct >= 0 ? "+" : ""}{pct}% vs {periodLabel}</div>;
+            })() : <div className="kpi-foot">hors CA (art. 267 II 2°)</div>}
           </div>
         </div>
 
@@ -5461,13 +5531,21 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
                     })()}
                   </td>
                   <td style={{ fontFamily: "DM Mono", fontWeight: 700 }}>
-                    {/* v8.49 — Montant à payer par le client (avec débours) */}
+                    {/* v8.49 — Montant à payer (avec débours) + sous-ligne "dont TVA · débours" */}
                     <div>{fmtDec(c.grandTotal)}</div>
-                    {c.debourTotal > 0 && (
-                      <div style={{ fontSize: 9, fontWeight: 400, color: "var(--muted)", marginTop: 2 }}>
-                        dont {fmtDec(c.debourTotal)} débours
-                      </div>
-                    )}
+                    {(() => {
+                      const vatAbs = Math.abs(c.tvaAmt || 0);
+                      const debAbs = Math.abs(c.debourTotal || 0);
+                      const parts = [];
+                      if (vatAbs > 0) parts.push(`${fmtDec(vatAbs)} TVA`);
+                      if (debAbs > 0) parts.push(`${fmtDec(debAbs)} débours`);
+                      if (parts.length === 0) return null;
+                      return (
+                        <div style={{ fontSize: 9, fontWeight: 400, color: "var(--muted)", marginTop: 2 }}>
+                          dont {parts.join(" · ")}
+                        </div>
+                      );
+                    })()}
                   </td>
                   <td style={{ fontFamily: "DM Mono", color: "var(--green)" }}>{c.encaisse > 0 ? fmtDec(c.encaisse) : "—"}</td>
                   <td>
