@@ -6086,7 +6086,7 @@ function SettingsPage({ token, dealer, setDealer, usage, isRealAdmin }) {
       </div>
 
       <div style={{ marginTop: 20 }}>
-        <button className="btn btn-primary" onClick={() => {
+        <button className="btn btn-primary" onClick={async () => {
           // v8.49 — Ne pas écraser les champs iobill_* et autres champs
           // "vie propre" du garage. Le form local est initialisé au montage
           // avec dealer et n'est jamais resync : si l'user active IOBILL
@@ -6102,7 +6102,31 @@ function SettingsPage({ token, dealer, setDealer, usage, isRealAdmin }) {
             _archived, user_id, created_at,
             ...editableFields
           } = form;
-          setDealer(editableFields);
+          await setDealer(editableFields);
+
+          // v8.49 — Auto-sync IOBILL après Enregistrer si le linkage est actif.
+          // Avant : l'user devait cliquer manuellement "Resynchroniser mes
+          // paramètres" pour propager ses modifs (nom, adresse, SIRET, TVA...)
+          // vers IOBILL. Maintenant c'est automatique : un Enregistrer côté
+          // IOCAR propage tout côté IOBILL en 1 clic.
+          if (dealer?.iobill_api_token && token) {
+            try {
+              const r = await fetch("/api/iobill-bridge", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ action: "sync_company" })
+              });
+              const j = await r.json().catch(() => ({}));
+              if (r.ok) {
+                const n = (j?.updated_fields || []).length;
+                console.log(`[settings] ✅ ${n} champ(s) synchronisé(s) vers IOBILL`);
+              } else {
+                console.warn("[settings] Sync IOBILL échouée:", j?.error || r.status);
+              }
+            } catch (e) {
+              console.warn("[settings] Sync IOBILL exception:", e.message);
+            }
+          }
         }}>
           💾 Enregistrer les paramètres
         </button>
@@ -9535,11 +9559,35 @@ export default function App() {
     return () => window.removeEventListener("beforeunload", autoLogoutDemo);
   }, [isRealDemo]);
 
+  // v8.49 — Colonnes "UI-only" qui vivent dans le state React mais n'ont
+  // PAS de colonne correspondante dans la table SQL garages. Sans ce filtre,
+  // PostgREST rejette le PATCH avec 400 PGRST204 ("column not found") et
+  // TOUTES les modifs de paramètres sont perdues silencieusement.
+  const GARAGE_UI_ONLY_KEYS = [
+    "logo_original",  // sauvegardé en localStorage pour "Restaurer l'original"
+    "logoBlend",      // mixBlendMode CSS
+    "logoInvert",     // filter CSS
+    "logoBg",         // fond aperçu (checker/dark/white)
+    "saved",          // flag "modifs non sauvegardées"
+  ];
+
   const saveDealer = async (data) => {
     if (isRealDemo) { setDemoDealer({ ...demoDealer, ...data }); return; }
     const updated = { ...garage, ...data };
     setGarage(updated);
-    if (token && garage?.id) await sb.update(token, "garages", garage.id, data).catch(() => {});
+    // v8.49 — On strippe les clés UI-only avant l'envoi PostgREST
+    const cleanData = { ...data };
+    for (const k of GARAGE_UI_ONLY_KEYS) delete cleanData[k];
+    if (!token || !garage?.id) return;
+    if (Object.keys(cleanData).length === 0) return; // rien à persister
+    try {
+      const result = await sb.update(token, "garages", garage.id, cleanData);
+      if (!result) {
+        console.warn("[saveDealer] sb.update a retourné null — vérifier RLS ou schéma");
+      }
+    } catch (e) {
+      console.error("[saveDealer] erreur:", e.message);
+    }
   };
 
   // Quota API plaque — sauvegardé en localStorage ET dans Supabase
