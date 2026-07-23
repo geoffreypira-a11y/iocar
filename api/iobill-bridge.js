@@ -207,6 +207,33 @@ async function handleSyncCompany(garage, supabase, res) {
 
   // v8.40.3 — bonnes colonnes IOCAR
   const addrSyncParsed = parseGarageAddress(garage.address);
+
+  // v8.49 — Regénère une URL signée FRAÎCHE pour le logo avant l'envoi.
+  // garage.logo stocké en base est une URL signée qui EXPIRE (1h par défaut).
+  // Si on envoie une URL périmée, IOBILL fetch → 400/401 → upload d'un
+  // fichier vide/corrompu → le logo n'apparaît jamais côté IOBILL.
+  //
+  // On resigne depuis garage.logo_path (chemin dans le bucket logos)
+  // avec une validité de 5 min — largement le temps pour IOBILL de fetch.
+  let freshLogoUrl = null;
+  if (garage.logo_path) {
+    try {
+      const { data: signed, error: signErr } = await supabase.storage
+        .from('logos')
+        .createSignedUrl(garage.logo_path, 300);
+      if (signErr) {
+        console.warn('[sync_company] createSignedUrl logo failed:', signErr.message);
+      } else if (signed?.signedUrl) {
+        freshLogoUrl = signed.signedUrl;
+      }
+    } catch (e) {
+      console.warn('[sync_company] regénération URL logo échouée:', e.message);
+    }
+  }
+  // Fallback : si pas de logo_path, on tente quand même garage.logo (peut fonctionner
+  // si l'URL n'est pas encore expirée, ou si c'est un data URL base64).
+  const logoToSend = freshLogoUrl || garage.logo || null;
+
   const payload = {
     action: 'sync_company',
     token: garage.iobill_api_token,
@@ -225,8 +252,8 @@ async function handleSyncCompany(garage, supabase, res) {
     },
     // v8.39 — Mentions garage (saisies dans Paramètres > Mentions garage côté IOCAR)
     business_mentions: garage.business_mentions || null,
-    // v8.40.3 — Logo base64 (au cas où IOBILL ait perdu son logo_url)
-    logo_base64: garage.logo || null
+    // v8.49 — URL signée fraîche (5 min) ou base64 fallback
+    logo_base64: logoToSend
   };
 
   const j = await callIobill(payload);
