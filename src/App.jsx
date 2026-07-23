@@ -671,9 +671,8 @@ function parseFr(dateStr) {
 }
 
 // Renvoie true si dateStr (au format "DD/MM/YYYY") tombe dans la période demandée.
-// period ∈ {"day", "month", "6months", "year", "all"}. "all" → true sans regarder la date.
+// period ∈ {"day", "month", "year", "all"}. "all" → true sans regarder la date.
 // Une date invalide ou manquante renvoie false (sauf pour "all").
-// v8.49 — Ajout de "6months" (glissant sur les 6 derniers mois complets).
 function inPeriod(dateStr, period) {
   if (period === "all") return true;
   const d = parseFr(dateStr);
@@ -684,11 +683,6 @@ function inPeriod(dateStr, period) {
   }
   if (period === "month") {
     return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-  }
-  if (period === "6months") {
-    // Glissant : entre (aujourd'hui − 6 mois) et aujourd'hui
-    const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 6, now.getDate());
-    return d >= sixMonthsAgo && d <= now;
   }
   if (period === "year") {
     return d.getFullYear() === now.getFullYear();
@@ -712,12 +706,6 @@ function inPreviousPeriod(dateStr, period) {
   if (period === "month") {
     const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
     return d.getMonth() === prev.getMonth() && d.getFullYear() === prev.getFullYear();
-  }
-  if (period === "6months") {
-    // Précédente : entre −12 mois et −6 mois
-    const twelveMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 12, now.getDate());
-    const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 6, now.getDate());
-    return d >= twelveMonthsAgo && d < sixMonthsAgo;
   }
   if (period === "year") {
     return d.getFullYear() === now.getFullYear() - 1;
@@ -771,7 +759,7 @@ function getPayStatut(c, type) {
     if (c.encaisse > 0) return { label: "⏳ Partiel", cls: "badge-orange" };
     return { label: "💸 À rembourser", cls: "badge-red" };
   }
-  if (c.grandTotal <= 0) return { label: "—", cls: "badge-muted" };
+  if (c.ttc <= 0) return { label: "—", cls: "badge-muted" };
   if (c.reste <= 0.01) return { label: "✅ Soldé", cls: "badge-green" };
   if (c.encaisse > 0) return { label: "⏳ Partiel", cls: "badge-orange" };
   return { label: "💰 À encaisser", cls: "badge-red" };
@@ -812,18 +800,9 @@ function calcOrder(o) {
     tvaAmt = fraisMiseDispo - fraisHt;
   }
 
-  // Total TTC (BASE TVA) = HT + TVA − reprise véhicule.
-  // La reprise vient en déduction du TTC (c'est l'équivalent d'une remise
-  // sur le prix). La carte grise est traitée à part comme débours ci-dessous.
-  // v8.49 — Sémantique fiscalement correcte : la carte grise n'est PLUS
-  // dans le TTC (base TVA), elle est en débours séparé (art. 267 II 2° CGI).
-  //   - c.ttc         = HT + TVA (hors débours)         → base fiscale / CA
-  //   - c.debourTotal = somme des débours refacturés    → HORS CA (compte 467)
-  //   - c.grandTotal  = c.ttc + c.debourTotal            → à payer par le client
+  // Total TTC = montant soumis + carte grise (hors TVA) − reprise véhicule
   const repriseValeur = o.reprise_active ? (parseFloat(o.reprise_valeur) || 0) : 0;
-  const ttc = montantTTC_soumis - repriseValeur;
-  const debourTotal = carteGrise;
-  const grandTotal = ttc + debourTotal;
+  const ttc = montantTTC_soumis + carteGrise - repriseValeur;
 
   // Acompte versé à la signature (TTC, par défaut 0).
   // L'acompte EST un encaissement réel — il doit être inclus dans `encaisse`
@@ -834,27 +813,16 @@ function calcOrder(o) {
   const acompteTtc = o.type === "avoir" ? 0 : (parseFloat(o.acompte_ttc) || 0);
   const paiementsTotal = (o.paiements || []).reduce((s, p) => s + (parseFloat(p.montant) || 0), 0);
   const encaisse = acompteTtc + paiementsTotal;
-  // v8.49 — reste calculé sur grandTotal (ce que paye vraiment le client, avec débours)
-  const reste = grandTotal - encaisse;
+  const reste = ttc - encaisse;
 
   // Net après acompte = utile pour l'affichage sur le PDF (séparation visuelle
   // entre acompte signature et paiements ultérieurs)
-  // v8.49 — sur grandTotal aussi.
-  const netApresAcompte = grandTotal - acompteTtc;
+  const netApresAcompte = ttc - acompteTtc;
 
   // Les avoirs : le signe négatif est appliqué sur ttc/ht/tva pour le dashboard
   // Mais encaisse et reste restent en valeur absolue pour la logique de paiement
   const sign = o.type === "avoir" ? -1 : 1;
-  return {
-    ht: ht * sign, remAmt, base: prixApresRemise, fraisMiseDispo,
-    carteGrise, repriseValeur, baseTotal: montantTTC_soumis,
-    tvaAmt: tvaAmt * sign,
-    ttc: ttc * sign,                    // v8.49 — TTC hors débours (base TVA)
-    debourTotal: debourTotal * sign,    // v8.49 — Somme débours (art. 267 II 2°)
-    grandTotal: grandTotal * sign,      // v8.49 — À payer par le client
-    encaisse, reste, avecTva, tvaPct, acompteTtc,
-    netApresAcompte: netApresAcompte * sign, paiementsTotal
-  };
+  return { ht: ht * sign, remAmt, base: prixApresRemise, fraisMiseDispo, carteGrise, repriseValeur, baseTotal: montantTTC_soumis, tvaAmt: tvaAmt * sign, ttc: ttc * sign, encaisse, reste, avecTva, tvaPct, acompteTtc, netApresAcompte: netApresAcompte * sign, paiementsTotal };
 }
 
 // ─── NUMÉROTATION SÉQUENTIELLE ──────────────────────────────
@@ -1412,37 +1380,6 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
     return s + local * sign;
   }, 0);
 
-  // v8.49 — TVA COLLECTÉE (période) et DÉBOURS REFACTURÉS (période)
-  // Base : orders émis (factures + avoirs) dont date_creation ∈ période.
-  // - TVA collectée : somme des c.tvaAmt (avoirs → négatifs via calcOrder sign)
-  // - Débours refacturés : somme des c.debourTotal (hors CA, art. 267 II 2° CGI)
-  // On exclut les BC (bons de commande) car ils ne sont pas encore émis fiscalement.
-  const tvaCollectee = orders.reduce((s, o) => {
-    if (o.type === "bc") return s;
-    if (!inPeriod(o.date_creation, period)) return s;
-    const c = calcOrder(o);
-    return s + (c.tvaAmt || 0);
-  }, 0);
-  const debourRefacture = orders.reduce((s, o) => {
-    if (o.type === "bc") return s;
-    if (!inPeriod(o.date_creation, period)) return s;
-    const c = calcOrder(o);
-    return s + (c.debourTotal || 0);
-  }, 0);
-  // Périodes précédentes (comparatif ↗/↘)
-  const tvaCollecteePrev = orders.reduce((s, o) => {
-    if (o.type === "bc") return s;
-    if (!inPreviousPeriod(o.date_creation, period)) return s;
-    const c = calcOrder(o);
-    return s + (c.tvaAmt || 0);
-  }, 0);
-  const debourRefacturePrev = orders.reduce((s, o) => {
-    if (o.type === "bc") return s;
-    if (!inPreviousPeriod(o.date_creation, period)) return s;
-    const c = calcOrder(o);
-    return s + (c.debourTotal || 0);
-  }, 0);
-
   // ACHATS véhicules — instantané, tous les véhicules en stock + frais docs.
   const totalAchats = vehicles.reduce((s, v) => s + (parseFloat(v.prix_achat) || 0), 0);
   const totalFraisDocs = vehicles.reduce((s, v) => s + (v.documents || []).reduce((s2, d) => s2 + (parseFloat(d.montant) || 0), 0), 0);
@@ -1499,7 +1436,7 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
   }, 0);
 
   // Helpers pour formatter les variations
-  const periodLabel = period === "day" ? "hier" : period === "month" ? "mois dernier" : period === "6months" ? "6 mois précédents" : period === "year" ? "an dernier" : "";
+  const periodLabel = period === "day" ? "hier" : period === "month" ? "mois dernier" : period === "year" ? "an dernier" : "";
   const variationPct = (current, previous) => {
     if (previous === 0) return current > 0 ? null : 0; // null = pas de précédent significatif
     return Math.round((current - previous) / Math.abs(previous) * 100);
@@ -1835,7 +1772,6 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
           {[
             { key: "day", label: "Aujourd'hui" },
             { key: "month", label: "Ce mois" },
-            { key: "6months", label: "6 mois" },
             { key: "year", label: "Cette année" },
             { key: "all", label: "Depuis le début" },
           ].map(opt => {
@@ -1892,32 +1828,6 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
               return <div className="kpi-val gold">{fmt(panier)}</div>;
             })()}
             <div className="kpi-foot">{vendu > 0 ? `${vendu} vente${vendu > 1 ? "s" : ""}` : "aucune vente"}</div>
-          </div>
-          {/* v8.49 — TVA collectée (par période, art. 269 CGI) */}
-          <div className="kpi" style={{ borderLeft: "3px solid var(--gold)" }}>
-            <div className="kpi-label">📊 TVA collectée</div>
-            <div className="kpi-val" style={{ color: "var(--gold)" }}>{fmt(tvaCollectee)}</div>
-            {period !== "all" ? (() => {
-              const pct = variationPct(tvaCollectee, tvaCollecteePrev);
-              if (pct === null) return <div className="kpi-foot" style={{ color: "var(--muted)" }}>nouveau · pas de {periodLabel}</div>;
-              const color = pct > 0 ? "var(--green)" : pct < 0 ? "var(--red)" : "var(--muted)";
-              const arrow = pct > 0 ? "↗" : pct < 0 ? "↘" : "→";
-              return <div className="kpi-foot" style={{ color }}>{arrow} {pct >= 0 ? "+" : ""}{pct}% vs {periodLabel}</div>;
-            })() : <div className="kpi-foot">à reverser à l'État</div>}
-          </div>
-          {/* v8.49 — Débours refacturés (HORS CA, art. 267 II 2° CGI)
-              Info séparée : montre le volume que le garage a avancé et refacturé
-              aux clients (essentiellement cartes grises). Ne fait pas partie du CA. */}
-          <div className="kpi" style={{ borderLeft: "3px solid var(--gold)" }}>
-            <div className="kpi-label">🪪 Débours refacturés</div>
-            <div className="kpi-val" style={{ color: "var(--muted2)" }}>{fmt(debourRefacture)}</div>
-            {period !== "all" ? (() => {
-              const pct = variationPct(debourRefacture, debourRefacturePrev);
-              if (pct === null) return <div className="kpi-foot" style={{ color: "var(--muted)" }}>hors CA (art. 267 II 2°)</div>;
-              const color = pct > 0 ? "var(--green)" : pct < 0 ? "var(--red)" : "var(--muted)";
-              const arrow = pct > 0 ? "↗" : pct < 0 ? "↘" : "→";
-              return <div className="kpi-foot" style={{ color }}>{arrow} {pct >= 0 ? "+" : ""}{pct}% vs {periodLabel}</div>;
-            })() : <div className="kpi-foot">hors CA (art. 267 II 2°)</div>}
           </div>
         </div>
 
@@ -2111,7 +2021,7 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
                       <div style={{ fontSize: 11, color: "var(--muted)" }}>{o.ref} · {o.date_creation}</div>
                     </div>
                     <div style={{ textAlign: "right" }}>
-                      <div style={{ fontWeight: 700, fontSize: 13 }}>{fmt(c.grandTotal)}</div>
+                      <div style={{ fontWeight: 700, fontSize: 13 }}>{fmt(c.ttc)}</div>
                       <span className={`badge ${getPayStatut(c, o.type).cls}`}>{getPayStatut(c, o.type).label}</span>
                     </div>
                   </div>
@@ -3225,7 +3135,7 @@ function DemoLimitModal({ type, onClose }) {
 function PaymentModal({ order, onSave, onClose }) {
   const c = calcOrder(order);
   const isAvoir = order.type === "avoir";
-  const displayTtc = Math.abs(c.grandTotal); // v8.49 — Total à payer (avec débours)
+  const displayTtc = Math.abs(c.ttc);
   const displayAcompte = c.acompteTtc;
   const displayPaiements = c.paiementsTotal;
   const displayEncaisse = Math.abs(c.encaisse);
@@ -4032,26 +3942,9 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
           </div>
 
           <div style={{ background: "var(--card2)", borderRadius: 8, padding: "14px 16px", marginBottom: 16, display: "flex", gap: 24, flexWrap: "wrap" }}>
-            {/* v8.49 — La carte grise passe en DÉBOURS (art. 267 II 2° CGI), donc :
-                 - Total TTC = HT + TVA (base fiscale, sans CG)
-                 - Débours (CG) affiché séparé
-                 - Total à payer = TTC + Débours (ce que règle vraiment le client) */}
             {(c.avecTva
-              ? [
-                  ["HT", fmtDec(c.ht)],
-                  ["TVA " + (c.tvaPct || 20) + "%", fmtDec(c.tvaAmt)],
-                  c.remAmt > 0 ? ["Remise", "- " + fmtDec(c.remAmt)] : null,
-                  ["Total TTC", fmtDec(c.ttc)],
-                  c.debourTotal > 0 ? ["Débours (CG)", fmtDec(c.debourTotal)] : null,
-                  c.debourTotal > 0 ? ["Total à payer", fmtDec(c.grandTotal)] : null
-                ].filter(Boolean)
-              : [
-                  ["Prix TTC", fmtDec(c.ttc)],
-                  c.debourTotal > 0 ? ["Débours (CG)", fmtDec(c.debourTotal)] : null,
-                  c.debourTotal > 0 ? ["Total à payer", fmtDec(c.grandTotal)] : null,
-                  ["TVA", "Non applicable"],
-                  ["Régime", "Art. 297A CGI"]
-                ].filter(Boolean)
+              ? [["HT", fmtDec(c.ht)], ["TVA " + (c.tvaPct || 20) + "%", fmtDec(c.tvaAmt)], c.remAmt > 0 ? ["Remise", "- " + fmtDec(c.remAmt)] : null, c.carteGrise > 0 ? ["Carte grise (hors TVA)", fmtDec(c.carteGrise)] : null, ["Total TTC", fmtDec(c.ttc)]].filter(Boolean)
+              : [["Prix TTC", fmtDec(c.ttc)], ["TVA", "Non applicable"], ["Régime", "Art. 297A CGI"]]
             ).map(([l, v]) => (
               <div key={l}>
                 <div style={{ fontSize: 10, letterSpacing: 1.5, textTransform: "uppercase", color: "var(--muted)", marginBottom: 3 }}>{l}</div>
@@ -4399,12 +4292,7 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
               </tbody>
             </table>
 
-            {/* Totaux — v8.49 : refonte fiscale
-                La carte grise est désormais un DÉBOURS (art. 267 II 2° CGI) :
-                  - hors base TVA (déjà sortie de c.ttc via calcOrder)
-                  - affichée en bloc séparé après le Total TTC
-                  - ajoutée au TOTAL À PAYER (c.grandTotal)
-                Cohérent avec la présentation IOBILL. */}
+            {/* Totaux */}
             <div className="pdoc-totals">
               <div className="pdoc-totals-box">
                 {c.avecTva ? (
@@ -4412,6 +4300,7 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
                     <div className="pdoc-trow"><span>Montant HT</span><span>{fmtDec(c.ht)}</span></div>
                     <div className="pdoc-trow"><span>TVA {c.tvaPct || 20}%</span><span>{fmtDec(c.tvaAmt)}</span></div>
                     {c.remAmt > 0 && <div className="pdoc-trow" style={{ color: "#e5973c" }}><span>Remise</span><span>- {fmtDec(c.remAmt)}</span></div>}
+                    {c.carteGrise > 0 && <div className="pdoc-trow"><span>Carte grise (hors TVA)</span><span>{fmtDec(c.carteGrise)}</span></div>}
                     {c.repriseValeur > 0 && <div className="pdoc-trow" style={{ color: "#c79528" }}><span>Reprise véhicule</span><span>- {fmtDec(c.repriseValeur)}</span></div>}
                     <div className="pdoc-trow big"><span>TOTAL TTC</span><span>{fmtDec(c.ttc)}</span></div>
                   </>
@@ -4422,30 +4311,9 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
                     {c.tvaAmt > 0 && <div className="pdoc-trow"><span>TVA {c.tvaPct || 20}% (frais uniquement)</span><span>{fmtDec(c.tvaAmt)}</span></div>}
                     <div className="pdoc-trow" style={{ fontSize: 10, color: "#aaa" }}><span>Véhicule hors TVA</span><span>Art. 297A CGI</span></div>
                     {c.remAmt > 0 && <div className="pdoc-trow" style={{ color: "#e5973c" }}><span>Remise</span><span>- {fmtDec(c.remAmt)}</span></div>}
+                    {c.carteGrise > 0 && <div className="pdoc-trow"><span>Carte grise</span><span>{fmtDec(c.carteGrise)}</span></div>}
                     {c.repriseValeur > 0 && <div className="pdoc-trow" style={{ color: "#c79528" }}><span>Reprise véhicule</span><span>- {fmtDec(c.repriseValeur)}</span></div>}
                     <div className="pdoc-trow big"><span>TOTAL TTC</span><span>{fmtDec(c.ttc)}</span></div>
-                  </>
-                )}
-                {/* v8.49 — Bloc DÉBOURS + TOTAL À PAYER (art. 267 II 2° CGI)
-                    Cette présentation est fiscalement correcte : la carte grise
-                    est une avance payée pour le compte du client, hors base TVA. */}
-                {c.debourTotal > 0 && (
-                  <>
-                    <div className="pdoc-trow" style={{ fontSize: 10, color: "#888", marginTop: 6, textTransform: "uppercase", letterSpacing: 1 }}>
-                      <span>Débours (art. 267 II 2° CGI)</span><span></span>
-                    </div>
-                    {c.carteGrise > 0 && (
-                      <div className="pdoc-trow"><span>Carte grise</span><span>{fmtDec(c.carteGrise)}</span></div>
-                    )}
-                    <div className="pdoc-trow" style={{ fontSize: 9, color: "#aaa", fontStyle: "italic" }}>
-                      <span>Sommes avancées pour le compte du client, hors base TVA</span><span></span>
-                    </div>
-                    <div className="pdoc-trow big" style={{ borderTop: "1px solid #ddd", paddingTop: 4, marginTop: 4 }}>
-                      <span>TOTAL À PAYER</span><span>{fmtDec(c.grandTotal)}</span>
-                    </div>
-                    <div className="pdoc-trow" style={{ fontSize: 9, color: "#888" }}>
-                      <span>dont {fmtDec(c.tvaAmt)} TVA · {fmtDec(c.debourTotal)} débours</span><span></span>
-                    </div>
                   </>
                 )}
                 {c.acompteTtc > 0 && <>
@@ -5334,7 +5202,7 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
       || (tab === "facture" && o.type === "facture")
       || (tab === "avoir" && o.type === "avoir")
       || (tab === "encours" && o.type === "facture" && c.reste > 0.01)
-      || (tab === "solde" && c.reste <= 0.01 && c.grandTotal > 0);
+      || (tab === "solde" && c.reste <= 0.01 && c.ttc > 0);
     const matchS = !search || `${o.ref} ${o.client?.name} ${o.vehicle_label} ${o.vehicle_plate}`.toLowerCase().includes(search.toLowerCase());
     return matchT && matchS;
   }).sort((a, b) => {
@@ -5501,7 +5369,7 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
             )}
             {filtered.map(o => {
               const c = calcOrder(o);
-              const pct = c.grandTotal > 0 ? Math.round(c.encaisse / c.grandTotal * 100) : 0;
+              const pct = c.ttc > 0 ? Math.round(c.encaisse / c.ttc * 100) : 0;
               const paySt = getPayStatut(c, o.type);
               return (
                 <tr key={o.id}>
@@ -5530,27 +5398,11 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
                       </>;
                     })()}
                   </td>
-                  <td style={{ fontFamily: "DM Mono", fontWeight: 700 }}>
-                    {/* v8.49 — Montant à payer (avec débours) + sous-ligne "dont TVA · débours" */}
-                    <div>{fmtDec(c.grandTotal)}</div>
-                    {(() => {
-                      const vatAbs = Math.abs(c.tvaAmt || 0);
-                      const debAbs = Math.abs(c.debourTotal || 0);
-                      const parts = [];
-                      if (vatAbs > 0) parts.push(`${fmtDec(vatAbs)} TVA`);
-                      if (debAbs > 0) parts.push(`${fmtDec(debAbs)} débours`);
-                      if (parts.length === 0) return null;
-                      return (
-                        <div style={{ fontSize: 9, fontWeight: 400, color: "var(--muted)", marginTop: 2 }}>
-                          dont {parts.join(" · ")}
-                        </div>
-                      );
-                    })()}
-                  </td>
+                  <td style={{ fontFamily: "DM Mono", fontWeight: 700 }}>{fmtDec(c.ttc)}</td>
                   <td style={{ fontFamily: "DM Mono", color: "var(--green)" }}>{c.encaisse > 0 ? fmtDec(c.encaisse) : "—"}</td>
                   <td>
                     {c.reste > 0.01 ? <span style={{ color: "var(--orange)", fontFamily: "DM Mono", fontSize: 12, fontWeight: 700 }}>{fmtDec(c.reste)}</span> : <span style={{ color: "var(--green)" }}>✓</span>}
-                    {c.grandTotal > 0 && <div className="progress" style={{ marginTop: 4, width: 80 }}><div className="progress-fill" style={{ width: `${pct}%`, background: pct === 100 ? "var(--green)" : "var(--gold)" }} /></div>}
+                    {c.ttc > 0 && <div className="progress" style={{ marginTop: 4, width: 80 }}><div className="progress-fill" style={{ width: `${pct}%`, background: pct === 100 ? "var(--green)" : "var(--gold)" }} /></div>}
                   </td>
                   <td><span className={`badge ${paySt.cls}`}>{paySt.label}</span></td>
                   <td>
@@ -5565,9 +5417,7 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
                       )}
                       {o.type === "facture" && viewMode !== "trial" && !orders.some(a => a.type === "avoir" && a.facture_origine === o.ref) && (() => {
                         return <button className="btn btn-ghost btn-xs" title="Créer un avoir" onClick={() => {
-                          // v8.49 — Un avoir rembourse ce que le client a payé
-                          // (grandTotal), y compris les débours refacturés.
-                          const totalTtc = calcOrder(o).grandTotal;
+                          const totalTtc = calcOrder(o).ttc;
                           setAvoirChoice({ order: o, totalTtc });
                         }}>↩️</button>;
                       })()}
@@ -6236,7 +6086,24 @@ function SettingsPage({ token, dealer, setDealer, usage, isRealAdmin }) {
       </div>
 
       <div style={{ marginTop: 20 }}>
-        <button className="btn btn-primary" onClick={() => setDealer(form)}>
+        <button className="btn btn-primary" onClick={() => {
+          // v8.49 — Ne pas écraser les champs iobill_* et autres champs
+          // "vie propre" du garage. Le form local est initialisé au montage
+          // avec dealer et n'est jamais resync : si l'user active IOBILL
+          // pendant qu'il est sur cette page, form.iobill_* reste à null.
+          // Sans cette protection, l'Enregistrer efface le linkage.
+          const {
+            iobill_company_id, iobill_api_token, iobill_email,
+            iobill_linked_at, iobill_auto_push,
+            // Autres champs de contrôle qui ne doivent JAMAIS être écrasés
+            // par le formulaire d'édition de la concession :
+            is_admin, is_active, sub_status, stripe_customer_id,
+            stripe_subscription_id, subscribed_at, payment_failed_at,
+            _archived, user_id, created_at,
+            ...editableFields
+          } = form;
+          setDealer(editableFields);
+        }}>
           💾 Enregistrer les paramètres
         </button>
         {saved && <span style={{ marginLeft: 12, fontSize: 12, color: "var(--orange)" }}>● Modifications non sauvegardées</span>}
@@ -7387,8 +7254,7 @@ function exportFacturX(order, dealer, profil = "minimum") {
     `        <ram:LineTotalAmount>${c.base.toFixed(2)}</ram:LineTotalAmount>`,
     `        <ram:TaxBasisTotalAmount>${c.base.toFixed(2)}</ram:TaxBasisTotalAmount>`,
     `        <ram:TaxTotalAmount currencyID="EUR">${c.tvaAmt.toFixed(2)}</ram:TaxTotalAmount>`,
-    // v8.49 — Norme EN 16931 : GrandTotalAmount inclut les débours (montant à payer)
-    `        <ram:GrandTotalAmount>${c.grandTotal.toFixed(2)}</ram:GrandTotalAmount>`,
+    `        <ram:GrandTotalAmount>${c.ttc.toFixed(2)}</ram:GrandTotalAmount>`,
     `        <ram:TotalPrepaidAmount>${c.encaisse.toFixed(2)}</ram:TotalPrepaidAmount>`,
     `        <ram:DuePayableAmount>${c.reste.toFixed(2)}</ram:DuePayableAmount>`,
     '      </ram:SpecifiedTradeSettlementHeaderMonetarySummation>',
@@ -7868,7 +7734,7 @@ function CrmFiche({ client, orders, onEdit, onClose, onSave, dealer, setDealer, 
                           </div>
                           <div style={{ textAlign: "right", display: "flex", alignItems: "center", gap: 10 }}>
                             <div>
-                              <div style={{ fontSize: 13, fontWeight: 700 }}>{fmtDec(c2.grandTotal)}</div>
+                              <div style={{ fontSize: 13, fontWeight: 700 }}>{fmtDec(c2.ttc)}</div>
                               <span className={`badge ${badgeInfo.cls}`} style={{ fontSize: 10 }}>
                                 {badgeInfo.label}
                               </span>
@@ -8104,8 +7970,7 @@ function exportComptableCSV(orders, dealer) {
   const headers = [
     "Type", "Référence", "Date", "Client", "SIREN client",
     "Véhicule", "Plaque", "Base HT (€)", "TVA (%)", "Montant TVA (€)",
-    "Total TTC (€)", "Débours (€)", "Total à payer (€)",
-    "Encaissé (€)", "Reste dû (€)", "Statut paiement",
+    "Total TTC (€)", "Encaissé (€)", "Reste dû (€)", "Statut paiement",
     "Catégorie opération", "TVA sur débits", "Avec TVA", "Facture origine"
   ].join(sep);
 
@@ -8129,9 +7994,6 @@ function exportComptableCSV(orders, dealer) {
         o.avec_tva !== false ? (o.tva_pct || 20) : 0,
         c.tvaAmt.toFixed(2).replace(".", ","),
         c.ttc.toFixed(2).replace(".", ","),
-        // v8.49 — Nouvelles colonnes fiscales pour la compta
-        c.debourTotal.toFixed(2).replace(".", ","),
-        c.grandTotal.toFixed(2).replace(".", ","),
         c.encaisse.toFixed(2).replace(".", ","),
         c.reste.toFixed(2).replace(".", ","),
         paySt,
@@ -9180,7 +9042,7 @@ function AdminPage({ token }) {
                                     return (
                                       <tr key={row.id}>
                                         {table === "vehicles" && <><td>{d.marque}</td><td>{d.modele}</td><td>{d.plate}</td><td>{d.statut}</td></>}
-                                        {table === "orders" && <><td>{d.ref}</td><td>{d.type}</td><td>{d.client?.name}</td><td>{fmtDec(calcOrder(d).grandTotal)}</td><td>{d.date_creation}</td></>}
+                                        {table === "orders" && <><td>{d.ref}</td><td>{d.type}</td><td>{d.client?.name}</td><td>{fmtDec(calcOrder(d).ttc)}</td><td>{d.date_creation}</td></>}
                                         {table === "clients" && <><td>{d.prenom} {d.nom}</td><td>{d.email}</td><td>{d.statut}</td></>}
                                         {table === "livre_police" && <><td>{d.num_ordre}</td><td>{d.marque}</td><td>{d.immat}</td><td>{d.date_entree}</td><td>{d.date_sortie || "—"}</td></>}
                                         <td>
