@@ -80,7 +80,17 @@ function handleStatus(garage, res) {
 // Body : { password? }
 // ───────────────────────────────────────────────────────────────────
 async function handleLink(user, garage, supabase, body, res) {
-  // Idempotent : si déjà lié, on retourne le statut
+  // v8.49 — Détecte un état partiel corrompu :
+  // company_id renseigné MAIS token vide → activation précédente cassée.
+  // On reprend le flow depuis IOBILL (idempotent grâce à source_app+external_ref UNIQUE)
+  // ce qui rejouera ensureToken côté IOBILL et nous rendra le token existant.
+  const isCorruptedState = !!garage.iobill_company_id && !garage.iobill_api_token;
+  if (isCorruptedState) {
+    console.warn('[link] État partiel détecté (company_id sans token) — auto-guérison',
+      { garage_id: garage.id, iobill_company_id: garage.iobill_company_id });
+  }
+
+  // Idempotent : si déjà lié PROPREMENT (les 2 champs), on retourne le statut
   if (garage.iobill_company_id && garage.iobill_api_token) {
     return res.status(200).json({
       ok: true,
@@ -93,8 +103,11 @@ async function handleLink(user, garage, supabase, body, res) {
   const password = body && typeof body.password === 'string' ? body.password : null;
 
   // Si password fourni, on vérifie qu'il est valide côté IOCAR (signIn)
-  // → garantit qu'on n'utilise pas un MDP saisi à tort
-  if (password) {
+  // → garantit qu'on n'utilise pas un MDP saisi à tort.
+  // v8.49 — Skip cette vérif en auto-guérison (on ne veut pas exiger le MDP
+  // pour réparer un état partiel — pas de risque puisque le user est déjà
+  // authentifié côté IOCAR via verifyUser en amont).
+  if (password && !isCorruptedState) {
     const r = await fetch(`${process.env.SUPABASE_URL}/auth/v1/token?grant_type=password`, {
       method: 'POST',
       headers: {
@@ -140,12 +153,30 @@ async function handleLink(user, garage, supabase, body, res) {
     return res.status(502).json({ error: 'Échec lien IOBILL', details: j.error, last_error: j.last_error, hint: j.hint, full_payload: j.full_payload });
   }
 
+  // v8.49 — Anti partial write : refuser d'écrire un état incohérent.
+  // Sans ce check, un token vide dans la réponse (bug IOBILL, réseau tronqué,
+  // désérialisation partielle…) créait un garage avec company_id mais sans
+  // token, ce qui rendait TOUTES les actions sync/push impossibles ensuite.
+  const { company_id, token, email } = j.data || {};
+  if (!company_id || !token) {
+    console.error('[link] IOBILL a répondu 200 mais réponse incomplète',
+      { has_company_id: !!company_id, has_token: !!token, response: j.data });
+    return res.status(502).json({
+      error: 'Réponse IOBILL invalide (token ou company_id manquant). Rien n\'a été enregistré.',
+      response_summary: {
+        has_company_id: !!company_id,
+        has_token: !!token,
+        has_email: !!email
+      }
+    });
+  }
+
   const { error: updErr } = await supabase
     .from('garages')
     .update({
-      iobill_company_id: j.data.company_id,
-      iobill_api_token: j.data.token,
-      iobill_email: j.data.email,
+      iobill_company_id: company_id,
+      iobill_api_token: token,
+      iobill_email: email || user.email,
       iobill_linked_at: new Date().toISOString()
     })
     .eq('id', garage.id);
@@ -159,8 +190,9 @@ async function handleLink(user, garage, supabase, body, res) {
     ok: true,
     created: j.data.created,
     already_linked: false,
-    iobill_company_id: j.data.company_id,
-    iobill_email: j.data.email,
+    self_healed: isCorruptedState, // v8.49 — indique si c'était une auto-guérison
+    iobill_company_id: company_id,
+    iobill_email: email || user.email,
     used_password: !!password
   });
 }
