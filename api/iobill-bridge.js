@@ -45,6 +45,9 @@ export default async function handler(req, res) {
     if (action === 'mark_invoice_paid') return handleMarkInvoicePaid(garage, supabase, req.body, res);
     // v8.41 — Action dédiée pour les avoirs (route vers credit_notes côté IOBILL)
     if (action === 'push_credit_note') return handlePushCreditNote(garage, supabase, req.body, res);
+    // v8.49.13 — Cascade suppression : quand l'user IOCAR supprime un avoir,
+    // on demande à IOBILL de le supprimer aussi. Refus si transmis à l'admin.
+    if (action === 'delete_credit_note') return handleDeleteCreditNote(garage, supabase, req.body, res);
     // v8.43 — CRM mono-source : sync proactive
     if (action === 'sync_client') return handleSyncClient(garage, supabase, req.body, res);
     if (action === 'delete_client') return handleDeleteClient(garage, supabase, req.body, res);
@@ -876,6 +879,56 @@ async function handleSetAutoPush(garage, supabase, body, res) {
     .eq('id', garage.id);
   if (error) return res.status(500).json({ error: error.message });
   return res.status(200).json({ ok: true, auto_push: enabled });
+}
+
+// ───────────────────────────────────────────────────────────────────
+// v8.49.13 — DELETE_CREDIT_NOTE — cascade suppression avoir IOCAR → IOBILL
+//
+// Body : { action: 'delete_credit_note', order_id }
+// Retour : { ok: true, deleted: true } si supprimé
+//          { ok: false, code: 'PDP_TRANSMITTED' } si refusé par IOBILL
+// ───────────────────────────────────────────────────────────────────
+async function handleDeleteCreditNote(garage, supabase, body, res) {
+  if (!garage.iobill_api_token) {
+    // Pas de linkage IOBILL → rien à faire, on renvoie ok:true pour ne pas bloquer
+    return res.status(200).json({ ok: true, skipped: true, reason: 'no_iobill_link' });
+  }
+
+  const { order_id } = body;
+  if (!order_id) return res.status(400).json({ error: 'order_id required' });
+
+  // Récupère l'order pour connaître son id (= external_id côté IOBILL)
+  const { data: order } = await supabase
+    .from('orders')
+    .select('id, type, iobill_invoice_id')
+    .eq('id', order_id)
+    .eq('garage_id', garage.id)
+    .single();
+
+  if (!order) return res.status(404).json({ error: 'Order introuvable' });
+  if (order.type !== 'avoir') return res.status(400).json({ error: 'Order n\'est pas un avoir' });
+
+  // Appel IOBILL — l'external_id côté IOBILL c'est l'id de l'order IOCAR
+  const j = await callIobill({
+    action: 'delete_credit_note',
+    token: garage.iobill_api_token,
+    external_id: order.id
+  });
+
+  if (!j.ok) {
+    // v8.49.13 — callIobill renvoie full_payload = corps de la réponse IOBILL.
+    // On y récupère le code d'erreur (ex: PDP_TRANSMITTED) pour affichage UI.
+    const iobillCode = j.full_payload?.code || null;
+    const httpStatus = iobillCode === 'PDP_TRANSMITTED' ? 409 : 502;
+    return res.status(httpStatus).json({
+      ok: false,
+      error: j.error || 'Échec suppression IOBILL',
+      code: iobillCode,
+      details: j.full_payload || null
+    });
+  }
+
+  return res.status(200).json({ ok: true, deleted: true, iobill: j.data });
 }
 
 // ───────────────────────────────────────────────────────────────────
