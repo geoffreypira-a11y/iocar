@@ -76,14 +76,51 @@ export default function IobillInvoiceSync({ token, order, garage, onSync }) {
         body: JSON.stringify({ action, order_id: order.id })
       });
 
-      let r = await doFetch(currentToken);
+      // v8.49.14 — Retry auto avec backoff exponentiel sur les erreurs réseau
+      // et les 5xx (Vercel serverless cold start, timeout, hiccup réseau…).
+      // Sans ce retry, l'user devait cliquer plusieurs fois "Transmettre" pour
+      // que ça passe. Avec, le premier clic suffit dans 99% des cas.
+      //
+      // Politique : 3 tentatives max, backoff 1s puis 2s.
+      //   - Ne retry PAS les 4xx (erreurs métier : token expiré, requête invalide…)
+      //     sauf 401 qui a son propre mécanisme de refresh token juste en dessous.
+      //   - Retry si : fetch throw (network error), 500, 502, 503, 504
+      async function fetchWithRetry(tok) {
+        const delays = [1000, 2000]; // ms — 3 tentatives au total (init + 2 retries)
+        let lastErr = null;
+        for (let attempt = 0; attempt < delays.length + 1; attempt++) {
+          try {
+            const r = await doFetch(tok);
+            // Succès (2xx) ou 4xx métier → on ne retry pas
+            if (r.status < 500) return r;
+            // 5xx : on retry si on peut
+            if (attempt < delays.length) {
+              console.warn(`[callBridge] HTTP ${r.status}, retry #${attempt + 1} dans ${delays[attempt]}ms`);
+              await new Promise(res => setTimeout(res, delays[attempt]));
+              continue;
+            }
+            return r; // Dernière tentative en 5xx, on retourne la réponse
+          } catch (e) {
+            lastErr = e;
+            if (attempt < delays.length) {
+              console.warn(`[callBridge] Network error, retry #${attempt + 1} dans ${delays[attempt]}ms:`, e.message);
+              await new Promise(res => setTimeout(res, delays[attempt]));
+              continue;
+            }
+            throw e; // Épuisement des retries : on relance l'erreur
+          }
+        }
+        if (lastErr) throw lastErr;
+      }
+
+      let r = await fetchWithRetry(currentToken);
 
       // v8.49 — Filet réactif : si 401, on demande au App de refresher puis on retry UNE fois
       if (r.status === 401 && typeof window !== "undefined" && typeof window.__iocarRefreshNow === "function") {
         try {
           const refreshed = await window.__iocarRefreshNow();
           if (refreshed && refreshed.access_token) {
-            r = await doFetch(refreshed.access_token);
+            r = await fetchWithRetry(refreshed.access_token);
           }
         } catch(e) { /* silencieux : on affichera l'erreur d'origine */ }
       }
