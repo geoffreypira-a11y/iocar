@@ -5722,14 +5722,18 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   TICKET SYSTEM — Support & amélioration
+   TICKET SYSTEM — Support & amélioration (v8.49.15 : chat threadé)
 ═══════════════════════════════════════════════════════════════ */
 function TicketSystem({ dealer }) {
+  const [tab, setTab]         = useState("new"); // "new" ou "mine"
   const [type, setType]       = useState("incident");
   const [message, setMessage] = useState("");
   const [sent, setSent]       = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError]     = useState("");
+  const [myTickets, setMyTickets]     = useState([]);
+  const [loadingList, setLoadingList] = useState(false);
+  const [openChat, setOpenChat]       = useState(null); // ticket ouvert
 
   const TYPES = [
     { value: "incident",     label: "🔴 Incident technique",       desc: "Bug, erreur, dysfonctionnement" },
@@ -5738,54 +5742,59 @@ function TicketSystem({ dealer }) {
     { value: "facturation",  label: "💳 Question de facturation",   desc: "Abonnement, paiement, facture" },
   ];
 
+  const STATUS_LABELS = {
+    new:         { label: "🆕 Nouveau",     color: "var(--blue)" },
+    in_progress: { label: "💬 En cours",    color: "var(--gold)" },
+    resolved:    { label: "✅ Résolu",       color: "var(--green)" },
+    closed:      { label: "🔒 Fermé",        color: "var(--muted)" },
+  };
+
+  // Charge mes tickets à l'ouverture de l'onglet "mine"
+  const loadMyTickets = React.useCallback(async () => {
+    const token = localStorage.getItem("iocar_token");
+    if (!token) return;
+    setLoadingList(true);
+    try {
+      const r = await fetch("/api/ticket", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+        body: JSON.stringify({ action: "list" }),
+      });
+      const j = await r.json();
+      if (r.ok) setMyTickets(j.tickets || []);
+    } catch(e) { /* silencieux */ }
+    setLoadingList(false);
+  }, []);
+
+  React.useEffect(() => {
+    if (tab === "mine") loadMyTickets();
+  }, [tab, loadMyTickets]);
+
+  // Compte total de messages non lus (pour badge onglet)
+  const totalUnread = myTickets.reduce((s, t) => s + (t.unread_count || 0), 0);
+
   const submit = async () => {
     if (!message.trim()) { setError("Veuillez décrire votre demande"); return; }
     if (message.length > 5000) { setError("Message trop long (max 5000 caractères)"); return; }
     setSending(true); setError("");
     try {
-      // Appel à l'endpoint serveur qui :
-      //  1. Vérifie l'authentification (JWT)
-      //  2. Insert le ticket en BD (Supabase, RLS protégé)
-      //  3. Envoie un email à contact@iocar.online via Resend (best-effort)
       const token = localStorage.getItem("iocar_token");
-      if (!token) {
-        setError("Session expirée, veuillez vous reconnecter");
-        setSending(false);
-        return;
-      }
+      if (!token) { setError("Session expirée, veuillez vous reconnecter"); setSending(false); return; }
       const res = await fetch("/api/ticket", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${token}`,
-        },
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
         body: JSON.stringify({ type, message: message.trim() }),
       });
       const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || "Erreur lors de l'envoi du ticket");
-        setSending(false);
-        return;
-      }
+      if (!res.ok) { setError(data.error || "Erreur lors de l'envoi du ticket"); setSending(false); return; }
       setSent(true);
       setMessage("");
+      loadMyTickets();
     } catch(e) {
       setError("Erreur réseau. Si le problème persiste, contactez contact@iocar.online directement.");
     }
     setSending(false);
   };
-
-  if (sent) return (
-    <div className="card card-pad" style={{ marginTop: 24, textAlign: "center" }}>
-      <div style={{ fontSize: 48, marginBottom: 12 }}>✅</div>
-      <div style={{ fontFamily: "Syne", fontSize: 16, fontWeight: 700, marginBottom: 8 }}>Ticket envoyé !</div>
-      <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 16, lineHeight: 1.7 }}>
-        Votre message a été transmis à notre équipe.<br />
-        Nous vous répondrons sous 24h à l'adresse <strong style={{ color: "var(--text)" }}>{dealer?.email || "indiquée"}</strong>.
-      </div>
-      <button className="btn btn-ghost btn-sm" onClick={() => setSent(false)}>Envoyer un autre ticket</button>
-    </div>
-  );
 
   return (
     <div className="card card-pad" style={{ marginTop: 24 }}>
@@ -5793,35 +5802,336 @@ function TicketSystem({ dealer }) {
         🎫 Support & Suggestions
       </div>
 
-      <div className="form-group" style={{ marginBottom: 16 }}>
-        <label className="form-label">Type de demande</label>
-        <select className="form-input" value={type} onChange={e => setType(e.target.value)}>
-          {TYPES.map(t => <option key={t.value} value={t.value}>{t.label} — {t.desc}</option>)}
-        </select>
-      </div>
-
-      <div className="form-group" style={{ marginBottom: 16 }}>
-        <label className="form-label">Votre message</label>
-        <textarea className="form-input" rows={5}
-          value={message}
-          onChange={e => setMessage(e.target.value)}
-          placeholder={
-            type === "incident"     ? "Décrivez le problème : que s'est-il passé, à quelle étape, quel message d'erreur ?" :
-            type === "amelioration" ? "Décrivez votre idée : quelle fonctionnalité, quel bénéfice attendez-vous ?" :
-            type === "facturation"  ? "Décrivez votre question concernant votre abonnement ou facturation..." :
-            "Posez votre question ou décrivez ce dont vous avez besoin..."
-          }
-        />
-        {error && <div style={{ fontSize: 12, color: "var(--red)", marginTop: 6 }}>⚠️ {error}</div>}
-      </div>
-
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
-        <div style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.6 }}>
-          Réponse sous 24h ouvrées à <strong style={{ color: "var(--muted2)" }}>{dealer?.email || "votre email"}</strong>
-        </div>
-        <button className="btn btn-primary" onClick={submit} disabled={sending}>
-          {sending ? "⏳ Envoi..." : "📨 Envoyer le ticket"}
+      <div style={{ display: "flex", gap: 8, marginBottom: 20, borderBottom: "1px solid var(--border)" }}>
+        <button
+          className="btn btn-ghost btn-sm"
+          onClick={() => { setTab("new"); setSent(false); }}
+          style={{
+            borderRadius: 0,
+            borderBottom: tab === "new" ? "2px solid var(--gold)" : "2px solid transparent",
+            color: tab === "new" ? "var(--gold)" : "var(--muted)",
+            fontWeight: 700
+          }}
+        >📝 Nouveau ticket</button>
+        <button
+          className="btn btn-ghost btn-sm"
+          onClick={() => setTab("mine")}
+          style={{
+            borderRadius: 0,
+            borderBottom: tab === "mine" ? "2px solid var(--gold)" : "2px solid transparent",
+            color: tab === "mine" ? "var(--gold)" : "var(--muted)",
+            fontWeight: 700,
+            display: "inline-flex", alignItems: "center", gap: 6
+          }}
+        >
+          📬 Mes tickets
+          {totalUnread > 0 && (
+            <span style={{
+              background: "var(--red)", color: "#fff", borderRadius: 10, padding: "2px 7px",
+              fontSize: 10, fontWeight: 700
+            }}>{totalUnread}</span>
+          )}
         </button>
+      </div>
+
+      {tab === "new" && sent && (
+        <div style={{ textAlign: "center", padding: "20px 0" }}>
+          <div style={{ fontSize: 48, marginBottom: 12 }}>✅</div>
+          <div style={{ fontFamily: "Syne", fontSize: 16, fontWeight: 700, marginBottom: 8 }}>Ticket envoyé !</div>
+          <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 16, lineHeight: 1.7 }}>
+            Votre message a été transmis à notre équipe.<br />
+            Retrouvez-le dans l'onglet <strong style={{ color: "var(--gold)" }}>Mes tickets</strong> pour suivre la conversation.
+          </div>
+          <button className="btn btn-ghost btn-sm" onClick={() => setSent(false)}>Envoyer un autre ticket</button>
+        </div>
+      )}
+
+      {tab === "new" && !sent && (
+        <>
+          <div className="form-group" style={{ marginBottom: 16 }}>
+            <label className="form-label">Type de demande</label>
+            <select className="form-input" value={type} onChange={e => setType(e.target.value)}>
+              {TYPES.map(t => <option key={t.value} value={t.value}>{t.label} — {t.desc}</option>)}
+            </select>
+          </div>
+          <div className="form-group" style={{ marginBottom: 16 }}>
+            <label className="form-label">Votre message</label>
+            <textarea className="form-input" rows={5}
+              value={message}
+              onChange={e => setMessage(e.target.value)}
+              placeholder={
+                type === "incident"     ? "Décrivez le problème : que s'est-il passé, à quelle étape, quel message d'erreur ?" :
+                type === "amelioration" ? "Décrivez votre idée : quelle fonctionnalité, quel bénéfice attendez-vous ?" :
+                type === "facturation"  ? "Décrivez votre question concernant votre abonnement ou facturation..." :
+                "Posez votre question ou décrivez ce dont vous avez besoin..."
+              }
+            />
+            {error && <div style={{ fontSize: 12, color: "var(--red)", marginTop: 6 }}>⚠️ {error}</div>}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+            <div style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.6 }}>
+              Réponse sous 24h à <strong style={{ color: "var(--muted2)" }}>{dealer?.email || "votre email"}</strong>
+            </div>
+            <button className="btn btn-primary" onClick={submit} disabled={sending}>
+              {sending ? "⏳ Envoi..." : "📨 Envoyer le ticket"}
+            </button>
+          </div>
+        </>
+      )}
+
+      {tab === "mine" && (
+        <div>
+          {loadingList && <div style={{ textAlign: "center", padding: 20, color: "var(--muted)" }}>Chargement…</div>}
+          {!loadingList && myTickets.length === 0 && (
+            <div style={{ textAlign: "center", padding: 20, color: "var(--muted)", fontSize: 13 }}>
+              Aucun ticket pour l'instant. Créez-en un depuis l'onglet "Nouveau ticket".
+            </div>
+          )}
+          {!loadingList && myTickets.map(t => {
+            const st = STATUS_LABELS[t.status] || STATUS_LABELS.new;
+            const typeLabel = TYPES.find(x => x.value === t.type)?.label || t.type;
+            const preview = (t.message || "").slice(0, 100) + ((t.message || "").length > 100 ? "…" : "");
+            return (
+              <div key={t.id}
+                onClick={() => setOpenChat(t)}
+                style={{
+                  background: "var(--card2)",
+                  borderRadius: 10,
+                  padding: "12px 14px",
+                  marginBottom: 8,
+                  cursor: "pointer",
+                  border: "1px solid var(--border)"
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, gap: 8 }}>
+                  <div style={{ fontSize: 12, color: "var(--muted)" }}>
+                    {typeLabel} · {new Date(t.created_at).toLocaleDateString("fr-FR")}
+                  </div>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    {t.unread_count > 0 && (
+                      <span style={{
+                        background: "var(--red)", color: "#fff", borderRadius: 10, padding: "2px 7px",
+                        fontSize: 10, fontWeight: 700
+                      }}>{t.unread_count} nouveau{t.unread_count > 1 ? "x" : ""}</span>
+                    )}
+                    <span style={{ fontSize: 11, color: st.color, fontWeight: 700 }}>{st.label}</span>
+                  </div>
+                </div>
+                <div style={{ fontSize: 13, color: "var(--text)" }}>{preview}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {openChat && (
+        <TicketChatModal
+          ticket={openChat}
+          dealer={dealer}
+          onClose={() => { setOpenChat(null); loadMyTickets(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ─── MODAL CHAT THREADÉ (v8.49.15) ─────────────────────── */
+function TicketChatModal({ ticket, dealer, onClose }) {
+  const [messages, setMessages] = useState([]);
+  const [reply, setReply] = useState("");
+  const [sending, setSending] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [status, setStatus] = useState(ticket.status);
+  const scrollRef = React.useRef(null);
+
+  const STATUS_LABELS = {
+    new:         { label: "🆕 Nouveau",     color: "var(--blue)" },
+    in_progress: { label: "💬 En cours",    color: "var(--gold)" },
+    resolved:    { label: "✅ Résolu",       color: "var(--green)" },
+    closed:      { label: "🔒 Fermé",        color: "var(--muted)" },
+  };
+  const st = STATUS_LABELS[status] || STATUS_LABELS.new;
+  const readOnly = status === "resolved" || status === "closed";
+
+  const loadThread = React.useCallback(async () => {
+    const token = localStorage.getItem("iocar_token");
+    if (!token) return;
+    try {
+      const r = await fetch("/api/ticket", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+        body: JSON.stringify({ action: "thread", ticket_id: ticket.id }),
+      });
+      const j = await r.json();
+      if (r.ok) {
+        setMessages(j.messages || []);
+        setStatus(j.ticket?.status || status);
+        await fetch("/api/ticket", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+          body: JSON.stringify({ action: "mark_read", ticket_id: ticket.id }),
+        });
+      }
+    } catch(e) { /* silencieux */ }
+    setLoading(false);
+  }, [ticket.id, status]);
+
+  React.useEffect(() => { loadThread(); }, [loadThread]);
+
+  React.useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [messages.length]);
+
+  React.useEffect(() => {
+    let channel = null;
+    let cancelled = false;
+    (async () => {
+      try {
+        const mod = await import("@supabase/supabase-js");
+        const { createClient } = mod;
+        const supaUrl = window.__SUPABASE_URL || import.meta.env?.VITE_SUPABASE_URL;
+        const supaAnon = window.__SUPABASE_ANON_KEY || import.meta.env?.VITE_SUPABASE_ANON_KEY;
+        if (!supaUrl || !supaAnon) return;
+        const token = localStorage.getItem("iocar_token");
+        const client = createClient(supaUrl, supaAnon, {
+          global: { headers: { Authorization: `Bearer ${token}` } }
+        });
+        channel = client
+          .channel(`ticket_${ticket.id}`)
+          .on("postgres_changes", {
+            event: "INSERT",
+            schema: "public",
+            table: "ticket_messages",
+            filter: `ticket_id=eq.${ticket.id}`
+          }, (payload) => {
+            if (cancelled) return;
+            setMessages(prev => {
+              if (prev.some(m => m.id === payload.new.id)) return prev;
+              return [...prev, payload.new];
+            });
+            if (payload.new.author_type === "admin") {
+              const tok = localStorage.getItem("iocar_token");
+              fetch("/api/ticket", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "Authorization": `Bearer ${tok}` },
+                body: JSON.stringify({ action: "mark_read", ticket_id: ticket.id }),
+              }).catch(() => {});
+            }
+          })
+          .subscribe();
+      } catch(e) {
+        console.warn("[TicketChat] Realtime indisponible:", e.message);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (channel && channel.unsubscribe) channel.unsubscribe();
+    };
+  }, [ticket.id]);
+
+  const send = async () => {
+    if (!reply.trim() || sending) return;
+    setSending(true);
+    try {
+      const token = localStorage.getItem("iocar_token");
+      const r = await fetch("/api/ticket", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+        body: JSON.stringify({ action: "reply", ticket_id: ticket.id, message: reply.trim() }),
+      });
+      const j = await r.json();
+      if (r.ok && j.message) {
+        setMessages(prev => {
+          if (prev.some(m => m.id === j.message.id)) return prev;
+          return [...prev, j.message];
+        });
+        setReply("");
+      } else {
+        alert(j.error || "Erreur envoi message");
+      }
+    } catch(e) { alert("Erreur réseau"); }
+    setSending(false);
+  };
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 10000,
+      display: "flex", alignItems: "center", justifyContent: "center", padding: 20
+    }}>
+      <div style={{
+        background: "var(--card)", borderRadius: 14, padding: 0,
+        width: "100%", maxWidth: 640, maxHeight: "85vh",
+        display: "flex", flexDirection: "column",
+        border: "1px solid var(--border)"
+      }}>
+        <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontFamily: "Syne", fontSize: 15, fontWeight: 700 }}>
+              Ticket #{String(ticket.id).slice(0, 8)}
+            </div>
+            <div style={{ fontSize: 11, color: st.color, marginTop: 2, fontWeight: 700 }}>
+              {st.label}
+            </div>
+          </div>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
+        </div>
+
+        <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: "16px 20px" }}>
+          {loading && <div style={{ textAlign: "center", color: "var(--muted)" }}>Chargement…</div>}
+          {!loading && (
+            <>
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 10, color: "var(--muted)", marginBottom: 4 }}>
+                  Vous · {new Date(ticket.created_at).toLocaleString("fr-FR")}
+                </div>
+                <div style={{ background: "var(--card2)", padding: 10, borderRadius: 8, fontSize: 13, whiteSpace: "pre-wrap" }}>
+                  {ticket.message}
+                </div>
+              </div>
+              {messages.map(m => {
+                const mine = m.author_type === "subscriber";
+                return (
+                  <div key={m.id} style={{ marginBottom: 12, display: "flex", flexDirection: "column", alignItems: mine ? "flex-end" : "flex-start" }}>
+                    <div style={{ fontSize: 10, color: "var(--muted)", marginBottom: 4 }}>
+                      {mine ? "Vous" : "🛠 Support"} · {new Date(m.created_at).toLocaleString("fr-FR")}
+                    </div>
+                    <div style={{
+                      background: mine ? "var(--gold)" : "var(--card2)",
+                      color: mine ? "#0a0a0a" : "var(--text)",
+                      padding: 10, borderRadius: 8, fontSize: 13, whiteSpace: "pre-wrap",
+                      maxWidth: "80%"
+                    }}>
+                      {m.message}
+                    </div>
+                  </div>
+                );
+              })}
+            </>
+          )}
+        </div>
+
+        {readOnly ? (
+          <div style={{ padding: 16, borderTop: "1px solid var(--border)", textAlign: "center", color: "var(--muted)", fontSize: 12 }}>
+            🔒 Ce ticket est {status === "resolved" ? "résolu" : "fermé"} — plus de réponses possibles
+          </div>
+        ) : (
+          <div style={{ padding: 12, borderTop: "1px solid var(--border)", display: "flex", gap: 8 }}>
+            <textarea
+              className="form-input"
+              rows={2}
+              value={reply}
+              onChange={e => setReply(e.target.value)}
+              placeholder="Répondre…"
+              style={{ flex: 1, resize: "none" }}
+              onKeyDown={e => {
+                if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+              }}
+            />
+            <button className="btn btn-primary" onClick={send} disabled={sending || !reply.trim()}>
+              {sending ? "…" : "📤"}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
