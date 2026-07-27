@@ -12,7 +12,7 @@ export default async function handler(req, res) {
     // 1. Authentification + vérification admin (côté serveur, pas front !)
     const auth = await verifyUser(req);
     if (!auth) return res.status(401).json({ error: 'Non authentifié' });
-    const { garage, supabase } = auth;
+    const { user, garage, supabase } = auth;
     if (!garage || garage.is_admin !== true) {
       return res.status(403).json({ error: 'Accès refusé' });
     }
