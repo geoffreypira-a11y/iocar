@@ -373,6 +373,84 @@ export default async function handler(req, res) {
         return res.status(200).json({ deleted: data?.length || 0 });
       }
 
+      // v8.49.15 — CHAT THREADÉ ADMIN ↔ ABONNÉ ────────────────
+      case 'tickets_thread': {
+        const { ticketId } = payload || {};
+        if (!ticketId) return res.status(400).json({ error: 'ticketId manquant' });
+        const { data: ticket } = await supabase
+          .from('support_tickets')
+          .select('id, user_id, type, message, status, created_at')
+          .eq('id', ticketId)
+          .single();
+        if (!ticket) return res.status(404).json({ error: 'Ticket introuvable' });
+        const { data: messages } = await supabase
+          .from('ticket_messages')
+          .select('id, author_type, author_name, message, read_at, created_at')
+          .eq('ticket_id', ticketId)
+          .order('created_at', { ascending: true });
+        // Marque les messages 'subscriber' comme lus
+        const unreadIds = (messages || [])
+          .filter(m => m.author_type === 'subscriber' && !m.read_at)
+          .map(m => m.id);
+        if (unreadIds.length > 0) {
+          await supabase
+            .from('ticket_messages')
+            .update({ read_at: new Date().toISOString() })
+            .in('id', unreadIds);
+        }
+        return res.status(200).json({ ticket, messages: messages || [] });
+      }
+
+      case 'tickets_reply': {
+        const { ticketId, message } = payload || {};
+        if (!ticketId) return res.status(400).json({ error: 'ticketId manquant' });
+        if (!message || typeof message !== 'string') return res.status(400).json({ error: 'Message manquant' });
+        const clean = message.trim();
+        if (!clean) return res.status(400).json({ error: 'Message vide' });
+        if (clean.length > 5000) return res.status(400).json({ error: 'Message trop long (max 5000)' });
+
+        const { data: ticket } = await supabase
+          .from('support_tickets')
+          .select('id, user_id, status')
+          .eq('id', ticketId)
+          .single();
+        if (!ticket) return res.status(404).json({ error: 'Ticket introuvable' });
+
+        const { data: inserted } = await supabase
+          .from('ticket_messages')
+          .insert({
+            ticket_id: ticketId,
+            author_type: 'admin',
+            author_user_id: user.id,
+            author_name: user.email || 'Support IO Car',
+            message: clean
+          })
+          .select()
+          .single();
+
+        // Passage auto en 'in_progress' si 'new'
+        if (ticket.status === 'new') {
+          await supabase
+            .from('support_tickets')
+            .update({ status: 'in_progress' })
+            .eq('id', ticketId);
+        }
+
+        // Email abonné (fire-and-forget)
+        sendAdminReplyEmailIocar({ ticket, message: clean, supabase }).catch(() => {});
+
+        return res.status(200).json({ ok: true, message: inserted });
+      }
+
+      case 'tickets_count_unread_from_subscriber': {
+        const { count } = await supabase
+          .from('ticket_messages')
+          .select('id', { count: 'exact', head: true })
+          .eq('author_type', 'subscriber')
+          .is('read_at', null);
+        return res.status(200).json({ count: count || 0 });
+      }
+
       default:
         return res.status(400).json({ error: 'Action inconnue' });
     }
@@ -380,5 +458,44 @@ export default async function handler(req, res) {
   } catch (e) {
     console.error('admin endpoint:', e);
     return res.status(500).json({ error: 'Erreur serveur' });
+  }
+}
+
+// ─── v8.49.15 — HELPER EMAIL RÉPONSE ADMIN → ABONNÉ ─────────────
+async function sendAdminReplyEmailIocar({ ticket, message, supabase }) {
+  const resendKey = process.env.RESEND_API_KEY;
+  if (!resendKey) return;
+
+  // Récupère l'email de l'abonné via son user_id
+  let subscriberEmail = null;
+  try {
+    const { data: userData } = await supabase.auth.admin.getUserById(ticket.user_id);
+    subscriberEmail = userData?.user?.email;
+  } catch (e) {
+    console.error('[sendAdminReplyEmailIocar] getUserById', e.message);
+  }
+  if (!subscriberEmail) return;
+
+  const emailFrom = process.env.SUPPORT_EMAIL_FROM || 'IO Car Support <no-reply@iocar.online>';
+  const preview = message.slice(0, 200) + (message.length > 200 ? '…' : '');
+  const subject = `[IO Car] Réponse à votre ticket support`;
+  const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const html = `
+    <div style="font-family: -apple-system, sans-serif; max-width: 600px;">
+      <h2 style="color: #d4a843;">Notre équipe vous a répondu</h2>
+      <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; white-space: pre-wrap;">${esc(preview)}</div>
+      <p style="color: #999; font-size: 12px; margin-top: 20px;">
+        Ticket #${String(ticket.id).slice(0, 8)} · Ouvrez votre dashboard IO Car pour répondre.
+      </p>
+    </div>
+  `;
+  try {
+    await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${resendKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: emailFrom, to: [subscriberEmail], subject, html })
+    });
+  } catch (e) {
+    console.error('[sendAdminReplyEmailIocar] send', e.message);
   }
 }
