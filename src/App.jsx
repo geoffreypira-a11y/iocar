@@ -8998,6 +8998,183 @@ function SuspendedScreen({ garage, onLogout }) {
 /* ═══════════════════════════════════════════════════════════════
    ADMIN PAGE — Dashboard garages IO Car
 ═══════════════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════════════
+   ADMIN TICKET CHAT PANEL — v8.49.15
+   Panneau chat threadé côté admin IOCAR.
+═══════════════════════════════════════════════════════════════ */
+function AdminTicketChatPanel({ ticket, adminCall, onStatusAutoUpdate, onDelete, garageEmail, typeInfoLabel }) {
+  const [messages, setMessages] = useState([]);
+  const [reply, setReply] = useState("");
+  const [sending, setSending] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const scrollRef = React.useRef(null);
+  const readOnly = ticket.status === "resolved" || ticket.status === "closed";
+
+  const loadThread = React.useCallback(async () => {
+    setLoading(true);
+    try {
+      const { messages: msgs } = await adminCall("tickets_thread", { ticketId: ticket.id });
+      setMessages(msgs || []);
+    } catch (e) {
+      console.warn("[AdminTicketChatPanel] load", e.message);
+    }
+    setLoading(false);
+  }, [ticket.id, adminCall]);
+
+  React.useEffect(() => { loadThread(); }, [loadThread]);
+
+  React.useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [messages.length]);
+
+  // Realtime
+  React.useEffect(() => {
+    let channel = null;
+    let cancelled = false;
+    (async () => {
+      try {
+        const mod = await import("@supabase/supabase-js");
+        const { createClient } = mod;
+        const supaUrl = window.__SUPABASE_URL || import.meta.env?.VITE_SUPABASE_URL;
+        const supaAnon = window.__SUPABASE_ANON_KEY || import.meta.env?.VITE_SUPABASE_ANON_KEY;
+        if (!supaUrl || !supaAnon) return;
+        const client = createClient(supaUrl, supaAnon);
+        channel = client
+          .channel(`admin_ticket_${ticket.id}`)
+          .on("postgres_changes", {
+            event: "INSERT",
+            schema: "public",
+            table: "ticket_messages",
+            filter: `ticket_id=eq.${ticket.id}`
+          }, (payload) => {
+            if (cancelled) return;
+            setMessages(prev => {
+              if (prev.some(m => m.id === payload.new.id)) return prev;
+              return [...prev, payload.new];
+            });
+          })
+          .subscribe();
+      } catch (e) {
+        console.warn("[AdminTicketChatPanel] Realtime indisponible:", e.message);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (channel && channel.unsubscribe) channel.unsubscribe();
+    };
+  }, [ticket.id]);
+
+  async function send() {
+    if (!reply.trim() || sending) return;
+    setSending(true);
+    try {
+      const { message } = await adminCall("tickets_reply", {
+        ticketId: ticket.id,
+        message: reply.trim()
+      });
+      if (message) {
+        setMessages(prev => {
+          if (prev.some(m => m.id === message.id)) return prev;
+          return [...prev, message];
+        });
+      }
+      if (ticket.status === "new" && onStatusAutoUpdate) {
+        onStatusAutoUpdate("in_progress");
+      }
+      setReply("");
+    } catch (e) {
+      alert(e.message || "Échec envoi");
+    }
+    setSending(false);
+  }
+
+  return (
+    <div>
+      <div style={{ fontSize: 11, color: "var(--muted)", letterSpacing: 1, textTransform: "uppercase", marginBottom: 6 }}>
+        💬 Conversation avec l'abonné
+      </div>
+      <div ref={scrollRef} style={{
+        maxHeight: 380, overflowY: "auto", marginBottom: 10, padding: 10,
+        background: "var(--card2)", borderRadius: 8,
+        border: "1px solid var(--border2)"
+      }}>
+        {loading && <div style={{ fontSize: 11, color: "var(--muted)", textAlign: "center", padding: 10 }}>Chargement…</div>}
+        {!loading && messages.length === 0 && (
+          <div style={{ fontSize: 12, color: "var(--muted)", textAlign: "center", padding: 10 }}>
+            Aucune réponse encore. Envoyez le premier message à l'abonné.
+          </div>
+        )}
+        {messages.map(m => {
+          const isAdmin = m.author_type === "admin";
+          return (
+            <div key={m.id} style={{ marginBottom: 10, display: "flex", flexDirection: "column", alignItems: isAdmin ? "flex-end" : "flex-start" }}>
+              <div style={{ fontSize: 10, color: "var(--muted)", marginBottom: 3 }}>
+                {isAdmin ? "🛠 Vous" : `👤 ${m.author_name || "Abonné"}`} · {new Date(m.created_at).toLocaleString("fr-FR")}
+              </div>
+              <div style={{
+                background: isAdmin ? "var(--gold)" : "var(--card)",
+                color: isAdmin ? "#0a0a0a" : "var(--text)",
+                padding: "8px 12px",
+                borderRadius: 8,
+                fontSize: 12,
+                whiteSpace: "pre-wrap",
+                maxWidth: "80%",
+                border: !isAdmin ? "1px solid var(--border2)" : "none"
+              }}>
+                {m.message}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {readOnly ? (
+        <div style={{ fontSize: 11, color: "var(--muted)", textAlign: "center", padding: 8, marginBottom: 10 }}>
+          🔒 Ce ticket est {ticket.status === "resolved" ? "résolu" : "fermé"} — repassez-le en "En cours" pour reprendre la conversation.
+        </div>
+      ) : (
+        <div style={{ display: "flex", gap: 8, alignItems: "flex-end", marginBottom: 10 }}>
+          <textarea
+            className="form-input"
+            rows={2}
+            value={reply}
+            onChange={(e) => setReply(e.target.value)}
+            placeholder="Votre réponse à l'abonné…"
+            style={{ fontSize: 12, flex: 1, resize: "none" }}
+            onKeyDown={e => {
+              if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey) {
+                e.preventDefault(); send();
+              }
+            }}
+          />
+          <button className="btn btn-primary btn-sm" onClick={send} disabled={sending || !reply.trim()}>
+            {sending ? "…" : "📤 Envoyer"}
+          </button>
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 6 }}>
+        <a
+          href={`mailto:${garageEmail}?subject=${encodeURIComponent(`[IO Car] Re: ${typeInfoLabel}`)}&body=${encodeURIComponent(`Bonjour,\n\nSuite à votre ticket :\n\n> ${ticket.message.split('\n').join('\n> ')}\n\n`)}`}
+          className="btn btn-ghost btn-sm"
+          style={{ textDecoration: "none" }}
+          title="Répondre par email (hors chat)"
+        >
+          📧 Email direct
+        </a>
+        <button
+          className="btn btn-danger btn-sm"
+          onClick={onDelete}
+          style={{ marginLeft: "auto" }}
+          title="Supprimer définitivement ce ticket"
+        >
+          🗑 Supprimer
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function AdminPage({ token }) {
   // Sous-onglet actif : "garages" (par défaut) ou "tickets"
   const [adminTab, setAdminTab] = useState("garages");
@@ -9791,42 +9968,15 @@ function AdminPage({ token }) {
                           ))}
                         </div>
 
-                        {/* Notes admin */}
-                        <div style={{ fontSize: 11, color: "var(--muted)", letterSpacing: 1, textTransform: "uppercase", marginBottom: 6 }}>
-                          Notes internes (visibles uniquement par les admins)
-                        </div>
-                        <textarea
-                          className="form-input"
-                          rows={3}
-                          placeholder="Ex: Répondu par email le 02/05, en attente du retour client"
-                          value={currentNotes}
-                          onChange={e => setTicketEditNotes(prev => ({ ...prev, [t.id]: e.target.value }))}
-                          style={{ marginBottom: 8 }}
+                        {/* v8.49.15 — Chat threadé admin ↔ abonné (remplace Notes) */}
+                        <AdminTicketChatPanel
+                          ticket={t}
+                          adminCall={adminCall}
+                          onStatusAutoUpdate={(s) => updateTicket(t.id, { status: s })}
+                          onDelete={() => deleteTicket(t.id)}
+                          garageEmail={garageEmail}
+                          typeInfoLabel={typeInfo.label}
                         />
-                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                          <button
-                            className="btn btn-primary btn-sm"
-                            onClick={() => updateTicket(t.id, { admin_notes: currentNotes })}
-                            disabled={currentNotes === (t.admin_notes || "")}
-                          >
-                            💾 Enregistrer les notes
-                          </button>
-                          <a
-                            href={`mailto:${garageEmail}?subject=${encodeURIComponent(`[IO Car] Re: ${typeInfo.label}`)}&body=${encodeURIComponent(`Bonjour,\n\nSuite à votre ticket :\n\n> ${t.message.split('\n').join('\n> ')}\n\n`)}`}
-                            className="btn btn-ghost btn-sm"
-                            style={{ textDecoration: "none" }}
-                          >
-                            📧 Répondre par email
-                          </a>
-                          <button
-                            className="btn btn-danger btn-sm"
-                            onClick={() => deleteTicket(t.id)}
-                            style={{ marginLeft: "auto" }}
-                            title="Supprimer définitivement ce ticket"
-                          >
-                            🗑 Supprimer
-                          </button>
-                        </div>
                       </div>
                     )}
                   </div>
