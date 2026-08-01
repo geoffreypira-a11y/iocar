@@ -147,9 +147,16 @@ export default async function handler(req, res) {
 // pour éviter un chaînage d'auth). Fire-and-forget.
 async function cascadeToggleIobillFromWebhook(garageId, isActive) {
   const IOBILL_API_URL = process.env.IOBILL_API_URL || 'https://app.iobill.online/api/public';
+  const IOBILL_EXTERNAL_SECRET = process.env.IOBILL_EXTERNAL_SECRET;
+  if (!IOBILL_EXTERNAL_SECRET) {
+    throw new Error('IOBILL_EXTERNAL_SECRET non configuré côté serveur');
+  }
   const r = await fetch(`${IOBILL_API_URL}?op=external`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'X-External-Secret': IOBILL_EXTERNAL_SECRET
+    },
     body: JSON.stringify({
       action: 'external_toggle_active',
       source_app: 'iocar',

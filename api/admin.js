@@ -155,22 +155,31 @@ export default async function handler(req, res) {
         if (g.iobill_company_id) {
           try {
             const IOBILL_API_URL = process.env.IOBILL_API_URL || 'https://app.iobill.online/api/public';
-            const r = await fetch(`${IOBILL_API_URL}?op=external`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                action: 'external_toggle_active',
-                source_app: 'iocar',
-                external_ref: garageId,
-                is_active: false
-              })
-            });
-            if (!r.ok) {
-              const err = await r.json().catch(() => ({}));
-              console.error('[delete_garage cascade IOBILL] IOBILL a refusé', err?.error);
+            const IOBILL_EXTERNAL_SECRET = process.env.IOBILL_EXTERNAL_SECRET;
+            if (!IOBILL_EXTERNAL_SECRET) {
+              console.error('[delete_garage cascade IOBILL] IOBILL_EXTERNAL_SECRET non configuré');
               // On continue quand même la suppression IOCAR (fire-and-forget policy)
             } else {
-              console.log('[delete_garage cascade IOBILL] suspension OK', { garageId });
+              const r = await fetch(`${IOBILL_API_URL}?op=external`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'X-External-Secret': IOBILL_EXTERNAL_SECRET
+                },
+                body: JSON.stringify({
+                  action: 'external_toggle_active',
+                  source_app: 'iocar',
+                  external_ref: garageId,
+                  is_active: false
+                })
+              });
+              if (!r.ok) {
+                const err = await r.json().catch(() => ({}));
+                console.error('[delete_garage cascade IOBILL] IOBILL a refusé', err?.error);
+                // On continue quand même la suppression IOCAR (fire-and-forget policy)
+              } else {
+                console.log('[delete_garage cascade IOBILL] suspension OK', { garageId });
+              }
             }
           } catch (e) {
             console.warn('[delete_garage cascade IOBILL] exception réseau (on continue)', e.message);
@@ -447,9 +456,16 @@ async function cascadeToggleIobill(supabase, garageId, isActive) {
   }
 
   const IOBILL_API_URL = process.env.IOBILL_API_URL || 'https://app.iobill.online/api/public';
+  const IOBILL_EXTERNAL_SECRET = process.env.IOBILL_EXTERNAL_SECRET;
+  if (!IOBILL_EXTERNAL_SECRET) {
+    throw new Error('IOBILL_EXTERNAL_SECRET non configuré côté serveur');
+  }
   const r = await fetch(`${IOBILL_API_URL}?op=external`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'X-External-Secret': IOBILL_EXTERNAL_SECRET
+    },
     body: JSON.stringify({
       action: 'external_toggle_active',
       source_app: 'iocar',

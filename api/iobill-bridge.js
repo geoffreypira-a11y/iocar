@@ -1606,7 +1606,10 @@ async function handleAdminToggleIobill(user, garage, supabase, body, res) {
   try {
     const r = await fetch(`${IOBILL_API_URL}?op=external`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-External-Secret': IOBILL_EXTERNAL_SECRET
+      },
       body: JSON.stringify({
         action: 'external_toggle_active',
         source_app: 'iocar',
