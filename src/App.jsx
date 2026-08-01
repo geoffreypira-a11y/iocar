@@ -6,6 +6,10 @@ import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recha
 import IobillBridgeCard from "./components/IobillBridgeCard.jsx";
 import IobillInvoiceSync from "./components/IobillInvoiceSync.jsx";
 
+// v8.49.16 — Système d'essai gratuit 7 jours + paywall
+import { TrialBanner, hasValidAccess } from "./components/TrialBanner.jsx";
+import { TrialExpiredPage } from "./modules/core/TrialExpiredPage.jsx";
+
 /* ═══════════════════════════════════════════════════════════════
    SUPABASE CONFIG
 ═══════════════════════════════════════════════════════════════ */
@@ -8759,8 +8763,25 @@ function LoginScreen({ onLogin }) {
         // 1. Créer le compte Supabase
         const res = await sb.signUp(email, password, garageName);
         if (res.error) { setError(res.error.message || "Erreur inscription"); setLoading(false); return; }
-        // 2. Rediriger vers Stripe pour le paiement
-        await redirectToStripe(STRIPE_PLANS[plan].priceId, email);
+        // v8.49.16 — On ne redirige PLUS vers Stripe à l'inscription.
+        // L'utilisateur bénéficie de 7 jours d'essai gratuit illimité, puis
+        // se voit proposer un paywall (TrialExpiredPage) à l'expiration.
+        // Auto-login pour aller direct dans l'app.
+        try {
+          const login = await sb.signIn(email, password);
+          if (login?.access_token) {
+            saveSession(login.access_token, login.user, login.refresh_token);
+            onLogin(login.access_token, login.user);
+            setLoading(false);
+            return;
+          }
+          // Si le login auto échoue (email de confirmation requis, etc.), on affiche un message
+          setSuccess("Compte créé ! Vérifiez votre email si nécessaire, puis connectez-vous.");
+          setMode("login");
+        } catch(e) {
+          setSuccess("Compte créé ! Connectez-vous pour accéder à votre essai gratuit.");
+          setMode("login");
+        }
         setLoading(false); return;
       }
       // Login
@@ -8798,7 +8819,7 @@ function LoginScreen({ onLogin }) {
             {mode === "login" ? "Connexion" : mode === "register" ? "Créer mon accès" : "Mot de passe oublié"}
           </div>
           <div style={{ fontSize: 13, color: "var(--muted)", textAlign: "center", marginBottom: 24 }}>
-            {mode === "login" ? "Accédez à votre concession" : mode === "register" ? "Choisissez votre abonnement" : "Réinitialiser votre mot de passe"}
+            {mode === "login" ? "Accédez à votre concession" : mode === "register" ? "7 jours d'essai gratuit, sans carte bancaire" : "Réinitialiser votre mot de passe"}
           </div>
 
           {error && <div className="auth-error">⚠️ {error}</div>}
@@ -8847,7 +8868,7 @@ function LoginScreen({ onLogin }) {
             )}
             <button className="btn btn-primary" style={{ width: "100%", justifyContent: "center", padding: "12px", marginTop: 4 }}
               onClick={handle} disabled={loading}>
-              {loading ? (mode === "login" ? "⏳ Chargement en cours..." : "⏳ Redirection vers le paiement...") : mode === "login" ? "🔓 Se connecter" : mode === "register" ? `💳 Payer ${STRIPE_PLANS[plan].price} et commencer` : "📧 Envoyer le lien"}
+              {loading ? (mode === "login" ? "⏳ Chargement en cours..." : "⏳ Création du compte...") : mode === "login" ? "🔓 Se connecter" : mode === "register" ? "🎁 Démarrer mon essai gratuit (7 jours)" : "📧 Envoyer le lien"}
             </button>
             {mode === "register" && (
               <div style={{ fontSize: 11, color: "var(--muted)", textAlign: "center", lineHeight: 1.6 }}>
@@ -10429,6 +10450,14 @@ export default function App() {
   if (!isRealDemo && !isRealAdmin && garage?.is_active === false)
     return <SuspendedScreen garage={garage} onLogout={handleLogout} />;
 
+  // v8.49.16 — Gate paywall : bloque totalement l'accès si l'essai est expiré
+  // et qu'il n'y a pas d'abonnement actif (ni exempt/past_due).
+  // Les admins et le mode démo passent au travers.
+  // La logique complète est dans hasValidAccess() de TrialBanner.jsx.
+  if (!isRealDemo && !isRealAdmin && !hasValidAccess(garage)) {
+    return <TrialExpiredPage garage={garage} onSignOut={handleLogout} />;
+  }
+
   // Sources de données — trial utilise localStorage, les autres Supabase
   const useTrial = viewMode === "trial";
   const activeVehicles    = useTrial ? demoVehicles    : vehicles;
@@ -10674,6 +10703,8 @@ export default function App() {
           </aside>
 
           <main className={`content${(viewMode === "trial" || viewMode === "subscriber") ? " demo-offset" : ""}`}>
+            {/* v8.49.16 — Bandeau essai gratuit (visible pendant 'trialing') */}
+            {!isRealDemo && viewMode === "subscriber" && <TrialBanner garage={garage} />}
             {tab === "dashboard"   && <Dashboard vehicles={activeVehicles} setVehicles={setVehiclesRaw} orders={activeOrders} setTab={setTab} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} livrePolice={livrePolice} dealer={dealer} setDealer={setDealerRaw} />}
             {tab === "fleet"       && <FleetPage vehicles={activeVehicles} setVehicles={setVehiclesRaw} orders={activeOrders} setOrders={setOrdersRaw} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} livrePolice={activeLivrePolice} setLivrePolice={setLivrePoliceRaw} viewMode={viewMode} garageId={garageId} dealer={dealer} token={token} />}
             {tab === "orders"      && <OrdersPage orders={activeOrders} setOrders={setOrdersRaw} vehicles={activeVehicles} setVehiclesRaw={setVehiclesRaw} dealer={dealer} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} clients={activeClients} setClients={setClientsRaw} viewMode={viewMode} token={token} />}
