@@ -70,15 +70,26 @@ export default async function handler(req, res) {
         const sub = event.data.object;
         const active = sub.status === 'active' || sub.status === 'trialing';
 
-        const { error } = await supabase
+        // v8.49.17 — On récupère le garage_id pour la cascade IOBILL
+        const { data: g, error } = await supabase
           .from('garages')
           .update({
             is_active:  active,
             sub_status: sub.status,
           })
-          .eq('stripe_customer_id', sub.customer);
+          .eq('stripe_customer_id', sub.customer)
+          .select('id, iobill_company_id')
+          .single();
 
         if (error) console.error('Update garage (subscription):', error);
+
+        // v8.49.17 — Cascade IOBILL : suspend si résiliation/annulation
+        // (fire-and-forget, ne bloque pas la réponse au webhook Stripe)
+        if (g?.iobill_company_id) {
+          cascadeToggleIobillFromWebhook(g.id, active).catch(e =>
+            console.warn('[stripe cascade IOBILL]', e.message)
+          );
+        }
         break;
       }
 
@@ -129,4 +140,26 @@ export default async function handler(req, res) {
   }
 
   res.status(200).json({ received: true });
+}
+
+// v8.49.17 — Helper cascade IOBILL depuis le webhook Stripe
+// Appelle directement l'API IOBILL external_toggle_active (pas via bridge
+// pour éviter un chaînage d'auth). Fire-and-forget.
+async function cascadeToggleIobillFromWebhook(garageId, isActive) {
+  const IOBILL_API_URL = process.env.IOBILL_API_URL || 'https://app.iobill.online/api/public';
+  const r = await fetch(`${IOBILL_API_URL}?op=external`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action: 'external_toggle_active',
+      source_app: 'iocar',
+      external_ref: garageId,
+      is_active: isActive
+    })
+  });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    throw new Error(`IOBILL ${r.status}: ${err?.error || 'unknown'}`);
+  }
+  console.log('[stripe->iobill cascade] OK', { garageId, isActive });
 }

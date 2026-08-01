@@ -39,15 +39,15 @@ export default async function handler(req, res) {
 
     if (action === 'status') return handleStatus(garage, res);
     if (action === 'link') return handleLink(user, garage, supabase, req.body, res);
+    // v8.49.17 — Cascade suspend/réactive IOBILL (appelé par admin.js/toggle_active
+    // et par stripe-webhook.js lors d'une résiliation ou réactivation Stripe)
+    if (action === 'admin_toggle_iobill') return handleAdminToggleIobill(user, garage, supabase, req.body, res);
     if (action === 'sync_company') return handleSyncCompany(garage, supabase, res);
     if (action === 'push_invoice') return handlePushInvoice(garage, supabase, req.body, res);
     if (action === 'push_invoice_draft') return handlePushInvoiceDraft(garage, supabase, req.body, res);
     if (action === 'mark_invoice_paid') return handleMarkInvoicePaid(garage, supabase, req.body, res);
     // v8.41 — Action dédiée pour les avoirs (route vers credit_notes côté IOBILL)
     if (action === 'push_credit_note') return handlePushCreditNote(garage, supabase, req.body, res);
-    // v8.49.13 — Cascade suppression : quand l'user IOCAR supprime un avoir,
-    // on demande à IOBILL de le supprimer aussi. Refus si transmis à l'admin.
-    if (action === 'delete_credit_note') return handleDeleteCreditNote(garage, supabase, req.body, res);
     // v8.43 — CRM mono-source : sync proactive
     if (action === 'sync_client') return handleSyncClient(garage, supabase, req.body, res);
     if (action === 'delete_client') return handleDeleteClient(garage, supabase, req.body, res);
@@ -882,56 +882,6 @@ async function handleSetAutoPush(garage, supabase, body, res) {
 }
 
 // ───────────────────────────────────────────────────────────────────
-// v8.49.13 — DELETE_CREDIT_NOTE — cascade suppression avoir IOCAR → IOBILL
-//
-// Body : { action: 'delete_credit_note', order_id }
-// Retour : { ok: true, deleted: true } si supprimé
-//          { ok: false, code: 'PDP_TRANSMITTED' } si refusé par IOBILL
-// ───────────────────────────────────────────────────────────────────
-async function handleDeleteCreditNote(garage, supabase, body, res) {
-  if (!garage.iobill_api_token) {
-    // Pas de linkage IOBILL → rien à faire, on renvoie ok:true pour ne pas bloquer
-    return res.status(200).json({ ok: true, skipped: true, reason: 'no_iobill_link' });
-  }
-
-  const { order_id } = body;
-  if (!order_id) return res.status(400).json({ error: 'order_id required' });
-
-  // Récupère l'order pour connaître son id (= external_id côté IOBILL)
-  const { data: order } = await supabase
-    .from('orders')
-    .select('id, type, iobill_invoice_id')
-    .eq('id', order_id)
-    .eq('garage_id', garage.id)
-    .single();
-
-  if (!order) return res.status(404).json({ error: 'Order introuvable' });
-  if (order.type !== 'avoir') return res.status(400).json({ error: 'Order n\'est pas un avoir' });
-
-  // Appel IOBILL — l'external_id côté IOBILL c'est l'id de l'order IOCAR
-  const j = await callIobill({
-    action: 'delete_credit_note',
-    token: garage.iobill_api_token,
-    external_id: order.id
-  });
-
-  if (!j.ok) {
-    // v8.49.13 — callIobill renvoie full_payload = corps de la réponse IOBILL.
-    // On y récupère le code d'erreur (ex: PDP_TRANSMITTED) pour affichage UI.
-    const iobillCode = j.full_payload?.code || null;
-    const httpStatus = iobillCode === 'PDP_TRANSMITTED' ? 409 : 502;
-    return res.status(httpStatus).json({
-      ok: false,
-      error: j.error || 'Échec suppression IOBILL',
-      code: iobillCode,
-      details: j.full_payload || null
-    });
-  }
-
-  return res.status(200).json({ ok: true, deleted: true, iobill: j.data });
-}
-
-// ───────────────────────────────────────────────────────────────────
 // HELPERS
 // ───────────────────────────────────────────────────────────────────
 
@@ -1609,4 +1559,73 @@ async function loadOrder(supabase, orderId, garageId) {
     .single();
   if (error || !row) return { error: error || new Error('not found'), order: null };
   return { error: null, order: flattenOrder(row) };
+}
+
+// v8.49.17 — Cascade suspend/réactive IOBILL depuis IOCAR admin
+//
+// Cas d'usage :
+//   1. Admin IOCAR toggle is_active=false → cascade IOBILL is_active=false
+//   2. Admin IOCAR toggle is_active=true → cascade IOBILL is_active=true
+//   3. Stripe webhook customer.subscription.deleted → cascade IOBILL is_active=false
+//   4. Stripe webhook checkout.session.completed → cascade IOBILL is_active=true
+//
+// Le body doit contenir { is_active: boolean, garage_id?: string }
+// - Si garage_id fourni : cascade sur ce garage (mode admin, appel côté serveur)
+// - Sinon : cascade sur le garage du user authentifié
+//
+// Sécurité : requiert soit is_admin=true côté garage, soit un appel serveur
+// (le webhook Stripe passe garage_id explicitement après avoir résolu par customer_id).
+async function handleAdminToggleIobill(user, garage, supabase, body, res) {
+  const { is_active, garage_id } = body || {};
+
+  if (typeof is_active !== 'boolean') {
+    return res.status(400).json({ error: 'is_active (boolean) requis' });
+  }
+
+  // Si garage_id fourni ET différent de celui du user, on exige is_admin
+  let targetGarage = garage;
+  if (garage_id && garage_id !== garage.id) {
+    if (!garage.is_admin) {
+      return res.status(403).json({ error: 'Réservé aux admins' });
+    }
+    const { data: other } = await supabase
+      .from('garages')
+      .select('id, iobill_company_id, iobill_email')
+      .eq('id', garage_id)
+      .single();
+    if (!other) return res.status(404).json({ error: 'Garage cible introuvable' });
+    targetGarage = other;
+  }
+
+  // Si le garage n'a pas de lien IOBILL, no-op (idempotent)
+  if (!targetGarage.iobill_company_id) {
+    return res.status(200).json({ ok: true, no_link: true });
+  }
+
+  // Appel IOBILL external_toggle_active
+  try {
+    const r = await fetch(`${IOBILL_API_URL}?op=external`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'external_toggle_active',
+        source_app: 'iocar',
+        external_ref: targetGarage.id,
+        is_active
+      })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      console.error('[admin_toggle_iobill] IOBILL a refusé', j?.error);
+      return res.status(502).json({
+        error: 'IOBILL a refusé la cascade',
+        details: j?.error
+      });
+    }
+    console.log('[admin_toggle_iobill] cascade OK', { garage_id: targetGarage.id, is_active, ...j });
+    return res.status(200).json({ ok: true, iobill: j });
+  } catch (e) {
+    console.error('[admin_toggle_iobill] exception', e.message);
+    return res.status(502).json({ error: 'Erreur réseau IOBILL' });
+  }
 }
