@@ -25,7 +25,19 @@ const sb = {
       method: "POST", headers: { ...this.headers, "Authorization": `Bearer ${SUPABASE_KEY}` },
       body: JSON.stringify({ email, password, data: { garage_name } })
     });
-    return r.json();
+    const j = await r.json().catch(() => ({}));
+    // v8.49.17.1 — Propager les erreurs HTTP (429 rate limit, 4xx métier, 5xx serveur)
+    // Supabase retourne l'erreur sous plusieurs formats selon le cas :
+    //   - { error: "..." } (erreur métier classique)
+    //   - { code: 429, error_code: "over_email_send_rate_limit", msg: "..." } (rate limit)
+    //   - { code: 4xx, error_code: "...", msg: "..." } (autres 4xx)
+    // On normalise tout en { error: { message: "..." } } pour que le handler
+    // du composant Auth affiche un vrai message d'erreur au user.
+    if (!r.ok || j.error_code || j.error) {
+      const msg = j.msg || j.error?.message || j.error_description || j.error || `Erreur ${r.status}`;
+      return { error: { message: msg, code: j.code || r.status, error_code: j.error_code } };
+    }
+    return j;
   },
 
   async signIn(email, password) {
@@ -33,7 +45,13 @@ const sb = {
       method: "POST", headers: { ...this.headers },
       body: JSON.stringify({ email, password })
     });
-    return r.json();
+    const j = await r.json().catch(() => ({}));
+    // v8.49.17.1 — Idem signUp : propager toutes les formes d'erreur Supabase
+    if (!r.ok || j.error_code || j.error) {
+      const msg = j.msg || j.error?.message || j.error_description || j.error || `Erreur ${r.status}`;
+      return { error: { message: msg, code: j.code || r.status, error_code: j.error_code } };
+    }
+    return j;
   },
 
   // v8.49 — Renouvelle l'access_token à partir du refresh_token
@@ -8762,7 +8780,23 @@ function LoginScreen({ onLogin }) {
         if (!email.trim() || !password.trim()) { setError("Email et mot de passe requis"); setLoading(false); return; }
         // 1. Créer le compte Supabase
         const res = await sb.signUp(email, password, garageName);
-        if (res.error) { setError(res.error.message || "Erreur inscription"); setLoading(false); return; }
+        if (res.error) {
+          // v8.49.17.1 — Messages d'erreur explicites selon le cas
+          const code = res.error.error_code || res.error.code;
+          let msg = res.error.message || "Erreur inscription";
+          if (code === "over_email_send_rate_limit" || res.error.code === 429) {
+            msg = "⏳ Trop d'essais de création de compte. Attendez environ 1 heure avant de réessayer, ou utilisez un email différent.";
+          } else if (code === "user_already_exists" || /already registered|already exists/i.test(msg)) {
+            msg = "Un compte existe déjà avec cet email. Cliquez sur \"Se connecter\" ou \"Mot de passe oublié ?\".";
+          } else if (code === "weak_password" || /password/i.test(msg)) {
+            msg = "Mot de passe trop faible (minimum 6 caractères).";
+          } else if (code === "invalid_email" || /email/i.test(msg)) {
+            msg = "Adresse email invalide.";
+          }
+          setError(msg);
+          setLoading(false);
+          return;
+        }
         // v8.49.16 — On ne redirige PLUS vers Stripe à l'inscription.
         // L'utilisateur bénéficie de 7 jours d'essai gratuit illimité, puis
         // se voit proposer un paywall (TrialExpiredPage) à l'expiration.
@@ -8775,18 +8809,39 @@ function LoginScreen({ onLogin }) {
             setLoading(false);
             return;
           }
-          // Si le login auto échoue (email de confirmation requis, etc.), on affiche un message
-          setSuccess("Compte créé ! Vérifiez votre email si nécessaire, puis connectez-vous.");
+          // v8.49.17.1 — Si le login auto échoue, on identifie précisément la cause.
+          if (login?.error) {
+            const code = login.error.error_code || login.error.code;
+            if (code === "email_not_confirmed" || /confirm/i.test(login.error.message || "")) {
+              setSuccess("📧 Compte créé ! Un email de confirmation a été envoyé à " + email + ". Cliquez sur le lien puis revenez vous connecter.");
+            } else {
+              setError("Compte créé mais connexion auto impossible : " + (login.error.message || "réessayez manuellement"));
+            }
+          } else {
+            setSuccess("📧 Compte créé ! Vérifiez votre email pour confirmer votre inscription.");
+          }
           setMode("login");
         } catch(e) {
-          setSuccess("Compte créé ! Connectez-vous pour accéder à votre essai gratuit.");
+          setError("Compte créé mais erreur réseau lors de la connexion auto. Reconnectez-vous manuellement.");
           setMode("login");
         }
         setLoading(false); return;
       }
       // Login
       const res = await sb.signIn(email, password);
-      if (res.error) { setError("Email ou mot de passe incorrect"); setLoading(false); return; }
+      if (res.error) {
+        // v8.49.17.1 — Messages d'erreur login explicites
+        const code = res.error.error_code || res.error.code;
+        let msg = "Email ou mot de passe incorrect";
+        if (code === "email_not_confirmed" || /confirm/i.test(res.error.message || "")) {
+          msg = "📧 Email pas encore confirmé. Vérifiez votre boîte mail (et spam) et cliquez sur le lien de confirmation.";
+        } else if (code === "over_request_rate_limit" || res.error.code === 429) {
+          msg = "⏳ Trop d'essais de connexion. Attendez quelques minutes avant de réessayer.";
+        }
+        setError(msg);
+        setLoading(false);
+        return;
+      }
       saveSession(res.access_token, res.user, res.refresh_token); // v8.49 — refresh_token stocké
       onLogin(res.access_token, res.user);
     } catch(e) {
