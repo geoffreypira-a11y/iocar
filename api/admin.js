@@ -136,10 +136,46 @@ export default async function handler(req, res) {
         const { garageId } = payload || {};
         if (!garageId) return res.status(400).json({ error: 'garageId manquant' });
 
-        // Récupérer le user_id avant suppression pour pouvoir nettoyer auth.users
+        // Récupérer user_id + iobill_company_id AVANT suppression (pour cleanup + cascade)
         const { data: g, error: getErr } = await supabase
-          .from('garages').select('user_id').eq('id', garageId).single();
+          .from('garages')
+          .select('user_id, iobill_company_id, email')
+          .eq('id', garageId)
+          .single();
         if (getErr || !g) return res.status(404).json({ error: 'Garage introuvable' });
+
+        // v8.49.17.1 — CASCADE IOBILL AVANT delete IOCAR
+        // Le garage sera supprimé, mais la company IOBILL doit rester en base
+        // (données Factur-X à conserver 10 ans obligatoirement).
+        // On la SUSPEND (is_active=false) → l'user IOBILL verra le paywall
+        // s'il tente de se connecter directement, ou pourra réactiver en payant 9,90€.
+        //
+        // Attention : on doit faire ça AVANT le delete du garage, sinon on n'a
+        // plus le external_ref pour identifier la company IOBILL.
+        if (g.iobill_company_id) {
+          try {
+            const IOBILL_API_URL = process.env.IOBILL_API_URL || 'https://app.iobill.online/api/public';
+            const r = await fetch(`${IOBILL_API_URL}?op=external`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                action: 'external_toggle_active',
+                source_app: 'iocar',
+                external_ref: garageId,
+                is_active: false
+              })
+            });
+            if (!r.ok) {
+              const err = await r.json().catch(() => ({}));
+              console.error('[delete_garage cascade IOBILL] IOBILL a refusé', err?.error);
+              // On continue quand même la suppression IOCAR (fire-and-forget policy)
+            } else {
+              console.log('[delete_garage cascade IOBILL] suspension OK', { garageId });
+            }
+          } catch (e) {
+            console.warn('[delete_garage cascade IOBILL] exception réseau (on continue)', e.message);
+          }
+        }
 
         // 1. Supprimer toutes les données associées (CASCADE manuel)
         const tables = ['vehicles', 'orders', 'clients', 'livre_police'];
