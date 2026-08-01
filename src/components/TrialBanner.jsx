@@ -16,7 +16,7 @@ import React, { useState } from "react";
 // v8.49.16 — Price IDs IOCAR (à synchroniser avec create-checkout-session.js)
 // TODO(env): idéalement passer par window.__IOCAR_PRICE_MONTHLY (injecté par Vite)
 //            au lieu de codes en dur, mais on garde la valeur cohérente avec l'API.
-const PRICE_MONTHLY = "price_1TQx0FGHGXxR2PvGSH36mGP3"; // 34,90 € HT/mois
+const PRICE_MONTHLY = "price_1TzfDwGHGXxR2PvGfrExXJRv"; // 34,99 € HT/mois (Stripe: 41,98 TTC)
 
 export function TrialBanner({ garage }) {
   const [loading, setLoading] = useState(false);

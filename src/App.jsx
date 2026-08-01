@@ -8680,14 +8680,14 @@ function useSupabaseTable(token, garageId, table) {
 // /api/create-checkout-session qui utilise STRIPE_SECRET_KEY côté serveur.
 const STRIPE_PLANS = {
   monthly: {
-    priceId: "price_1TQx0FGHGXxR2PvGSH36mGP3",
+    priceId: "price_1TzfDwGHGXxR2PvGfrExXJRv",
     label:   "Mensuel",
     price:   "34,99€",
     period:  "/ mois HT",
     badge:   null,
   },
   annual: {
-    priceId: "price_1TQx1cGHGXxR2PvGpO3iWLS4",
+    priceId: "price_1TzfEnGHGXxR2PvGOrZaiAxA",
     label:   "Annuel",
     price:   "349,90€",
     period:  "/ an HT",
@@ -8828,25 +8828,39 @@ function LoginScreen({ onLogin }) {
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             {mode === "register" && (
               <>
-                {/* Choix du plan */}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 4 }}>
-                  {Object.entries(STRIPE_PLANS).map(([key, p]) => (
-                    <div key={key} onClick={() => setPlan(key)} style={{
-                      padding: "14px 12px", borderRadius: 10, cursor: "pointer", textAlign: "center",
-                      border: `2px solid ${plan === key ? "var(--gold)" : "var(--border2)"}`,
-                      background: plan === key ? "var(--gold3)" : "var(--card2)",
-                      transition: "all .15s", position: "relative"
-                    }}>
-                      {p.badge && (
-                        <div style={{ position: "absolute", top: -10, left: "50%", transform: "translateX(-50%)", background: "var(--green)", color: "#fff", fontSize: 9, fontWeight: 700, padding: "2px 8px", borderRadius: 10, whiteSpace: "nowrap" }}>
-                          {p.badge}
-                        </div>
-                      )}
-                      <div style={{ fontFamily: "Syne", fontWeight: 700, fontSize: 14, color: plan === key ? "var(--gold)" : "var(--text)" }}>{p.label}</div>
-                      <div style={{ fontFamily: "Syne", fontWeight: 800, fontSize: 20, marginTop: 4 }}>{p.price}</div>
-                      <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>{p.period}</div>
-                    </div>
-                  ))}
+                {/* v8.49.16 — Aperçu des tarifs après essai (non-cliquable, informatif) */}
+                <div style={{
+                  padding: "10px 12px",
+                  background: "rgba(212,168,67,0.06)",
+                  border: "1px solid rgba(212,168,67,0.2)",
+                  borderRadius: 10,
+                  marginBottom: 4,
+                }}>
+                  <div style={{ fontSize: 11, color: "var(--muted)", textAlign: "center", marginBottom: 8, textTransform: "uppercase", letterSpacing: 1 }}>
+                    Aperçu des tarifs après vos 7 jours d'essai
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    {Object.entries(STRIPE_PLANS).map(([key, p]) => (
+                      <div key={key} style={{
+                        padding: "10px 8px", borderRadius: 8, textAlign: "center",
+                        border: "1px solid var(--border2)",
+                        background: "var(--card2)",
+                        position: "relative", opacity: 0.85,
+                      }}>
+                        {p.badge && (
+                          <div style={{ position: "absolute", top: -8, left: "50%", transform: "translateX(-50%)", background: "var(--green)", color: "#fff", fontSize: 9, fontWeight: 700, padding: "2px 8px", borderRadius: 10, whiteSpace: "nowrap" }}>
+                            {p.badge}
+                          </div>
+                        )}
+                        <div style={{ fontFamily: "Syne", fontWeight: 700, fontSize: 12, color: "var(--muted2)" }}>{p.label}</div>
+                        <div style={{ fontFamily: "Syne", fontWeight: 800, fontSize: 16, marginTop: 2 }}>{p.price}</div>
+                        <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 1 }}>{p.period}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ fontSize: 10, color: "var(--muted)", textAlign: "center", marginTop: 8, fontStyle: "italic" }}>
+                    Aucun prélèvement pendant votre essai · IO BILL inclus
+                  </div>
                 </div>
                 <div className="form-group">
                   <label className="form-label">Nom de la concession</label>
@@ -8872,8 +8886,8 @@ function LoginScreen({ onLogin }) {
             </button>
             {mode === "register" && (
               <div style={{ fontSize: 11, color: "var(--muted)", textAlign: "center", lineHeight: 1.6 }}>
-                Paiement sécurisé par Stripe · Résiliation à tout moment<br />
-                En vous abonnant vous acceptez nos <a href="https://iocar.online/cgu" target="_blank" rel="noreferrer" style={{ color: "var(--gold)" }}>CGU</a>
+                Sans carte bancaire · Aucun engagement<br />
+                En créant votre compte vous acceptez nos <a href="https://iocar.online/cgu" target="_blank" rel="noreferrer" style={{ color: "var(--gold)" }}>CGU</a>
               </div>
             )}
           </div>
@@ -8892,15 +8906,8 @@ function LoginScreen({ onLogin }) {
              <a onClick={() => { setMode("login"); setError(""); setSuccess(""); }}>← Retour à la connexion</a>}
           </div>
 
-          {/* Mode démo */}
-          <div style={{ marginTop: 20, paddingTop: 16, borderTop: "1px solid var(--border2)", textAlign: "center" }}>
-            <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 10 }}>Vous voulez tester avant de vous abonner ?</div>
-            <button className="btn btn-ghost btn-sm" style={{ width: "100%", justifyContent: "center" }}
-              onClick={() => onLogin("demo", { id: "demo", email: "demo@iocar.fr" })}>
-              👀 Tester en mode démo (limité)
-            </button>
-            <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 6 }}>2 véhicules · 2 documents · 2 clients — sans sauvegarde</div>
-          </div>
+          {/* v8.49.16 — Ancien "mode démo (limité)" supprimé :
+              remplacé par l'essai gratuit 7 jours qui donne un accès complet. */}
         </div>
       </div>
     </>
@@ -9690,15 +9697,53 @@ function AdminPage({ token }) {
                     </select>
                   </td>
                   <td>
-                    {g._archived ? (
-                      <span className="badge" style={{ background: "rgba(140,140,140,.15)", color: "#999", border: "1px solid rgba(140,140,140,.3)" }}>
-                        📦 Archivé
-                      </span>
-                    ) : (
-                      <span className={`badge ${g.is_active ? "badge-green" : "badge-red"}`}>
-                        {g.is_active ? "✅ Actif" : "🔒 Suspendu"}
-                      </span>
-                    )}
+                    {(() => {
+                      // v8.49.16 — Statut d'abonnement enrichi (essai / plan / bloqué / exempt)
+                      if (g._archived) {
+                        return <span className="badge" style={{ background: "rgba(140,140,140,.15)", color: "#999", border: "1px solid rgba(140,140,140,.3)" }}>📦 Archivé</span>;
+                      }
+                      if (!g.is_active) {
+                        return <span className="badge badge-red">🔒 Suspendu</span>;
+                      }
+                      const now = Date.now();
+                      const trialEnd = g.trial_ends_at ? new Date(g.trial_ends_at).getTime() : null;
+                      const daysLeft = trialEnd ? Math.ceil((trialEnd - now) / 86400000) : 0;
+                      if (g.sub_status === "exempt") {
+                        return <span className="badge" style={{ background: "rgba(140,140,140,.15)", color: "#bbb", border: "1px solid rgba(140,140,140,.3)" }}>✅ Exempt</span>;
+                      }
+                      if (g.sub_status === "trialing") {
+                        if (trialEnd && trialEnd > now) {
+                          const urgent = daysLeft <= 2;
+                          return (
+                            <span className="badge" style={{
+                              background: urgent ? "rgba(232,150,61,.15)" : "rgba(212,168,67,.15)",
+                              color: urgent ? "var(--orange)" : "var(--gold)",
+                              border: `1px solid ${urgent ? "rgba(232,150,61,.4)" : "rgba(212,168,67,.35)"}`
+                            }}>
+                              🎁 Essai · {daysLeft}j restant{daysLeft > 1 ? "s" : ""}
+                            </span>
+                          );
+                        }
+                        return <span className="badge badge-red">🔒 Bloqué (essai fini)</span>;
+                      }
+                      if (g.sub_status === "active") {
+                        if (g.plan === "annual") {
+                          return <span className="badge badge-green">💳 Annuel</span>;
+                        }
+                        if (g.plan === "monthly") {
+                          return <span className="badge badge-green">💳 Mensuel</span>;
+                        }
+                        return <span className="badge badge-green">💳 Actif</span>;
+                      }
+                      if (g.sub_status === "past_due") {
+                        return <span className="badge" style={{ background: "rgba(232,150,61,.15)", color: "var(--orange)", border: "1px solid rgba(232,150,61,.4)" }}>⚠️ Retard paiement</span>;
+                      }
+                      if (g.sub_status === "canceled") {
+                        return <span className="badge badge-red">❌ Annulé</span>;
+                      }
+                      // Fallback : sub_status inconnu ou null
+                      return <span className="badge badge-green">✅ Actif</span>;
+                    })()}
                   </td>
                   <td style={{ fontSize: 11, color: "var(--muted)" }}>
                     {g.created_at ? new Date(g.created_at).toLocaleDateString("fr-FR") : "—"}

@@ -15,8 +15,8 @@ import React, { useState } from "react";
  */
 
 // v8.49.16 — Price IDs IOCAR (à synchroniser avec create-checkout-session.js)
-const PRICE_MONTHLY = "price_1TQx0FGHGXxR2PvGSH36mGP3"; // 34,90 € HT/mois
-const PRICE_YEARLY  = "price_1TQx1cGHGXxR2PvGpO3iWLS4"; // 349 € HT/an
+const PRICE_MONTHLY = "price_1TzfDwGHGXxR2PvGfrExXJRv"; // 34,99 € HT/mois (Stripe: 41,98 TTC)
+const PRICE_YEARLY  = "price_1TzfEnGHGXxR2PvGOrZaiAxA"; // 349,90 € HT/an (Stripe: 419,88 TTC)
 
 export function TrialExpiredPage({ garage, onSignOut }) {
   const [loading, setLoading] = useState(false);
@@ -108,14 +108,14 @@ export function TrialExpiredPage({ garage, onSignOut }) {
         <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
           <PlanCard
             label="Mensuel"
-            price="34,90 €"
+            price="34,99 €"
             unit="HT/mois"
             selected={selectedPlan === "monthly"}
             onClick={() => setSelectedPlan("monthly")}
           />
           <PlanCard
             label="Annuel"
-            price="349 €"
+            price="349,90 €"
             unit="HT/an"
             badge="2 mois offerts"
             selected={selectedPlan === "yearly"}

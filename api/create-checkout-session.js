@@ -12,8 +12,8 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 // Liste des Price IDs autorisés — on whitelist par sécurité
 // Un utilisateur ne peut pas envoyer un autre price_id arbitraire
 const ALLOWED_PRICES = new Set([
-  'price_1TQx0FGHGXxR2PvGSH36mGP3',  // 34,99 € / mois
-  'price_1TQx1cGHGXxR2PvGpO3iWLS4',  // 349,90 € / an
+  'price_1TzfDwGHGXxR2PvGfrExXJRv',  // 41,98 € TTC / mois (34,98 HT)
+  'price_1TzfEnGHGXxR2PvGOrZaiAxA',  // 419,88 € TTC / an (349,90 HT)
 ]);
 
 export default async function handler(req, res) {
