@@ -10554,7 +10554,15 @@ export default function App() {
   // et qu'il n'y a pas d'abonnement actif (ni exempt/past_due).
   // Les admins et le mode démo passent au travers.
   // La logique complète est dans hasValidAccess() de TrialBanner.jsx.
-  if (!isRealDemo && !isRealAdmin && !hasValidAccess(garage)) {
+  //
+  // v8.49.17.5 — GARDE-FOU ANTI-FLASH RENFORCÉ :
+  // On ne déclenche le paywall QUE si :
+  //   - le garage est complètement chargé (avec un sub_status non vide)
+  //   - ET hasValidAccess renvoie false
+  // Sinon on laisse passer (pas de flash). Les cas de vrai blocage
+  // (canceled, expired, trialing expiré) ont TOUS un sub_status renseigné.
+  const paywallReady = garage && garage.sub_status != null && garage.sub_status !== "";
+  if (!isRealDemo && !isRealAdmin && paywallReady && !hasValidAccess(garage)) {
     return <TrialExpiredPage garage={garage} onSignOut={handleLogout} />;
   }
 
