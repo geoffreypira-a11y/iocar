@@ -10533,7 +10533,14 @@ export default function App() {
     ? dvReady && doReady && dcReady && dlpReady && ddReady
     : !appLoading && garageReady && vReady && oReady && cReady && lpReady;
 
-  if (!allReady) {
+  // v8.49.17.5 — On étend le "loading" au cas où le garage est chargé
+  // mais son sub_status n'est pas encore renseigné (race condition Supabase).
+  // Sans ça on avait un flash paywall 200-500 ms avant que le dashboard
+  // s'affiche. Ici on continue simplement d'afficher le loader spinner.
+  const subStatusReady = isRealDemo || isRealAdmin ||
+    (garage && garage.sub_status != null && garage.sub_status !== "");
+
+  if (!allReady || !subStatusReady) {
     return (
       <>
         <style>{STYLE}</style>
