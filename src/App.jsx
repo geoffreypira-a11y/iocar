@@ -79,11 +79,23 @@ const sb = {
   },
 
   async resetPassword(email) {
+    // v8.50 — Ajout redirectTo explicite pour que le mail redirige vers l'app prod
+    // (sinon Supabase utilise le "Site URL" configuré qui peut être localhost:3000).
+    // Propage aussi les erreurs (429 rate limit, 4xx, etc.) comme signUp/signIn.
+    const origin = (typeof window !== "undefined" && window.location?.origin) || "https://app.iocar.online";
     const r = await fetch(`${SUPABASE_URL}/auth/v1/recover`, {
       method: "POST", headers: { ...this.headers },
-      body: JSON.stringify({ email })
+      body: JSON.stringify({
+        email,
+        redirect_to: `${origin}/reset-password`
+      })
     });
-    return r.json();
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.error_code || j.error) {
+      const msg = j.msg || j.error?.message || j.error_description || j.error || `Erreur ${r.status}`;
+      return { error: { message: msg, code: j.code || r.status, error_code: j.error_code } };
+    }
+    return j;
   },
 
   // CRUD générique
@@ -8771,8 +8783,24 @@ function LoginScreen({ onLogin }) {
     setError(""); setSuccess(""); setLoading(true);
     try {
       if (mode === "reset") {
-        await sb.resetPassword(email);
-        setSuccess("Email de réinitialisation envoyé ! Vérifiez votre boîte mail.");
+        // v8.50 — Propage les erreurs (rate limit, email inexistant, etc.)
+        const res = await sb.resetPassword(email);
+        if (res && res.error) {
+          const code = res.error.error_code || res.error.code;
+          let msg = res.error.message || "Erreur lors de l'envoi";
+          if (code === "over_email_send_rate_limit" || res.error.code === 429) {
+            msg = "⏳ Trop de demandes récentes. Attendez environ 1 heure avant de réessayer.";
+          } else if (code === "user_not_found" || /not found/i.test(msg)) {
+            // Sécurité : on n'indique pas si l'email existe ou non pour éviter l'énumération
+            setSuccess("Si un compte existe avec cet email, un lien de réinitialisation vient d'être envoyé.");
+            setLoading(false);
+            return;
+          }
+          setError(msg);
+          setLoading(false);
+          return;
+        }
+        setSuccess("📧 Email de réinitialisation envoyé ! Vérifiez votre boîte mail (et le dossier spam).");
         setLoading(false); return;
       }
       if (mode === "register") {
