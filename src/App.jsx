@@ -8776,10 +8776,13 @@ async function redirectToStripe(priceId, email) {
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   RESET PASSWORD SCREEN — v8.50
+   RESET PASSWORD SCREEN — v8.52
    Écran affiché quand l'user arrive sur /reset-password depuis
    un lien email Supabase (avec #access_token=xxx&type=recovery
    dans le hash de l'URL).
+
+   v8.52 — Refonte visuelle avec styles inline (cohérent avec
+   TrialExpiredPage) : dark, doré, logo IO Car, cadre centré.
 ═══════════════════════════════════════════════════════════════ */
 function ResetPasswordScreen({ accessToken, onSuccess }) {
   const [password, setPassword] = React.useState("");
@@ -8814,7 +8817,6 @@ function ResetPasswordScreen({ accessToken, onSuccess }) {
         return;
       }
       setSuccess("✅ Mot de passe modifié ! Redirection…");
-      // Efface le hash + redirige vers l'accueil après 1.5s
       setTimeout(() => {
         window.location.hash = "";
         window.location.href = "/";
@@ -8825,47 +8827,191 @@ function ResetPasswordScreen({ accessToken, onSuccess }) {
     setLoading(false);
   };
 
+  const inputStyle = {
+    width: "100%",
+    padding: "12px 14px",
+    background: "rgba(255,255,255,0.03)",
+    border: "1px solid rgba(255,255,255,0.08)",
+    borderRadius: 8,
+    color: "#e8e8e8",
+    fontSize: 14,
+    boxSizing: "border-box",
+    outline: "none",
+    fontFamily: "inherit",
+  };
+
+  const labelStyle = {
+    display: "block",
+    fontSize: 11,
+    color: "#8a8d95",
+    marginBottom: 6,
+    textTransform: "uppercase",
+    letterSpacing: 1,
+    fontWeight: 600,
+  };
+
   return (
-    <>
-      <div className="auth-bg" />
-      <div className="auth-wrap">
-        <div className="auth-card">
-          <div className="auth-logo">
-            <img src="/logo-full.svg" alt="IO Car" />
+    <div style={{
+      minHeight: "100vh",
+      background: "#0b0c10",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: 20,
+      fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif",
+    }}>
+      <div style={{
+        maxWidth: 460,
+        width: "100%",
+        background: "#141519",
+        border: "1px solid rgba(212,168,67,0.15)",
+        borderRadius: 14,
+        padding: 36,
+        boxShadow: "0 20px 60px rgba(0,0,0,0.5)",
+      }}>
+        {/* Logo IO Car */}
+        <div style={{ textAlign: "center", marginBottom: 24 }}>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 12 }}>
+            <div style={{
+              width: 48,
+              height: 48,
+              background: "#d4a843",
+              borderRadius: 10,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 20,
+              fontWeight: 800,
+              color: "#0b0c10",
+              fontFamily: "'Syne',sans-serif",
+            }}>IO</div>
+            <div style={{
+              fontFamily: "'Syne',sans-serif",
+              fontSize: 22,
+              fontWeight: 800,
+              color: "#d4a843",
+              letterSpacing: "-0.02em",
+            }}>IO Car</div>
           </div>
-          <h1 className="auth-title">Nouveau mot de passe</h1>
-          <p className="auth-subtitle">Choisissez votre nouveau mot de passe</p>
-
-          {error && <div className="auth-error">⚠️ {error}</div>}
-          {success && <div className="auth-success">{success}</div>}
-
-          {!success && (
-            <>
-              <div className="form-group">
-                <label className="form-label">Nouveau mot de passe</label>
-                <input className="form-input" type="password" placeholder="Minimum 6 caractères"
-                  value={password} onChange={e => setPassword(e.target.value)} autoFocus />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Confirmez</label>
-                <input className="form-input" type="password" placeholder="Retapez le même mot de passe"
-                  value={confirm} onChange={e => setConfirm(e.target.value)}
-                  onKeyDown={e => { if (e.key === "Enter") submit(); }} />
-              </div>
-
-              <button className="btn btn-primary" style={{ width: "100%", justifyContent: "center", padding: "12px", marginTop: 4 }}
-                onClick={submit} disabled={loading}>
-                {loading ? "⏳ Mise à jour..." : "🔐 Mettre à jour mon mot de passe"}
-              </button>
-
-              <div className="auth-switch" style={{ marginTop: 20 }}>
-                <a onClick={() => { window.location.hash = ""; window.location.href = "/"; }}>← Retour à la connexion</a>
-              </div>
-            </>
-          )}
+          <p style={{ margin: "12px 0 0 0", fontSize: 10, color: "#7a7d85", letterSpacing: 2, textTransform: "uppercase" }}>
+            By Owl's Industry
+          </p>
         </div>
+
+        {/* Séparateur gradient */}
+        <div style={{
+          height: 1,
+          background: "linear-gradient(90deg,transparent,rgba(212,168,67,0.3),transparent)",
+          marginBottom: 28,
+        }} />
+
+        <h1 style={{
+          margin: "0 0 8px 0",
+          fontFamily: "'Syne',sans-serif",
+          fontSize: 22,
+          fontWeight: 700,
+          color: "#ffffff",
+          letterSpacing: "-0.01em",
+        }}>
+          🔐 Nouveau mot de passe
+        </h1>
+        <p style={{ margin: "0 0 24px 0", fontSize: 13, color: "#8a8d95", lineHeight: 1.5 }}>
+          Choisissez votre nouveau mot de passe pour votre compte IO Car.
+        </p>
+
+        {error && (
+          <div style={{
+            padding: "12px 14px",
+            marginBottom: 16,
+            background: "rgba(229,73,73,0.1)",
+            border: "1px solid rgba(229,73,73,0.3)",
+            borderRadius: 8,
+            color: "#e5493c",
+            fontSize: 13,
+            lineHeight: 1.5,
+          }}>⚠️ {error}</div>
+        )}
+        {success && (
+          <div style={{
+            padding: "12px 14px",
+            marginBottom: 16,
+            background: "rgba(62,207,122,0.1)",
+            border: "1px solid rgba(62,207,122,0.3)",
+            borderRadius: 8,
+            color: "#3ecf7a",
+            fontSize: 13,
+            lineHeight: 1.5,
+            textAlign: "center",
+          }}>{success}</div>
+        )}
+
+        {!success && (
+          <>
+            <div style={{ marginBottom: 16 }}>
+              <label style={labelStyle}>Nouveau mot de passe</label>
+              <input
+                type="password"
+                autoFocus
+                placeholder="Minimum 6 caractères"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                style={inputStyle}
+              />
+            </div>
+
+            <div style={{ marginBottom: 24 }}>
+              <label style={labelStyle}>Confirmez</label>
+              <input
+                type="password"
+                placeholder="Retapez le même mot de passe"
+                value={confirm}
+                onChange={e => setConfirm(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") submit(); }}
+                style={inputStyle}
+              />
+            </div>
+
+            <button
+              onClick={submit}
+              disabled={loading}
+              style={{
+                width: "100%",
+                padding: "13px 20px",
+                background: "#d4a843",
+                color: "#0b0c10",
+                border: 0,
+                borderRadius: 10,
+                fontSize: 14,
+                fontWeight: 700,
+                cursor: loading ? "default" : "pointer",
+                opacity: loading ? 0.6 : 1,
+                fontFamily: "'Syne',sans-serif",
+                letterSpacing: "0.02em",
+                transition: "opacity 0.15s",
+              }}
+            >
+              {loading ? "⏳ Mise à jour…" : "Mettre à jour mon mot de passe"}
+            </button>
+
+            <div style={{ textAlign: "center", marginTop: 20 }}>
+              <a
+                onClick={() => { window.location.hash = ""; window.location.href = "/"; }}
+                style={{
+                  color: "#8a8d95",
+                  fontSize: 12,
+                  textDecoration: "none",
+                  cursor: "pointer",
+                }}
+                onMouseOver={e => e.target.style.color = "#d4a843"}
+                onMouseOut={e => e.target.style.color = "#8a8d95"}
+              >
+                ← Retour à la connexion
+              </a>
+            </div>
+          </>
+        )}
       </div>
-    </>
+    </div>
   );
 }
 
