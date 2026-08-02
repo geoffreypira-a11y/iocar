@@ -118,26 +118,38 @@ export function isTrialExpired(garage) {
 
 /**
  * Utilitaire : vérifie si le garage a un accès valide.
- * Regroupe les cas où on NE bloque PAS l'utilisateur :
+ * Retourne TRUE quand on NE bloque PAS l'utilisateur :
  *   • sub_status === "active"   → abonné payant, OK
  *   • sub_status === "exempt"   → compte grandfathered, OK
  *   • sub_status === "past_due" → paiement en retard mais accès maintenu
  *                                 (Stripe retry pendant 3 semaines avant "canceled")
  *   • sub_status === "trialing" ET trial_ends_at > now → essai en cours, OK
  *
- * Retourne false quand on doit afficher le paywall :
+ * v8.49.17.3 — ANTI-FLASH : si sub_status est null/undefined (garage
+ * en cours de chargement, ou vieux compte sans backfill), on retourne
+ * TRUE pour ne PAS afficher le paywall pendant le chargement.
+ * Les cas de vrai blocage sont EXPLICITES (trialing expiré, canceled).
+ *
+ * Retourne FALSE (paywall) uniquement quand on doit VRAIMENT bloquer :
  *   • sub_status === "trialing" ET trial_ends_at ≤ now → essai expiré
  *   • sub_status === "canceled" ou "expired"          → abo annulé/fini
- *   • sub_status === null                             → garage bugué
  */
 export function hasValidAccess(garage) {
   if (!garage) return false;
   const s = garage.sub_status;
+
+  // v8.49.17.3 — sub_status pas encore chargé → accès temporaire OK (anti-flash)
+  if (s == null || s === "") return true;
+
+  // Statuts explicitement valides
   if (s === "active" || s === "exempt" || s === "past_due") return true;
+
+  // Trial : valide si non expiré
   if (s === "trialing") {
-    if (!garage.trial_ends_at) return true; // no trial defined = allow
+    if (!garage.trial_ends_at) return true; // pas de deadline = on laisse
     return new Date(garage.trial_ends_at).getTime() >= Date.now();
   }
-  // canceled, expired, null, unknown → paywall
+
+  // Statuts terminaux explicites : canceled, expired, ou toute autre valeur inconnue
   return false;
 }
