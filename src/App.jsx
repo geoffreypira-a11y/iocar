@@ -98,6 +98,27 @@ const sb = {
     return j;
   },
 
+  // v8.50 — Update password (utilisé par le flow reset password)
+  // L'access_token du recovery vient du hash de l'URL (Supabase redirige avec
+  // #access_token=xxx&type=recovery). On utilise ce token pour appeler
+  // /auth/v1/user avec le nouveau mot de passe.
+  async updatePassword(accessToken, newPassword) {
+    const r = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+      method: "PUT",
+      headers: {
+        ...this.headers,
+        "Authorization": `Bearer ${accessToken}`
+      },
+      body: JSON.stringify({ password: newPassword })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.error_code || j.error) {
+      const msg = j.msg || j.error?.message || j.error_description || j.error || `Erreur ${r.status}`;
+      return { error: { message: msg, code: j.code || r.status, error_code: j.error_code } };
+    }
+    return j;
+  },
+
   // CRUD générique
   authedHeaders(token) {
     return { ...this.headers, "Authorization": `Bearer ${token}` };
@@ -8754,6 +8775,100 @@ async function redirectToStripe(priceId, email) {
   window.location.href = url;
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   RESET PASSWORD SCREEN — v8.50
+   Écran affiché quand l'user arrive sur /reset-password depuis
+   un lien email Supabase (avec #access_token=xxx&type=recovery
+   dans le hash de l'URL).
+═══════════════════════════════════════════════════════════════ */
+function ResetPasswordScreen({ accessToken, onSuccess }) {
+  const [password, setPassword] = React.useState("");
+  const [confirm, setConfirm] = React.useState("");
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState("");
+  const [success, setSuccess] = React.useState("");
+
+  const submit = async () => {
+    setError(""); setSuccess("");
+    if (password.length < 6) {
+      setError("Le mot de passe doit faire au moins 6 caractères.");
+      return;
+    }
+    if (password !== confirm) {
+      setError("Les mots de passe ne correspondent pas.");
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await sb.updatePassword(accessToken, password);
+      if (res.error) {
+        const code = res.error.error_code || res.error.code;
+        let msg = res.error.message || "Erreur lors de la mise à jour";
+        if (code === "same_password" || /same as/i.test(msg)) {
+          msg = "Le nouveau mot de passe doit être différent de l'ancien.";
+        } else if (/expired|invalid/i.test(msg)) {
+          msg = "Ce lien de réinitialisation a expiré ou est invalide. Demandez-en un nouveau.";
+        }
+        setError(msg);
+        setLoading(false);
+        return;
+      }
+      setSuccess("✅ Mot de passe modifié ! Redirection…");
+      // Efface le hash + redirige vers l'accueil après 1.5s
+      setTimeout(() => {
+        window.location.hash = "";
+        window.location.href = "/";
+      }, 1500);
+    } catch(e) {
+      setError("Erreur réseau. Réessayez.");
+    }
+    setLoading(false);
+  };
+
+  return (
+    <>
+      <div className="auth-bg" />
+      <div className="auth-wrap">
+        <div className="auth-card">
+          <div className="auth-logo">
+            <img src="/logo-full.svg" alt="IO Car" />
+          </div>
+          <h1 className="auth-title">Nouveau mot de passe</h1>
+          <p className="auth-subtitle">Choisissez votre nouveau mot de passe</p>
+
+          {error && <div className="auth-error">⚠️ {error}</div>}
+          {success && <div className="auth-success">{success}</div>}
+
+          {!success && (
+            <>
+              <div className="form-group">
+                <label className="form-label">Nouveau mot de passe</label>
+                <input className="form-input" type="password" placeholder="Minimum 6 caractères"
+                  value={password} onChange={e => setPassword(e.target.value)} autoFocus />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Confirmez</label>
+                <input className="form-input" type="password" placeholder="Retapez le même mot de passe"
+                  value={confirm} onChange={e => setConfirm(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter") submit(); }} />
+              </div>
+
+              <button className="btn btn-primary" style={{ width: "100%", justifyContent: "center", padding: "12px", marginTop: 4 }}
+                onClick={submit} disabled={loading}>
+                {loading ? "⏳ Mise à jour..." : "🔐 Mettre à jour mon mot de passe"}
+              </button>
+
+              <div className="auth-switch" style={{ marginTop: 20 }}>
+                <a onClick={() => { window.location.hash = ""; window.location.href = "/"; }}>← Retour à la connexion</a>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
 function LoginScreen({ onLogin }) {
   const [mode, setMode]           = useState("login"); // login | register | reset | plan
   const [plan, setPlan]           = useState("monthly");
@@ -10554,6 +10669,25 @@ export default function App() {
   }, [token, garage?.iobill_auto_push, garage?.iobill_company_id, clients]);
 
   // ── Écrans d'auth ─────────────────────────────────────────
+  // v8.50 — Détection du flow reset password
+  // Supabase redirige avec un hash du type :
+  //   #access_token=xxx&refresh_token=yyy&type=recovery&expires_in=3600
+  // Si on détecte ce hash, on affiche ResetPasswordScreen au lieu de LoginScreen.
+  const recoveryToken = React.useMemo(() => {
+    if (typeof window === "undefined") return null;
+    const hash = window.location.hash || "";
+    if (!hash.includes("type=recovery")) return null;
+    const params = new URLSearchParams(hash.substring(1));
+    return params.get("access_token") || null;
+  }, []);
+
+  if (recoveryToken && (!token || !user)) {
+    return <ResetPasswordScreen accessToken={recoveryToken} onSuccess={() => {
+      window.location.hash = "";
+      window.location.href = "/";
+    }} />;
+  }
+
   if (!token || !user) return <LoginScreen onLogin={handleLogin} />;
 
   // Loading
