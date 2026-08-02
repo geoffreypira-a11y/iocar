@@ -69,12 +69,16 @@ export default async function handler(req, res) {
           .eq('id', garageId);
         if (error) return res.status(500).json({ error: error.message });
 
-        // v8.49.17 — Cascade IOBILL : suspend/réactive la company IOBILL liée.
-        // On récupère iobill_company_id pour éviter un appel inutile si pas de lien.
-        // Fire-and-forget avec log (ne bloque pas la réponse si IOBILL down).
-        cascadeToggleIobill(supabase, garageId, value).catch(e =>
-          console.warn('[toggle_active cascade IOBILL]', e.message)
-        );
+        // v8.49.17.4 — Cascade IOBILL : suspend/réactive la company IOBILL liée.
+        // ⚠ AWAIT obligatoire — Vercel serverless tue les promesses non-awaitées
+        // dès que res.status() est envoyé, ce qui empêchait la cascade de partir.
+        try {
+          await cascadeToggleIobill(supabase, garageId, value);
+        } catch (e) {
+          console.warn('[toggle_active cascade IOBILL]', e.message);
+          // On ne bloque pas la réponse : IOCAR est déjà mis à jour, IOBILL sera
+          // resynchro à la prochaine occasion (relink par email par exemple).
+        }
 
         return res.status(200).json({ ok: true });
       }
@@ -97,10 +101,13 @@ export default async function handler(req, res) {
           .eq('id', garageId);
         if (error) return res.status(500).json({ error: error.message });
 
-        // v8.49.17 — Cascade IOBILL : archivage = suspension côté IOBILL aussi
-        cascadeToggleIobill(supabase, garageId, false).catch(e =>
-          console.warn('[archive_garage cascade IOBILL]', e.message)
-        );
+        // v8.49.17.4 — Cascade IOBILL : archivage = suspension côté IOBILL aussi.
+        // ⚠ AWAIT obligatoire (voir toggle_active pour explication)
+        try {
+          await cascadeToggleIobill(supabase, garageId, false);
+        } catch (e) {
+          console.warn('[archive_garage cascade IOBILL]', e.message);
+        }
         return res.status(200).json({ ok: true });
       }
 

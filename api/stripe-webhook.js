@@ -83,12 +83,14 @@ export default async function handler(req, res) {
 
         if (error) console.error('Update garage (subscription):', error);
 
-        // v8.49.17 — Cascade IOBILL : suspend si résiliation/annulation
-        // (fire-and-forget, ne bloque pas la réponse au webhook Stripe)
+        // v8.49.17.4 — Cascade IOBILL : suspend si résiliation/annulation
+        // ⚠ AWAIT obligatoire (Vercel tue les promesses non-awaitées)
         if (g?.iobill_company_id) {
-          cascadeToggleIobillFromWebhook(g.id, active).catch(e =>
-            console.warn('[stripe cascade IOBILL]', e.message)
-          );
+          try {
+            await cascadeToggleIobillFromWebhook(g.id, active);
+          } catch (e) {
+            console.warn('[stripe cascade IOBILL]', e.message);
+          }
         }
         break;
       }
