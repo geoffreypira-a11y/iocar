@@ -37,6 +37,32 @@ export default async function handler(req, res) {
 
     const { action } = req.body || {};
 
+    // v8.53 — AUTO-HEAL : détecte un état partiel corrompu (company_id
+    // renseigné SANS token) et rapatrie silencieusement le token depuis
+    // external_api_keys IOBILL via un link_account idempotent. Sans ça,
+    // les garages restés dans cet état (héritage pré-v8.49) sont bloqués :
+    // handleLink refuse (already_linked=true côté UI qui checke company_id
+    // seul), et toutes les actions échouent en "Compte IOBILL non lié".
+    //
+    // - Exclue les actions 'status' et 'link' qui gèrent déjà ce cas
+    //   nativement ou n'ont pas besoin de token.
+    // - Best-effort : si le heal échoue, on continue avec le garage tel
+    //   quel (le handler renverra son erreur habituelle). Aucun log/UX
+    //   n'est cassé.
+    if (action !== 'status' && action !== 'link'
+        && garage.iobill_company_id && !garage.iobill_api_token) {
+      const healed = await attemptTokenHeal(user, garage, supabase);
+      if (healed && healed.token) {
+        garage.iobill_api_token = healed.token;
+        if (healed.email && !garage.iobill_email) garage.iobill_email = healed.email;
+        console.log('[iobill-bridge] AUTO-HEAL réussi',
+          { garage_id: garage.id, company_id: garage.iobill_company_id });
+      } else {
+        console.warn('[iobill-bridge] AUTO-HEAL échoué — poursuite normale',
+          { garage_id: garage.id, error: healed?.error });
+      }
+    }
+
     if (action === 'status') return handleStatus(garage, res);
     if (action === 'link') return handleLink(user, garage, supabase, req.body, res);
     // v8.49.17 — Cascade suspend/réactive IOBILL (appelé par admin.js/toggle_active
@@ -884,6 +910,86 @@ async function handleSetAutoPush(garage, supabase, body, res) {
 // ───────────────────────────────────────────────────────────────────
 // HELPERS
 // ───────────────────────────────────────────────────────────────────
+
+// v8.53 — Rapatrie le token IOBILL pour un garage en état partiel corrompu
+// (company_id présent mais token vide).
+//
+// Rappelle IOBILL link_account avec les mêmes source_app + external_ref :
+// IOBILL entre dans la branche "existing" (idempotent), appelle ensureToken
+// qui retrouve la ligne dans external_api_keys (créée à l'activation initiale)
+// et renvoie le token. IOCAR le persiste dans garages.iobill_api_token.
+//
+// Retourne { token, email } si succès, { error } sinon. NE JETTE PAS —
+// c'est un best-effort. Les erreurs sont loggées, l'appelant décide.
+async function attemptTokenHeal(user, garage, supabase) {
+  try {
+    const addrParsed = parseGarageAddress(garage.address);
+    const linkPayload = {
+      action: 'link_account',
+      source_app: 'iocar',
+      external_ref: garage.id,
+      email: user.email || garage.email,
+      // Pas de password : on est en mode réparation, l'user IOBILL existe
+      // forcément déjà (le lien a été créé dans une session précédente).
+      legal_name: garage.name || garage.email || 'Garage',
+      trade_name: null,
+      siret: garage.siret || null,
+      vat_number: garage.tva_num || null,
+      ape_code: null,
+      phone: garage.phone || null,
+      website: null,
+      logo_url: null,
+      address: {
+        line1: addrParsed.line1,
+        postal_code: addrParsed.postal_code,
+        city: addrParsed.city,
+        country: 'FR'
+      },
+      business_mentions: garage.business_mentions || null
+    };
+
+    const j = await callIobill(linkPayload);
+    if (!j.ok) {
+      return { error: j.error || 'callIobill KO' };
+    }
+
+    const { company_id, token, email } = j.data || {};
+    // Sécurité : refuse d'écrire si la réponse n'a pas de token OU si
+    // le company_id retourné diverge de celui déjà stocké (rehoming
+    // intempestif). Dans les 2 cas, on log et on ne touche à rien.
+    if (!token) {
+      return { error: 'Réponse IOBILL sans token' };
+    }
+    if (company_id && garage.iobill_company_id
+        && String(company_id) !== String(garage.iobill_company_id)) {
+      console.error('[attemptTokenHeal] MISMATCH company_id — refus d\'écriture',
+        { local: garage.iobill_company_id, iobill_returned: company_id });
+      return { error: 'Mismatch company_id, refus de rehoming intempestif' };
+    }
+
+    const patch = {
+      iobill_api_token: token,
+      iobill_email: email || garage.iobill_email || user.email
+    };
+    // Si iobill_linked_at était vide (autre héritage possible), on le pose.
+    if (!garage.iobill_linked_at) patch.iobill_linked_at = new Date().toISOString();
+
+    const { error: updErr } = await supabase
+      .from('garages')
+      .update(patch)
+      .eq('id', garage.id);
+
+    if (updErr) {
+      console.error('[attemptTokenHeal] persist FAIL', updErr);
+      return { error: 'DB update failed: ' + updErr.message };
+    }
+
+    return { token, email: email || garage.iobill_email };
+  } catch (e) {
+    console.error('[attemptTokenHeal] exception', e);
+    return { error: String(e.message || e) };
+  }
+}
 
 // Appel sécurisé IOBILL avec le secret partagé
 async function callIobill(payload) {
