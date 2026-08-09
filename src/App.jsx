@@ -8509,13 +8509,44 @@ function CrmFiche({ client, orders, onEdit, onClose, onSave, dealer, setDealer, 
 
 /* ── Formulaire création/édition client ── */
 function CrmModal({ client, onSave, onClose }) {
+  // v8.59 — Toggle Société / Particulier (défaut Particulier).
+  //
+  // Le champ `type` distingue les 2 modes :
+  //   - "individual" : civilite + prenom + nom (défaut, CERFA compatible)
+  //   - "company"    : raison sociale (stockée dans nom) + siren + tva_intra + personne_contact
+  //
+  // Rétrocompatibilité : l'affichage `${c.prenom} ${c.nom}` continue de marcher :
+  //   - Particulier : "Geoffrey PIRA"
+  //   - Société : "" + "Tricatel" = "Tricatel"
+  //
+  // CERFA véhicule : civilité obligatoire pour un particulier acheteur
+  // (13750/15776 — radio M ou F). Pour une société ce champ est inutile.
   const [form, setForm] = useState(client || {
-    id: uid(), civilite: "", nom: "", prenom: "", email: "", phone: "", adresse: "",
+    id: uid(),
+    type: "individual",  // défaut particulier
+    civilite: "", nom: "", prenom: "",
+    // champs société (vides par défaut)
+    siren: "", tva_intra: "", personne_contact: "",
+    // communs
+    email: "", phone: "", adresse: "",
     code_postal: "", ville: "", pays: "France",
     statut: "prospect", vehicule_interet: "", budget: "", date_contact: today(),
     notes: "", annotations: []
   });
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const isCompany = form.type === "company";
+
+  // Toggle : nettoie les champs de l'autre type quand on switche pour éviter
+  // les états hybrides (Tricatel mixte comme la semaine dernière).
+  function setType(newType) {
+    setForm(f => {
+      if (newType === "company") {
+        return { ...f, type: "company", civilite: "", prenom: "" };
+      } else {
+        return { ...f, type: "individual", siren: "", tva_intra: "", personne_contact: "" };
+      }
+    });
+  }
 
   return (
     <div className="modal-bg" onClick={e => e.target === e.currentTarget && onClose()}>
@@ -8525,23 +8556,68 @@ function CrmModal({ client, onSave, onClose }) {
           <button className="close-btn" onClick={onClose}>×</button>
         </div>
         <div className="modal-body">
+          {/* Toggle Société / Particulier */}
+          <div style={{ display: "flex", gap: 8, marginBottom: 14, padding: 4, background: "var(--card2)", borderRadius: 8 }}>
+            <button
+              className={`btn btn-sm ${!isCompany ? "btn-primary" : "btn-ghost"}`}
+              style={{ flex: 1 }}
+              onClick={() => setType("individual")}
+            >
+              👤 Particulier
+            </button>
+            <button
+              className={`btn btn-sm ${isCompany ? "btn-primary" : "btn-ghost"}`}
+              style={{ flex: 1 }}
+              onClick={() => setType("company")}
+            >
+              🏢 Société
+            </button>
+          </div>
+
           <div className="form-grid">
-            <div className="form-group">
-              <label className="form-label">Civilité</label>
-              <select className="form-input" value={form.civilite || ""} onChange={e => set("civilite", e.target.value)}>
-                <option value="">—</option>
-                <option value="M">M.</option>
-                <option value="F">Mme</option>
-              </select>
-            </div>
-            <div className="form-group">
-              <label className="form-label">Prénom</label>
-              <input className="form-input" value={form.prenom} onChange={e => set("prenom", e.target.value)} />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Nom *</label>
-              <input className="form-input" value={form.nom} onChange={e => set("nom", e.target.value)} />
-            </div>
+            {/* ═══ MODE SOCIÉTÉ ═══ */}
+            {isCompany ? (
+              <>
+                <div className="form-group full">
+                  <label className="form-label">Raison sociale *</label>
+                  <input className="form-input" value={form.nom} onChange={e => set("nom", e.target.value)} placeholder="ex : Tricatel SARL" />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Personne contact</label>
+                  <input className="form-input" value={form.personne_contact || ""} onChange={e => set("personne_contact", e.target.value)} placeholder="Interlocuteur" />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">SIRET (14) ou SIREN (9)</label>
+                  <input className="form-input" value={form.siren || ""} onChange={e => set("siren", e.target.value)} placeholder="9 ou 14 chiffres" />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">N° TVA intracom.</label>
+                  <input className="form-input" value={form.tva_intra || ""} onChange={e => set("tva_intra", e.target.value.toUpperCase())} placeholder="FR..." />
+                </div>
+              </>
+            ) : (
+              /* ═══ MODE PARTICULIER (défaut) ═══ */
+              <>
+                <div className="form-group">
+                  <label className="form-label">Civilité</label>
+                  <select className="form-input" value={form.civilite || ""} onChange={e => set("civilite", e.target.value)}>
+                    <option value="">—</option>
+                    <option value="M">M.</option>
+                    <option value="F">Mme</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Prénom</label>
+                  <input className="form-input" value={form.prenom} onChange={e => set("prenom", e.target.value)} />
+                </div>
+                <div className="form-group full">
+                  <label className="form-label">Nom *</label>
+                  <input className="form-input" value={form.nom} onChange={e => set("nom", e.target.value)} />
+                </div>
+              </>
+            )}
+
+            {/* ═══ CHAMPS COMMUNS ═══ */}
             <div className="form-group">
               <label className="form-label">Email</label>
               <input className="form-input" type="email" value={form.email} onChange={e => set("email", e.target.value)} />
@@ -8593,7 +8669,17 @@ function CrmModal({ client, onSave, onClose }) {
         <div className="modal-foot">
           <button className="btn btn-ghost" onClick={onClose}>Annuler</button>
           <button className="btn btn-primary" onClick={() => {
-            if (!form.nom.trim()) return alert("Le nom est requis");
+            // Validation : nom obligatoire (particulier ou société)
+            if (!form.nom.trim()) {
+              return alert(isCompany ? "La raison sociale est requise" : "Le nom est requis");
+            }
+            // Validation SIREN/SIRET si société (9 ou 14 chiffres)
+            if (isCompany && form.siren) {
+              const cleaned = String(form.siren).replace(/\s/g, "");
+              if (!/^\d{9}$|^\d{14}$/.test(cleaned)) {
+                return alert("SIRET (14 chiffres) ou SIREN (9 chiffres) attendu");
+              }
+            }
             onSave({ ...form, budget: parseFloat(form.budget) || 0 });
           }}>💾 Enregistrer</button>
         </div>
