@@ -3494,7 +3494,7 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
         puissance_fiscale: v.puissance_fiscale, co2: v.co2, genre: v.genre || "VP",
         kilometrage: v.kilometrage, couleur: v.couleur, motorisation: v.motorisation,
         boite: v.boite, date_entree: v.date_entree,
-        date_mise_en_circulation: v.date_mise_en_circulation, options: v.options,
+        options: v.options,
       },
       prix_ht: f.prix_ht || v.prix_vente || "",
       // Hérite régime TVA et synchronise avec_tva (sauf si l'user a déjà fait un choix manuel)
@@ -8712,6 +8712,44 @@ function useSupabaseTable(token, garageId, table) {
       for (const id of prevIds) {
         if (!nextIds.has(id)) {
           sb.delete(token, table, id).catch(() => {});
+          // v8.58 — Propagation IOBILL pour la table clients uniquement.
+          // Le hook `useSupabaseTable` supprimait bien côté Supabase IOCAR
+          // mais NE PROPAGEAIT PAS côté IOBILL — le client restait en base
+          // IOBILL et impossible à supprimer (car external_managed=true bloque
+          // aussi la suppression manuelle côté IOBILL depuis v8.57.12).
+          // On appelle l'endpoint bridge `delete_client` qui, côté IOBILL,
+          // fait un hard delete si aucune facture liée, sinon un soft delete
+          // (déverrouille la lecture seule pour permettre la finalisation).
+          if (table === "clients") {
+            fetch("/api/iobill-bridge", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${token}`
+              },
+              body: JSON.stringify({
+                action: "delete_client",
+                client_id: id
+              })
+            })
+              .then((r) => r.json().catch(() => ({})))
+              .then((j) => {
+                if (j && j.ok) {
+                  console.log(
+                    `[Bridge] delete_client OK ${id} — ` +
+                    (j.hard_deleted ? "hard delete IOBILL" : "soft delete IOBILL")
+                  );
+                } else {
+                  console.warn(
+                    `[Bridge] delete_client échec IOBILL pour ${id}`,
+                    j?.error || j
+                  );
+                }
+              })
+              .catch((err) => {
+                console.warn(`[Bridge] delete_client réseau échoué pour ${id}`, err);
+              });
+          }
         }
       }
 
