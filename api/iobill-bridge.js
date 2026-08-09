@@ -1109,45 +1109,68 @@ function mapOrderToInvoice(order, calc) {
   // v8.44 — On extrait aussi l'external_id du client (id IOCAR) pour permettre
   // à IOBILL de matcher par (external_source, external_id) → ZÉRO doublon, même
   // si l'email/téléphone change.
+  // v8.59.2 — Support propre du CrmModal Société :
+  //   - Détection par `cli.type === "company"` OU `cli.siren`
+  //   - Envoie legal_name, siret, vat_number, contact_person à IOBILL en mode société
+  //   - Adresse dispatchée en address_line1/postal_code/city au lieu de tout concaténer
   const cli = order.client || {};
-  const hasSiren = !!(cli.siren && String(cli.siren).trim());
-  const cleanAddress = cli.address ? sanitizeString(cli.address, ' — ') : null;
+  const isCompany = cli.type === "company" || !!(cli.siren && String(cli.siren).trim());
+  // Adresse : privilégie les champs séparés (nouveau CRM), fallback parseGarageAddress
+  const addrLine1 = sanitizeString(cli.adresse) || null;
+  const addrCp = sanitizeString(cli.code_postal) || null;
+  const addrVille = sanitizeString(cli.ville) || null;
+  // Si les champs séparés sont absents (client legacy), on parse l'adresse concaténée
+  const hasSeparatedAddr = !!(addrLine1 || addrCp || addrVille);
+  const addrParsed = hasSeparatedAddr
+    ? { line1: addrLine1, postal_code: addrCp, city: addrVille }
+    : parseGarageAddress(cli.address || null);
   // L'external_id du client : prioritairement order.client_id (réf stable en BDD),
   // sinon order.client.id (cas où le client est embedded directement).
   const clientExternalId = order.client_id || cli.id || null;
   let clientPayload;
-  if (hasSiren) {
+  if (isCompany) {
     clientPayload = {
       external_id: clientExternalId ? String(clientExternalId) : null,
-      legal_name: sanitizeString(cli.name) || null,
+      // Raison sociale : `cli.nom` (nouveau CrmModal Société) OU `cli.name` (legacy)
+      legal_name: sanitizeString(cli.nom) || sanitizeString(cli.name) || null,
       first_name: null,
       last_name: null,
-      siret: String(cli.siren).replace(/\s/g, '') || null,
+      siret: cli.siren ? String(cli.siren).replace(/\s/g, '') : null,
+      // v8.59.2 — Nouveaux champs société transmis à IOBILL
+      vat_number: sanitizeString(cli.tva_intra) || null,
+      contact_person: sanitizeString(cli.personne_contact) || null,
       email: sanitizeString(cli.email) || null,
       phone: sanitizeString(cli.phone) || null,
-      address_line1: cleanAddress,
-      postal_code: null,
-      city: null,
-      country: 'FR'
+      address_line1: addrParsed.line1,
+      postal_code: addrParsed.postal_code,
+      city: addrParsed.city,
+      country: sanitizeString(cli.pays) === 'France' || !cli.pays ? 'FR' : sanitizeString(cli.pays)
     };
   } else {
-    // Splite "Jean Dupont" en first=Jean / last=Dupont (heuristique simple)
-    const fullName = sanitizeString(String(cli.name || '').trim());
-    const parts = fullName.split(/\s+/);
-    const firstName = parts.length > 1 ? parts.slice(0, -1).join(' ') : (parts[0] || null);
-    const lastName = parts.length > 1 ? parts[parts.length - 1] : null;
+    // Particulier : prénom+nom séparés si dispo (nouveau CrmModal),
+    // sinon splite "Prénom Nom" (legacy fallback)
+    let firstName = sanitizeString(cli.prenom) || null;
+    let lastName = sanitizeString(cli.nom) || null;
+    if (!firstName && !lastName) {
+      const fullName = sanitizeString(String(cli.name || '').trim());
+      const parts = fullName.split(/\s+/);
+      firstName = parts.length > 1 ? parts.slice(0, -1).join(' ') : (parts[0] || null);
+      lastName = parts.length > 1 ? parts[parts.length - 1] : null;
+    }
     clientPayload = {
       external_id: clientExternalId ? String(clientExternalId) : null,
       legal_name: null,
       first_name: firstName || null,
       last_name: lastName || null,
       siret: null,
+      vat_number: null,
+      contact_person: null,
       email: sanitizeString(cli.email) || null,
       phone: sanitizeString(cli.phone) || null,
-      address_line1: cleanAddress,
-      postal_code: null,
-      city: null,
-      country: 'FR'
+      address_line1: addrParsed.line1,
+      postal_code: addrParsed.postal_code,
+      city: addrParsed.city,
+      country: sanitizeString(cli.pays) === 'France' || !cli.pays ? 'FR' : sanitizeString(cli.pays)
     };
   }
 
@@ -1161,7 +1184,11 @@ function mapOrderToInvoice(order, calc) {
     lines,
     payments,
     totals: {
-      paid_cents: Math.round(Math.abs(calc.ttc) * 100)  // = total TTC car soldé
+      // v8.59.1 — Fix débours : paid_cents doit inclure les débours (carte grise, etc.)
+      // pour qu'une facture soldée côté IOCAR (grandTotal payé) soit également
+      // soldée côté IOBILL. Avant : `calc.ttc` (TTC hors débours) → IOBILL affichait
+      // "reste à régler = montant débours" alors que côté IOCAR c'était soldé.
+      paid_cents: Math.round(Math.abs(calc.grandTotal) * 100)  // = TTC + débours (art. 267 II 2° CGI)
     },
     vehicle_meta: {
       plate: vehiclePlate,

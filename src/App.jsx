@@ -3439,10 +3439,19 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
 
   const selectClientFromCrm = (c) => {
     const fullAddr = [c.adresse, c.code_postal && c.ville ? `${c.code_postal} ${c.ville}` : (c.code_postal || c.ville || ""), c.pays && c.pays !== "France" ? c.pays : ""].filter(Boolean).join("\n");
+    // v8.59.2 — Auto-détection du type si absent : présence de siren = société,
+    // sinon particulier. Nécessaire pour les clients créés avant le toggle v8.59.
+    const clientType = c.type || (c.siren && String(c.siren).trim() ? "company" : "individual");
     setForm(f => ({
       ...f,
       client_id: c.id,
       client: {
+        // v8.59.2 — Propage TOUS les champs société pour :
+        //   - CERFA : cocher "Personne morale" + remplir SIRET
+        //   - Bridge IOBILL : mapper vers client_type="company", legal_name, siret, vat_number, contact_person
+        //   - PDF facture IOCAR : afficher SIRET si société
+        //   - Adresse dispatchée : code_postal/ville séparés (pas concaténés côté IOBILL)
+        type: clientType,
         name: `${c.prenom || ""} ${c.nom}`.trim(),
         // v8.48.7 — On stocke aussi nom/prénom séparés pour le Cerfa (ordre NOM Prénom obligatoire)
         nom: c.nom || "",
@@ -3451,6 +3460,15 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
         phone: c.phone || "",
         email: c.email || "",
         civilite: c.civilite || "",
+        // v8.59.2 — Champs société (undefined pour particulier, bridge gère bien)
+        siren: c.siren || "",
+        tva_intra: c.tva_intra || "",
+        personne_contact: c.personne_contact || "",
+        // v8.59.2 — Adresse dispatchée (bridge peut passer proprement à IOBILL)
+        adresse: c.adresse || "",
+        code_postal: c.code_postal || "",
+        ville: c.ville || "",
+        pays: c.pays || "France",
       }
     }));
     setClientSearch("");
@@ -4341,7 +4359,13 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
                 <div style={{ marginTop: 16, paddingTop: 12, borderTop: "1px solid #e8e8e8", textAlign: "right" }}>
                   <div className="pdoc-plabel" style={{ marginBottom: 4 }}>Client</div>
                   <div className="pdoc-pname" style={{ fontSize: 13 }}>{order.client?.name || "—"}</div>
-                  <div className="pdoc-pinfo" style={{ fontSize: 10 }}>{order.client?.address}{order.client?.phone && <><br />{order.client.phone}</>}{order.client?.email && <><br />{order.client.email}</>}</div>
+                  <div className="pdoc-pinfo" style={{ fontSize: 10 }}>
+                    {order.client?.address}
+                    {order.client?.phone && <><br />{order.client.phone}</>}
+                    {order.client?.email && <><br />{order.client.email}</>}
+                    {/* v8.59.2 — SIRET affiché pour les clients société (B2B) */}
+                    {order.client?.siren && <><br />SIRET : {String(order.client.siren).replace(/\s/g, "")}</>}
+                  </div>
                 </div>
               </div>
             </div>
@@ -4801,12 +4825,32 @@ function CessionDoc({ order, dealer, vehicles, clients, onUpdateOrder, onClose }
         setText(p("num_DateDéclaration"), dateJ);
 
         // NOUVEAU PROPRIÉTAIRE
-        setRadio(p("Groupe_de_boutons_radio5"), "2");  // Personne physique
-        if (client.civilite === "M") setRadio(p("Groupe_de_boutons_radio6"), "1");
-        if (client.civilite === "F") setRadio(p("Groupe_de_boutons_radio6"), "2");
+        // v8.59.2 — Détection Personne physique vs morale :
+        //   - client.type === "company" OU client.siren → Personne morale (radio5=1)
+        //   - Sinon → Personne physique (radio5=2) + civilité (radio6=1/2)
+        // Le CERFA officiel exige :
+        //   - Radio5 valeur "1" = Personne morale
+        //   - Radio5 valeur "2" = Personne physique
+        //   - Champ NOM/PRÉNOM ou RAISON SOCIALE en un seul champ txt_IdentitéAcheteur
+        //   - N° SIRET dans num_SiretAcheteur (obligatoire pour société, optionnel particulier)
+        const isCompanyClient = client.type === "company" || !!(client.siren && String(client.siren).trim());
+        if (isCompanyClient) {
+          // Personne morale — pas de civilité, raison sociale seule dans identité
+          setRadio(p("Groupe_de_boutons_radio5"), "1");
+        } else {
+          // Personne physique — civilité obligatoire (M ou F)
+          setRadio(p("Groupe_de_boutons_radio5"), "2");
+          if (client.civilite === "M") setRadio(p("Groupe_de_boutons_radio6"), "1");
+          if (client.civilite === "F") setRadio(p("Groupe_de_boutons_radio6"), "2");
+        }
         // v8.48.7 — Ordre Cerfa officiel : "NOM Prénom" (nom en majuscules d'abord)
+        // v8.59.2 — Pour société : raison sociale seule (client.nom déjà = raison sociale en mode Société)
         // Fallback : si nom/prénom séparés absents, on splitte client.name (qui est "Prénom Nom" par défaut)
         const identiteAcheteur = (() => {
+          if (isCompanyClient) {
+            // Société : raison sociale seule, en majuscules
+            return (client.nom || "").toUpperCase().trim();
+          }
           if (client.nom || client.prenom) {
             return `${(client.nom || "").toUpperCase()} ${client.prenom || ""}`.trim();
           }
@@ -4820,7 +4864,8 @@ function CessionDoc({ order, dealer, vehicles, clients, onUpdateOrder, onClose }
           return client.name || "";
         })();
         setText(p("txt_IdentitéAcheteur"), identiteAcheteur);
-        if (client.siren) setText(p("num_SiretAcheteur"), client.siren);
+        // v8.59.2 — SIRET obligatoire pour société, préservé pour particulier si renseigné
+        if (client.siren) setText(p("num_SiretAcheteur"), String(client.siren).replace(/\s/g, ""));
         setText(p("num_VoieAdresseAcheteur"), cA.num);
         setText(p("txt_ExtensionAdresseAcheteur"), cA.ext);
         setText(p("txt_TypeVoieAdresseAcheteur"), cA.type);
