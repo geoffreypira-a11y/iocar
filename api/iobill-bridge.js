@@ -45,6 +45,7 @@ export default async function handler(req, res) {
     if (action === 'sync_company') return handleSyncCompany(garage, supabase, res);
     if (action === 'push_invoice') return handlePushInvoice(garage, supabase, req.body, res);
     if (action === 'push_invoice_draft') return handlePushInvoiceDraft(garage, supabase, req.body, res);
+    if (action === 'push_invoice_issued') return handlePushInvoiceIssued(garage, supabase, req.body, res);
     if (action === 'mark_invoice_paid') return handleMarkInvoicePaid(garage, supabase, req.body, res);
     // v8.41 — Action dédiée pour les avoirs (route vers credit_notes côté IOBILL)
     if (action === 'push_credit_note') return handlePushCreditNote(garage, supabase, req.body, res);
@@ -433,6 +434,98 @@ async function handlePushInvoiceDraft(garage, supabase, body, res) {
     invoice_id: j.data.invoice_id,
     invoice_number: j.data.invoice_number,
     status: 'draft'
+  });
+}
+
+// ───────────────────────────────────────────────────────────────────
+// PUSH_INVOICE_ISSUED — v8.60 — Facture B2B émise en dur (pas draft)
+// Body : { order_id }
+//
+// Différences avec push_invoice_draft :
+//   - status='issued' au lieu de 'draft'
+//   - paid_cents = 0 (pas encore payée, on attend virement)
+//   - flag auto_transmit=true → IOBILL déclenche paSendInvoice automatiquement
+//     → SUPER PDP dépose en fr:200 → transmis à la PDP du client (Tricatel)
+//
+// Utilisé quand : client Société (type=company OU siren présent).
+// Détecté côté frontend IOCAR dans toFacture().
+// ───────────────────────────────────────────────────────────────────
+async function handlePushInvoiceIssued(garage, supabase, body, res) {
+  if (!garage.iobill_api_token) {
+    return res.status(400).json({ error: 'Compte IOBILL non lié' });
+  }
+  const orderId = body?.order_id;
+  if (!orderId) return res.status(400).json({ error: 'order_id requis' });
+
+  const { order, error: ordErr } = await loadOrder(supabase, orderId, garage.id);
+  if (ordErr || !order) {
+    return res.status(404).json({ error: 'Order introuvable ou non autorisé' });
+  }
+  if (order.type !== 'facture' && order.type !== 'avoir') {
+    return res.status(400).json({ error: 'Seules les factures peuvent être pushées (pas les BC)' });
+  }
+
+  // Idempotent : si déjà pushée avec un iobill_invoice_id, on retourne
+  if (order.iobill_invoice_id) {
+    return res.status(200).json({
+      ok: true,
+      already_pushed: true,
+      invoice_id: order.iobill_invoice_id,
+      invoice_number: order.iobill_invoice_number
+    });
+  }
+
+  const calc = calcOrderBackend(order);
+
+  const mappedInvoice = mapOrderToInvoice(order, calc);
+  // Force status=issued pour cette action (facture B2B émise, en attente paiement)
+  mappedInvoice.status = 'issued';
+  // Pas de payments — la facture n'est pas encore payée
+  mappedInvoice.payments = [];
+  // paid_cents = 0 pour bien indiquer "en attente"
+  mappedInvoice.totals = { paid_cents: 0 };
+
+  const payload = {
+    action: 'push_invoice',
+    token: garage.iobill_api_token,
+    invoice: mappedInvoice,
+    company_update: buildCompanyUpdateFromGarage(garage),
+    // v8.60 — Flag pour dire à IOBILL de déclencher la transmission SUPER PDP
+    //          automatiquement après la création de la facture.
+    auto_transmit: true
+  };
+  const j = await callIobill(payload);
+
+  if (!j.ok) {
+    await supabase.from('orders').update({
+      iobill_sync_error: j.error || 'Erreur issued push',
+      iobill_synced_at: null
+    }).eq('id', orderId);
+    return res.status(502).json({
+      error: 'Échec push issued IOBILL',
+      details: j.error,
+      last_error: j.last_error,
+      hint: j.hint,
+      full_payload: j.full_payload
+    });
+  }
+
+  await supabase.from('orders').update({
+    iobill_invoice_id: j.data.invoice_id,
+    iobill_invoice_number: j.data.invoice_number,
+    iobill_pdf_url: j.data.pdf_url || null,
+    iobill_status: 'issued',
+    iobill_synced_at: new Date().toISOString(),
+    iobill_sync_error: null
+  }).eq('id', orderId);
+
+  return res.status(200).json({
+    ok: true,
+    created: j.data.created,
+    invoice_id: j.data.invoice_id,
+    invoice_number: j.data.invoice_number,
+    status: 'issued',
+    auto_transmit_requested: true
   });
 }
 
