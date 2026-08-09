@@ -149,7 +149,17 @@ export default function IobillInvoiceSync({ token, order, garage, onSync }) {
     }
   }
 
-  async function pushDraft() { await callBridge("push_invoice_draft"); }
+  // v8.60.1 — Détection Société : le bouton "Transmettre" détecte le type
+  // du client de la facture. Pour Société → push_invoice_issued (émise en dur,
+  // auto-transmise à SUPER PDP). Pour Particulier → push_invoice_draft (brouillon,
+  // comportement B2C actuel).
+  async function pushDraft() {
+    const cli = order?.client || {};
+    const isCompanyClient = cli.type === "company"
+      || !!(cli.siren && String(cli.siren).trim());
+    const action = isCompanyClient ? "push_invoice_issued" : "push_invoice_draft";
+    await callBridge(action);
+  }
   async function markPaid()  { await callBridge("mark_invoice_paid"); }
   // v8.41 — Pour les avoirs : action dédiée push_credit_note (route vers credit_notes IOBILL)
   async function pushCreditNote() { await callBridge("push_credit_note"); }
