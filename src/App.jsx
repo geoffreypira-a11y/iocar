@@ -5424,17 +5424,27 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
     };
     setOrders(orders.map(x => x.id === o.id ? updated : x));
 
-    // v8.37 — Hook IO BILL : pousser la facture en BROUILLON à IOBILL (fire-and-forget)
+    // v8.37 — Hook IO BILL : pousser la facture à IOBILL (fire-and-forget)
+    // v8.60 — Workflow B2B :
+    //   - Client Société (type=company OU siren présent) :
+    //       → push_invoice_issued (facture émise en dur, PAS brouillon)
+    //       → IOBILL auto-transmet à SUPER PDP pour cycle AFNOR complet
+    //   - Client Particulier :
+    //       → push_invoice_draft (brouillon, comportement B2C actuel)
+    //       → passera en "paid" quand livraison marquée
     // Déclenché si :
     //   - le compte IOBILL est lié
     //   - auto_push activé
     //   - on convertit bien un BC vers facture (pas vers avoir, et c'est nouveau)
     if (token && dealer?.iobill_auto_push && dealer?.iobill_company_id
         && !o.iobill_invoice_id) {
+      const isCompanyClient = o.client?.type === "company"
+        || !!(o.client?.siren && String(o.client.siren).trim());
+      const action = isCompanyClient ? "push_invoice_issued" : "push_invoice_draft";
       fetch("/api/iobill-bridge", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ action: "push_invoice_draft", order_id: o.id })
+        body: JSON.stringify({ action, order_id: o.id })
       })
         .then(r => r.json())
         .then(j => {
@@ -5443,16 +5453,19 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
               ...x,
               iobill_invoice_id: j.invoice_id,
               iobill_invoice_number: j.invoice_number,
-              iobill_status: j.status || 'draft', // v8.48.2 — propage le status brouillon
+              iobill_status: j.status || (isCompanyClient ? 'issued' : 'draft'),
               iobill_synced_at: new Date().toISOString(),
               iobill_sync_error: null
             } : x));
-            console.log("📝 Facture brouillon poussée à IOBILL :", j.invoice_number);
+            console.log(
+              (isCompanyClient ? "🏛️ Facture B2B émise et transmise" : "📝 Facture brouillon poussée")
+              + " à IOBILL :", j.invoice_number
+            );
           } else if (j.error) {
-            console.warn("Push draft IOBILL : erreur", j.error);
+            console.warn("Push " + action + " IOBILL : erreur", j.error);
           }
         })
-        .catch(e => console.warn("Push draft IOBILL : échec réseau", e));
+        .catch(e => console.warn("Push IOBILL : échec réseau", e));
     }
 
     // Passer le véhicule lié en "vendu" automatiquement
