@@ -3294,94 +3294,6 @@ function DemoLimitModal({ type, onClose }) {
 /* ═══════════════════════════════════════════════════════════════
    PAYMENT MODAL
 ═══════════════════════════════════════════════════════════════ */
-function B2BPaymentWarningModal({ order, onConfirm, onClose }) {
-  // v8.61.1 — Avertissement B2B avant paiement manuel (bypass PDP).
-  //
-  // Contexte : en B2B, la facture a été transmise à SUPER PDP en amont
-  // (via handlePushInvoiceIssued lors de la conversion BC→Facture). Le
-  // circuit normal est :
-  //     Tricatel reçoit la facture PDP → paie → SUPER PDP nous notifie
-  //     fr:211 → Livré débloqué automatiquement.
-  //
-  // Le clic sur 💳 est un BYPASS : le vendeur déclare avoir été payé
-  // hors circuit PDP (virement direct, chèque, espèces). On l'oblige à
-  // le confirmer explicitement pour éviter les enregistrements accidentels
-  // qui désynchroniseraient IOCAR et SUPER PDP.
-  //
-  // Une fois "Confirmer" cliqué, on ouvre la PaymentModal normale. Si le
-  // paiement solde totalement la facture, mark_invoice_paid côté bridge
-  // déclenchera update_invoice_status côté IOBILL → paInvoiceEncaisser
-  // (fr:212 émis à SUPER PDP automatiquement, cf. v8.61.1 IOBILL).
-  const [confirmed, setConfirmed] = React.useState(false);
-  return (
-    <div className="modal-bg" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal modal-sm">
-        <div className="modal-hd">
-          <span className="modal-title">⚠️ Paiement hors plateforme PDP</span>
-          <button className="close-btn" onClick={onClose}>×</button>
-        </div>
-        <div className="modal-body">
-          <div style={{
-            background: "rgba(229, 151, 60, 0.1)",
-            border: "1px solid var(--orange)",
-            borderRadius: 8,
-            padding: "14px 16px",
-            marginBottom: 16,
-            fontSize: 13,
-            lineHeight: 1.5
-          }}>
-            Cette facture est destinée à une <strong>société</strong>. Elle doit
-            normalement être payée via le circuit de la <strong>plateforme SUPER PDP</strong>
-            (réforme e-invoicing 2026) — le paiement du client remontera alors
-            automatiquement et débloquera la livraison.
-            <div style={{ marginTop: 10, color: "var(--muted)", fontSize: 12 }}>
-              En enregistrant un paiement manuel ici, vous forcez la clôture
-              du cycle. Ne le faites que si vous avez réellement encaissé le
-              montant par un autre canal (virement direct, chèque, espèces).
-            </div>
-          </div>
-          <label style={{
-            display: "flex",
-            alignItems: "flex-start",
-            gap: 10,
-            cursor: "pointer",
-            padding: "10px 12px",
-            background: "var(--card2)",
-            borderRadius: 6,
-            fontSize: 13
-          }}>
-            <input
-              type="checkbox"
-              checked={confirmed}
-              onChange={e => setConfirmed(e.target.checked)}
-              style={{ marginTop: 2, cursor: "pointer" }}
-            />
-            <span>
-              Je confirme avoir <strong>encaissé ce montant par un autre canal</strong>
-              {" "}(chèque, virement direct, espèces) et je souhaite marquer
-              cette facture comme payée hors circuit PDP.
-            </span>
-          </label>
-        </div>
-        <div className="modal-foot">
-          <button className="btn btn-ghost" onClick={onClose}>Annuler</button>
-          <button
-            className="btn btn-primary"
-            onClick={() => confirmed && onConfirm()}
-            disabled={!confirmed}
-            style={{
-              opacity: confirmed ? 1 : 0.4,
-              cursor: confirmed ? "pointer" : "not-allowed"
-            }}
-          >
-            Confirmer et enregistrer le paiement
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function PaymentModal({ order, onSave, onClose }) {
   const c = calcOrder(order);
   const isAvoir = order.type === "avoir";
@@ -5345,8 +5257,6 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
   const [print, setPrint] = useState(null);
   const [cession, setCession] = useState(null);
   const [payment, setPayment] = useState(null);
-  // v8.61.1 — Popup avertissement bypass PDP en B2B avant PaymentModal
-  const [paymentWarning, setPaymentWarning] = useState(null);
   const [search, setSearch] = useState("");
   const [pendingDelete, setPendingDelete] = useState(null);
   const [showDemoLimit, setShowDemoLimit] = useState(false);
@@ -5644,18 +5554,6 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
         onClose={() => setCession(null)}
       />}
       {viewMode === "trial" && showDemoLimit && <DemoLimitModal type="orders" onClose={() => setShowDemoLimit(false)} />}
-      {paymentWarning && <B2BPaymentWarningModal
-        order={paymentWarning}
-        onConfirm={() => {
-          // L'utilisateur a coché la case et confirmé → on enchaîne sur la
-          // PaymentModal normale. Le fr:212 partira automatiquement côté
-          // IOBILL quand mark_invoice_paid sera appelé (facture soldée).
-          const ord = paymentWarning;
-          setPaymentWarning(null);
-          setPayment(ord);
-        }}
-        onClose={() => setPaymentWarning(null)}
-      />}
       {payment && <PaymentModal order={payment} onSave={o => {
         setOrders(orders.map(x => x.id === o.id ? o : x));
         setPayment(null);
@@ -5869,23 +5767,7 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
                         }}>↩️</button>;
                       })()}
                       {o.type === "facture" && c.reste > 0.01 && viewMode !== "trial" && (
-                        <button className="btn btn-ghost btn-xs" style={{ color: "var(--green)" }} onClick={() => {
-                          // v8.61.1 — Routing B2B/B2C au clic 💳 :
-                          //   - Client société (type=company OU siren présent) + facture
-                          //     transmise à IOBILL → popup avertissement bypass PDP AVANT
-                          //     la PaymentModal (l'utilisateur doit cocher "encaissé autre
-                          //     canal" pour continuer).
-                          //   - Client particulier ou facture non encore poussée à IOBILL
-                          //     → PaymentModal directe (comportement B2C actuel inchangé).
-                          const isCompanyClient = o.client?.type === "company"
-                            || !!(o.client?.siren && String(o.client.siren).trim());
-                          const alreadyBridged = !!o.iobill_invoice_id;
-                          if (isCompanyClient && alreadyBridged) {
-                            setPaymentWarning(o);
-                          } else {
-                            setPayment(o);
-                          }
-                        }}>💳</button>
+                        <button className="btn btn-ghost btn-xs" style={{ color: "var(--green)" }} onClick={() => setPayment(o)}>💳</button>
                       )}
                       {o.type === "avoir" && c.reste > 0.01 && viewMode !== "trial" && (
                         <button className="btn btn-ghost btn-xs" style={{ color: "var(--red)" }} title="Marquer comme remboursé" onClick={() => {
@@ -10954,12 +10836,7 @@ export default function App() {
 
     // Premier tick immédiat pour rafraîchir dès l'ouverture de la page
     pollOnce();
-    // v8.61.1 — Polling accéléré 30s → 10s pour réactivité UI côté abonné
-    // (fr:211 remonte souvent en quelques secondes après paiement Tricatel,
-    // 30s c'était trop lent pour un ressenti "temps réel"). Le polling ne se
-    // déclenche que s'il y a au moins une facture non-terminale à surveiller
-    // (cf. hasPending juste au-dessus) → 0 requête si aucune B2B en attente.
-    const interval = setInterval(pollOnce, 10000);
+    const interval = setInterval(pollOnce, 30000);
     return () => {
       cancelled = true;
       clearInterval(interval);
