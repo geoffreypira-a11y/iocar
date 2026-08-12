@@ -57,6 +57,8 @@ export default async function handler(req, res) {
     // v8.45 — Polling : envoie TOUS les clients en 1 seul appel batch à IOBILL
     if (action === 'sync_clients_batch') return handleSyncClientsBatchFromIocar(garage, supabase, req.body, res);
     if (action === 'set_auto_push') return handleSetAutoPush(garage, supabase, req.body, res);
+    // v8.61 — Polling léger du cycle SUPER PDP pour les factures B2B en attente
+    if (action === 'refresh_pdp_status') return handleRefreshPdpStatus(garage, supabase, req.body, res);
 
     return res.status(400).json({ error: `Action inconnue : ${action}` });
   } catch (e) {
@@ -1774,4 +1776,134 @@ async function handleAdminToggleIobill(user, garage, supabase, body, res) {
     console.error('[admin_toggle_iobill] exception', e.message);
     return res.status(502).json({ error: 'Erreur réseau IOBILL' });
   }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// REFRESH_PDP_STATUS (v8.61) — Polling léger du cycle SUPER PDP
+//
+// Contexte : après transmission d'une facture B2B, IOCAR doit suivre le cycle
+// de vie (fr:200 → fr:211 → fr:212) pour :
+//   - Débloquer le bouton "Livré" quand fr:211 arrive (client a payé)
+//   - Afficher le badge d'état à jour ("Transmise" / "Client a payé" / "Soldé")
+//   - Avertir avant tout encaissement manuel hors PDP
+//
+// Ce endpoint est appelé toutes les 30-60s par le frontend IOCAR quand la
+// page Commandes & Factures ou Flotte est ouverte et qu'il reste au moins
+// une facture B2B en attente.
+//
+// Body : {} (aucun paramètre requis, on liste les orders en attente en base)
+//
+// Effet : appelle IOBILL /api/public action=get_invoices_status avec les
+// external_ids des orders B2B non-terminaux, puis met à jour orders en base
+// (facturx_status, pdp_transmission_id, pdp_transmitted_at, pdp_last_poll_at).
+//
+// Retour : { ok: true, polled: N, updated: M, skipped: 0 }
+// ───────────────────────────────────────────────────────────────────────────
+async function handleRefreshPdpStatus(garage, supabase, body, res) {
+  if (!garage.iobill_api_token) {
+    return res.status(200).json({ ok: true, polled: 0, skipped: 'not_linked' });
+  }
+
+  // 1) Récupère les orders IOCAR en attente PDP :
+  //    - liés à IOBILL (iobill_invoice_id non-null)
+  //    - facturx_status non-terminal (ni 'paid' ni 'rejected')
+  //    - factures uniquement (pas de brouillon)
+  const { data: pending, error: qErr } = await supabase
+    .from('orders')
+    .select('id, iobill_invoice_id, facturx_status')
+    .eq('garage_id', garage.id)
+    .not('iobill_invoice_id', 'is', null)
+    .or('facturx_status.is.null,facturx_status.not.in.(paid,rejected)')
+    .limit(100);
+
+  if (qErr) {
+    console.error('[refresh_pdp_status] erreur query orders:', qErr);
+    return res.status(500).json({ error: 'DB query error', details: qErr.message });
+  }
+
+  if (!pending || pending.length === 0) {
+    return res.status(200).json({ ok: true, polled: 0, updated: 0, note: 'no pending' });
+  }
+
+  // 2) Appel IOBILL par batch (max 100 par appel, on est déjà bornés)
+  const externalIds = pending.map((o) => o.id);
+  let j;
+  try {
+    const r = await fetch(IOBILL_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-External-Secret': IOBILL_EXTERNAL_SECRET
+      },
+      body: JSON.stringify({
+        action: 'get_invoices_status',
+        token: garage.iobill_api_token,
+        external_ids: externalIds
+      })
+    });
+    j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) {
+      console.warn('[refresh_pdp_status] IOBILL a répondu KO', r.status, j);
+      return res.status(200).json({
+        ok: true,
+        polled: externalIds.length,
+        updated: 0,
+        iobill_error: j?.error || `HTTP ${r.status}`
+      });
+    }
+  } catch (e) {
+    console.error('[refresh_pdp_status] appel IOBILL échec réseau:', e.message);
+    return res.status(200).json({ ok: true, polled: 0, updated: 0, network_error: e.message });
+  }
+
+  // 3) Met à jour orders un par un (max 100, chaque UPDATE est indépendant)
+  const nowIso = new Date().toISOString();
+  const invoicesById = new Map((j.invoices || []).map((inv) => [inv.external_id, inv]));
+  const updatedOrders = [];
+
+  for (const order of pending) {
+    const inv = invoicesById.get(order.id);
+    if (!inv) continue;
+
+    // On ne fait un UPDATE que si un des champs a réellement changé,
+    // pour éviter le bruit de updated_at à chaque polling.
+    const changed =
+      inv.facturx_status !== order.facturx_status ||
+      (inv.pdp_transmission_id && inv.pdp_transmission_id !== order.pdp_transmission_id);
+
+    const patch = {
+      pdp_last_poll_at: nowIso
+    };
+    if (inv.facturx_status !== undefined) patch.facturx_status = inv.facturx_status;
+    if (inv.pdp_transmission_id) patch.pdp_transmission_id = inv.pdp_transmission_id;
+    if (inv.pdp_transmitted_at) patch.pdp_transmitted_at = inv.pdp_transmitted_at;
+    // Reflet du statut IOBILL (paid / issued / ...) sur orders.iobill_status
+    if (inv.status && inv.status !== order.iobill_status) patch.iobill_status = inv.status;
+
+    const { error: uErr } = await supabase
+      .from('orders')
+      .update(patch)
+      .eq('id', order.id);
+
+    if (uErr) {
+      console.warn(`[refresh_pdp_status] UPDATE order=${order.id} échec:`, uErr.message);
+      continue;
+    }
+    // Toujours retourner le patch (même si rien de nouveau côté PDP) pour que
+    // le frontend puisse rafraîchir pdp_last_poll_at et signaler visuellement
+    // que le polling a eu lieu. Le flag `changed` permet au frontend de savoir
+    // s'il faut afficher un toast/badge de mise à jour.
+    updatedOrders.push({
+      id: order.id,
+      patch,
+      changed
+    });
+  }
+
+  return res.status(200).json({
+    ok: true,
+    polled: pending.length,
+    updated: updatedOrders.filter((o) => o.changed).length,
+    orders: updatedOrders
+  });
 }

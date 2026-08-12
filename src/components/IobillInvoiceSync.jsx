@@ -194,6 +194,20 @@ export default function IobillInvoiceSync({ token, order, garage, onSync }) {
   }
 
   // ─── Détermine l'état actuel pour la pilule ──────────────────
+  //
+  // v8.61 — Nouveaux états basés sur facturx_status (miroir SUPER PDP peuplé
+  // par le polling refresh_pdp_status). Ordre de priorité, du plus terminal
+  // au moins :
+  //   - hasError → "Échec transmission" (rouge)
+  //   - !synced → "Non transmise" (or)
+  //   - facturx_status === 'rejected' → "Rejetée SUPER PDP" (rouge)
+  //   - facturx_status === 'paid' → "Soldé" (vert, fr:212 encaissée)
+  //   - facturx_status === 'payment_sent' → "Client a payé" (vert clair, fr:211)
+  //   - facturx_status === 'transmitted' → "Transmise · attente client" (bleu)
+  //   - facturx_status === 'generated' → "Prête à transmettre" (or)
+  //   - !isFinalized (pas de facturx_status et pas issued/paid) → "En brouillon"
+  //   - fallback → "Transmise" (vert, compat pré-v8.61)
+  const fxStatus = order?.facturx_status || null;
   let pillBg, pillBorder, pillColor, pillLabel, pillIcon;
   if (hasError) {
     pillBg = "rgba(229,73,73,0.12)";
@@ -207,6 +221,36 @@ export default function IobillInvoiceSync({ token, order, garage, onSync }) {
     pillColor = "var(--gold, #d4a843)";
     pillLabel = "Non transmise";
     pillIcon = "🦉";
+  } else if (fxStatus === "rejected") {
+    pillBg = "rgba(229,73,73,0.12)";
+    pillBorder = "rgba(229,73,73,0.40)";
+    pillColor = "var(--red, #e54949)";
+    pillLabel = "Rejetée SUPER PDP";
+    pillIcon = "❌";
+  } else if (fxStatus === "paid") {
+    pillBg = "rgba(62,207,122,0.14)";
+    pillBorder = "rgba(62,207,122,0.45)";
+    pillColor = "var(--green, #3ecf7a)";
+    pillLabel = "Soldé";
+    pillIcon = "✅";
+  } else if (fxStatus === "payment_sent") {
+    pillBg = "rgba(62,207,122,0.10)";
+    pillBorder = "rgba(62,207,122,0.35)";
+    pillColor = "var(--green, #3ecf7a)";
+    pillLabel = "Client a payé · à finaliser";
+    pillIcon = "💰";
+  } else if (fxStatus === "transmitted") {
+    pillBg = "rgba(94,168,240,0.12)";
+    pillBorder = "rgba(94,168,240,0.40)";
+    pillColor = "var(--blue, #5ea8f0)";
+    pillLabel = "Transmise · attente client";
+    pillIcon = "📨";
+  } else if (fxStatus === "generated") {
+    pillBg = "rgba(212,168,67,0.12)";
+    pillBorder = "rgba(212,168,67,0.40)";
+    pillColor = "var(--gold, #d4a843)";
+    pillLabel = "Prête à transmettre";
+    pillIcon = "🦉";
   } else if (!isFinalized) {
     // Sync OK mais Factur-X pas encore généré → toujours en draft chez IOBILL
     pillBg = "rgba(229,151,60,0.12)";
@@ -215,7 +259,7 @@ export default function IobillInvoiceSync({ token, order, garage, onSync }) {
     pillLabel = "En brouillon";
     pillIcon = "📝";
   } else {
-    // Factur-X généré → IOBILL a basculé en paid
+    // Fallback compat pré-v8.61 : Factur-X généré → IOBILL a basculé en paid
     pillBg = "rgba(62,207,122,0.12)";
     pillBorder = "rgba(62,207,122,0.40)";
     pillColor = "var(--green, #3ecf7a)";

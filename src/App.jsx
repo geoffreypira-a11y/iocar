@@ -10774,6 +10774,75 @@ export default function App() {
   const [clients,     setClients,     cReady]    = useSupabaseTable(token, garageId, "clients");
   const [livrePolice, setLivrePolice, lpReady]   = useSupabaseTable(token, garageId, "livre_police");
 
+  // ─── v8.61 — Polling léger cycle SUPER PDP pour factures B2B en attente ───
+  //
+  // Toutes les 30 secondes, tant que la page est ouverte ET qu'il reste au
+  // moins une facture B2B non-terminale (ni 'paid' ni 'rejected'), on appelle
+  // le bridge refresh_pdp_status qui :
+  //   1. Interroge IOBILL par batch pour connaître le facturx_status à jour
+  //   2. Met à jour orders en base (facturx_status, pdp_transmission_id,
+  //      pdp_transmitted_at, pdp_last_poll_at, iobill_status)
+  //   3. Retourne les patches à appliquer côté frontend
+  //
+  // Le hook setOrders local reflète immédiatement les changements → la pilule
+  // dans IobillInvoiceSync se met à jour (Transmise → Client a payé → Soldé)
+  // et le bouton "Livré" côté FleetPage se dégrise dès l'arrivée de fr:211.
+  //
+  // Implémentation : on utilise un ref pour lire orders sans forcer un
+  // re-run du useEffect à chaque mutation de orders (sinon le setInterval
+  // est reset en boucle et le polling ne se déclenche jamais).
+  const ordersRef = React.useRef(orders);
+  React.useEffect(() => { ordersRef.current = orders; }, [orders]);
+
+  useEffect(() => {
+    if (isRealDemo || !token || !garageId) return;
+
+    let cancelled = false;
+
+    async function pollOnce() {
+      if (cancelled) return;
+      const currentOrders = ordersRef.current || [];
+      // Ne polle que si au moins une facture B2B est en attente
+      const hasPending = currentOrders.some((o) =>
+        o?.type === 'facture' &&
+        o?.iobill_invoice_id &&
+        (!o.facturx_status || (o.facturx_status !== 'paid' && o.facturx_status !== 'rejected'))
+      );
+      if (!hasPending) return;
+
+      try {
+        const r = await fetch('/api/iobill-bridge', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`
+          },
+          body: JSON.stringify({ action: 'refresh_pdp_status' })
+        });
+        const j = await r.json().catch(() => ({}));
+        if (cancelled || !j.ok || !Array.isArray(j.orders) || j.orders.length === 0) return;
+
+        // Apply patches to local state (base already updated by bridge)
+        setOrders((prev) => (prev || []).map((o) => {
+          const upd = j.orders.find((u) => u.id === o.id);
+          if (!upd) return o;
+          return { ...o, ...upd.patch };
+        }));
+      } catch (e) {
+        // Silent : polling léger, pas de crash si un tour rate
+        console.warn('[refresh_pdp_status] échec :', e.message);
+      }
+    }
+
+    // Premier tick immédiat pour rafraîchir dès l'ouverture de la page
+    pollOnce();
+    const interval = setInterval(pollOnce, 30000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [token, garageId, isRealDemo, setOrders]);
+
   // Charger le profil garage (Supabase uniquement)
   // ⚠ ÉGALEMENT vérification au démarrage que le token JWT est encore valide.
   // Sinon on se retrouve avec un compte fantôme (token expiré + user supprimé)
