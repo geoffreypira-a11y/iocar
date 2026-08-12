@@ -1825,35 +1825,21 @@ async function handleRefreshPdpStatus(garage, supabase, body, res) {
     return res.status(200).json({ ok: true, polled: 0, updated: 0, note: 'no pending' });
   }
 
-  // 2) Appel IOBILL par batch (max 100 par appel, on est déjà bornés)
+  // 2) Appel IOBILL par batch via le helper callIobill (URL + X-External-Secret + payload)
   const externalIds = pending.map((o) => o.id);
-  let j;
-  try {
-    const r = await fetch(IOBILL_API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-External-Secret': IOBILL_EXTERNAL_SECRET
-      },
-      body: JSON.stringify({
-        action: 'get_invoices_status',
-        token: garage.iobill_api_token,
-        external_ids: externalIds
-      })
+  const j = await callIobill({
+    action: 'get_invoices_status',
+    token: garage.iobill_api_token,
+    external_ids: externalIds
+  });
+  if (!j.ok) {
+    console.warn('[refresh_pdp_status] IOBILL a répondu KO', j.error);
+    return res.status(200).json({
+      ok: true,
+      polled: externalIds.length,
+      updated: 0,
+      iobill_error: j.error || 'unknown'
     });
-    j = await r.json().catch(() => ({}));
-    if (!r.ok || !j.ok) {
-      console.warn('[refresh_pdp_status] IOBILL a répondu KO', r.status, j);
-      return res.status(200).json({
-        ok: true,
-        polled: externalIds.length,
-        updated: 0,
-        iobill_error: j?.error || `HTTP ${r.status}`
-      });
-    }
-  } catch (e) {
-    console.error('[refresh_pdp_status] appel IOBILL échec réseau:', e.message);
-    return res.status(200).json({ ok: true, polled: 0, updated: 0, network_error: e.message });
   }
 
   // 3) Met à jour orders un par un (max 100, chaque UPDATE est indépendant)
