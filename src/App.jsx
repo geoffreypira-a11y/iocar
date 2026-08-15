@@ -3088,13 +3088,41 @@ function FleetPage({ vehicles, setVehicles, orders, setOrders, apiKey, usage, se
                   <td>
                     <div style={{ display: "flex", gap: 6 }}>
                       <button className="btn btn-ghost btn-xs" onClick={() => setFiche(v)}>🏷 Fiche</button>
-                      {v.statut === "vendu" && (
-                        <button className="btn btn-ghost btn-xs" style={{ color: "var(--green)" }}
-                          title="Marquer comme livré"
-                          onClick={() => save({ ...v, statut: "livré" })}>
-                          🚗 Livré
-                        </button>
-                      )}
+                      {v.statut === "vendu" && (() => {
+                        // v8.61.1 — Gating "Livré" B2B :
+                        //   - Trouve la facture (order type=facture) liée à ce véhicule
+                        //   - Si client société + facture pas encore soldée (status !== 'paid')
+                        //     → bouton grisé avec tooltip explicite
+                        //   - Sinon (B2C ou B2B soldée) → bouton actif comme avant
+                        // Raison : en B2B on ne doit pas livrer le véhicule tant que
+                        // l'encaissement n'est pas confirmé (soit par le cycle PDP
+                        // fr:212, soit par le popup carte bleue qui met status=paid).
+                        const linkedInvoice = (orders || []).find(o =>
+                          o.vehicle_id === v.id &&
+                          (o.data?.type === "facture" || o.type === "facture")
+                        );
+                        const isCompanyClient = linkedInvoice?.client?.type === "company"
+                          || !!(linkedInvoice?.client?.siren && String(linkedInvoice.client.siren).trim());
+                        const isPaid = linkedInvoice?.status === "paid";
+                        const isB2BUnpaid = !!linkedInvoice && isCompanyClient && !isPaid;
+
+                        if (isB2BUnpaid) {
+                          return (
+                            <button className="btn btn-ghost btn-xs" style={{ color: "var(--muted)", opacity: 0.4, cursor: "not-allowed" }}
+                              title="Impossible de livrer : facture B2B non encaissée. Marquez la facture comme payée (bouton 💳 dans les documents) avant de livrer."
+                              onClick={() => alert("🏢 Livraison bloquée — Facture B2B non encaissée\n\nEn B2B, vous devez confirmer l'encaissement de la facture avant de livrer le véhicule.\n\nDeux options :\n• Attendre le paiement via la plateforme PDP (le bouton se débloquera automatiquement)\n• Cliquer sur 💳 dans les documents pour enregistrer un paiement manuel (chèque, virement, espèces)")}>
+                              🔒 Livré
+                            </button>
+                          );
+                        }
+                        return (
+                          <button className="btn btn-ghost btn-xs" style={{ color: "var(--green)" }}
+                            title="Marquer comme livré"
+                            onClick={() => save({ ...v, statut: "livré" })}>
+                            🚗 Livré
+                          </button>
+                        );
+                      })()}
                       <button className="btn btn-ghost btn-xs" onClick={() => setModal(v)}>✏️</button>
                       {v.statut === "vendu" ? (
                         <button className="btn btn-danger btn-xs" style={{ opacity: 0.3, cursor: "not-allowed" }} onClick={() => alert("Impossible de supprimer un véhicule vendu non livré.\nPassez-le en « Livré » d'abord.")}>🗑</button>
@@ -3294,6 +3322,94 @@ function DemoLimitModal({ type, onClose }) {
 /* ═══════════════════════════════════════════════════════════════
    PAYMENT MODAL
 ═══════════════════════════════════════════════════════════════ */
+function B2BPaymentWarningModal({ order, onConfirm, onClose }) {
+  // v8.61.1 — Avertissement B2B avant paiement manuel (bypass PDP).
+  //
+  // Contexte : en B2B, la facture a été transmise à SUPER PDP en amont
+  // (via handlePushInvoiceIssued lors de la conversion BC→Facture). Le
+  // circuit normal est :
+  //     Tricatel reçoit la facture PDP → paie → SUPER PDP nous notifie
+  //     fr:211 → Livré débloqué automatiquement.
+  //
+  // Le clic sur 💳 est un BYPASS : le vendeur déclare avoir été payé
+  // hors circuit PDP (virement direct, chèque, espèces). On l'oblige à
+  // le confirmer explicitement pour éviter les enregistrements accidentels
+  // qui désynchroniseraient IOCAR et SUPER PDP.
+  //
+  // Une fois "Confirmer" cliqué, on ouvre la PaymentModal normale. Si le
+  // paiement solde totalement la facture, mark_invoice_paid côté bridge
+  // déclenchera update_invoice_status côté IOBILL → paInvoiceEncaisser
+  // (fr:212 émis à SUPER PDP automatiquement, cf. v8.61.1 IOBILL).
+  const [confirmed, setConfirmed] = React.useState(false);
+  return (
+    <div className="modal-bg" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal modal-sm">
+        <div className="modal-hd">
+          <span className="modal-title">⚠️ Paiement hors plateforme PDP</span>
+          <button className="close-btn" onClick={onClose}>×</button>
+        </div>
+        <div className="modal-body">
+          <div style={{
+            background: "rgba(229, 151, 60, 0.1)",
+            border: "1px solid var(--orange)",
+            borderRadius: 8,
+            padding: "14px 16px",
+            marginBottom: 16,
+            fontSize: 13,
+            lineHeight: 1.5
+          }}>
+            Cette facture est destinée à une <strong>société</strong>. Elle doit
+            normalement être payée via le circuit de la <strong>plateforme SUPER PDP</strong>
+            (réforme e-invoicing 2026) — le paiement du client remontera alors
+            automatiquement et débloquera la livraison.
+            <div style={{ marginTop: 10, color: "var(--muted)", fontSize: 12 }}>
+              En enregistrant un paiement manuel ici, vous forcez la clôture
+              du cycle. Ne le faites que si vous avez réellement encaissé le
+              montant par un autre canal (virement direct, chèque, espèces).
+            </div>
+          </div>
+          <label style={{
+            display: "flex",
+            alignItems: "flex-start",
+            gap: 10,
+            cursor: "pointer",
+            padding: "10px 12px",
+            background: "var(--card2)",
+            borderRadius: 6,
+            fontSize: 13
+          }}>
+            <input
+              type="checkbox"
+              checked={confirmed}
+              onChange={e => setConfirmed(e.target.checked)}
+              style={{ marginTop: 2, cursor: "pointer" }}
+            />
+            <span>
+              Je confirme avoir <strong>encaissé ce montant par un autre canal</strong>
+              {" "}(chèque, virement direct, espèces) et je souhaite marquer
+              cette facture comme payée hors circuit PDP.
+            </span>
+          </label>
+        </div>
+        <div className="modal-foot">
+          <button className="btn btn-ghost" onClick={onClose}>Annuler</button>
+          <button
+            className="btn btn-primary"
+            onClick={() => confirmed && onConfirm()}
+            disabled={!confirmed}
+            style={{
+              opacity: confirmed ? 1 : 0.4,
+              cursor: confirmed ? "pointer" : "not-allowed"
+            }}
+          >
+            Confirmer et enregistrer le paiement
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PaymentModal({ order, onSave, onClose }) {
   const c = calcOrder(order);
   const isAvoir = order.type === "avoir";
@@ -3429,7 +3545,19 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
   const [clientSearch, setClientSearch] = useState("");
   const [showClientDropdown, setShowClientDropdown] = useState(false);
   const [showCreateClient, setShowCreateClient] = useState(false);
-  const [newClientForm, setNewClientForm] = useState({ civilite: "", nom: "", prenom: "", email: "", phone: "", adresse: "", code_postal: "", ville: "", pays: "France" });
+  // v8.61.1 — Ajout des champs société pour créer des clients B2B directement
+  // depuis le formulaire de facture (sans passer par CRM > Nouveau client).
+  // type: "particulier" par défaut (comportement historique) ou "societe".
+  // Les champs société (raison_sociale, siren, vat_number, contact_person)
+  // ne sont utilisés que si type === "societe".
+  const [newClientForm, setNewClientForm] = useState({
+    type: "particulier",
+    civilite: "", nom: "", prenom: "", email: "", phone: "",
+    raison_sociale: "", siren: "", vat_number: "", contact_person: "",
+    adresse: "", code_postal: "", ville: "", pays: "France"
+  });
+  // v8.61.1 — State pour le bouton "Récupérer via SIREN" (API INSEE)
+  const [sirenLookupLoading, setSirenLookupLoading] = useState(false);
   // ── Reprise véhicule : recherche par plaque ──────────────
   const [repriseSearching, setRepriseSearching] = useState(false);
 
@@ -3475,20 +3603,79 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
     setShowClientDropdown(false);
   };
 
+  // v8.61.1 — Récupération auto raison sociale + adresse via SIREN.
+  // API publique gratuite recherche-entreprises.api.gouv.fr (data.gouv.fr,
+  // pas de clé requise, ~7 req/s en burst). Rempli les champs disponibles
+  // sans écraser ce que l'utilisateur a déjà tapé (sauf raison sociale).
+  const lookupSirenInfo = async () => {
+    const sirenClean = (newClientForm.siren || "").replace(/\s/g, "");
+    if (sirenClean.length !== 9) {
+      alert("Saisissez un SIREN à 9 chiffres avant la recherche");
+      return;
+    }
+    setSirenLookupLoading(true);
+    try {
+      const r = await fetch(`https://recherche-entreprises.api.gouv.fr/search?q=${sirenClean}&per_page=1`);
+      if (!r.ok) throw new Error(`API INSEE HTTP ${r.status}`);
+      const j = await r.json();
+      const ent = j.results?.[0];
+      if (!ent) {
+        alert(`Aucune entreprise trouvée pour le SIREN ${sirenClean}`);
+        return;
+      }
+      // Champs disponibles : nom_complet (raison sociale), siege.adresse,
+      // siege.code_postal, siege.libelle_commune
+      const siege = ent.siege || {};
+      setNewClientForm(f => ({
+        ...f,
+        raison_sociale: ent.nom_complet || ent.nom_raison_sociale || f.raison_sociale,
+        // On ne remplace que si les champs sont vides côté utilisateur
+        adresse: f.adresse || siege.adresse || "",
+        code_postal: f.code_postal || siege.code_postal || "",
+        ville: f.ville || siege.libelle_commune || "",
+      }));
+    } catch (e) {
+      alert(`Impossible de récupérer les infos SIREN : ${e.message}`);
+    } finally {
+      setSirenLookupLoading(false);
+    }
+  };
+
   const createAndSelectClient = () => {
-    if (!newClientForm.nom.trim()) return alert("Le nom est requis");
+    // v8.61.1 — Validation adaptée au type : société → raison_sociale requise ;
+    // particulier → nom requis (comportement historique).
+    const isCompany = newClientForm.type === "societe";
+    if (isCompany) {
+      if (!newClientForm.raison_sociale.trim()) return alert("La raison sociale est requise");
+      // SIREN optionnel mais si présent, doit faire 9 chiffres
+      const sirenClean = (newClientForm.siren || "").replace(/\s/g, "");
+      if (sirenClean && sirenClean.length !== 9) {
+        return alert("Le SIREN doit contenir 9 chiffres (ou être vide)");
+      }
+    } else {
+      if (!newClientForm.nom.trim()) return alert("Le nom est requis");
+    }
     const newClient = {
       id: uid(),
       // Prospect si BC (pas encore de facture), Client si facture directe
       statut: form.type === "bc" ? "prospect" : "client",
       date_contact: today(),
       annotations: [], notes: "", vehicule_interet: "", budget: 0,
+      // v8.61.1 — Pour une société, on remplit `nom` avec la raison sociale
+      // pour que l'affichage historique dans la liste CRM continue à marcher
+      // (colonne "Nom" utilisée partout dans l'UI).
       ...newClientForm,
+      nom: isCompany ? newClientForm.raison_sociale : newClientForm.nom,
     };
     if (setClients) setClients([newClient, ...(clients || [])]);
     selectClientFromCrm(newClient);
     setShowCreateClient(false);
-    setNewClientForm({ civilite: "", nom: "", prenom: "", email: "", phone: "", adresse: "", code_postal: "", ville: "", pays: "France" });
+    setNewClientForm({
+      type: "particulier",
+      civilite: "", nom: "", prenom: "", email: "", phone: "",
+      raison_sociale: "", siren: "", vat_number: "", contact_person: "",
+      adresse: "", code_postal: "", ville: "", pays: "France"
+    });
   };
 
   const linkedClient = form.client_id ? (clients || []).find(c => c.id === form.client_id) : null;
@@ -3665,16 +3852,91 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
               <div style={{ fontFamily: "Syne", fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "var(--gold)", textTransform: "uppercase", marginBottom: 10 }}>
                 Créer un nouveau client
               </div>
+              {/* v8.61.1 — Toggle Particulier / Société en tête de formulaire.
+                  En Société : bloc raison sociale + SIREN + TVA + contact.
+                  En Particulier : bloc civilité + prénom + nom (historique).
+                  L'adresse et les coordonnées sont communes aux deux modes. */}
+              <div style={{ display: "flex", gap: 6, marginBottom: 14, padding: 4, background: "var(--card)", borderRadius: 8, border: "1px solid var(--border2)" }}>
+                {[["particulier", "👤 Particulier"], ["societe", "🏢 Société"]].map(([v, l]) => (
+                  <button
+                    key={v}
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => setNewClientForm(f => ({ ...f, type: v }))}
+                    style={{
+                      flex: 1,
+                      background: newClientForm.type === v ? "var(--gold)" : "transparent",
+                      color: newClientForm.type === v ? "var(--bg)" : "var(--muted)",
+                      fontWeight: newClientForm.type === v ? 700 : 500,
+                      border: "none",
+                    }}
+                  >
+                    {l}
+                  </button>
+                ))}
+              </div>
               <div className="form-grid" style={{ gridTemplateColumns: "1fr 1fr", marginBottom: 10 }}>
-                <div className="form-group" style={{ gridColumn: "1/-1" }}>
-                  <label className="form-label">Civilité</label>
-                  <select className="form-input" value={newClientForm.civilite} onChange={e => setNewClientForm(f => ({ ...f, civilite: e.target.value }))}>
-                    <option value="">—</option>
-                    <option value="M">M.</option>
-                    <option value="F">Mme</option>
-                  </select>
-                </div>
-                {[["prenom", "Prénom"], ["nom", "Nom *"], ["email", "Email"], ["phone", "Téléphone"]].map(([k, l]) => (
+                {newClientForm.type === "societe" ? (
+                  <>
+                    {/* Bloc SOCIÉTÉ */}
+                    <div className="form-group" style={{ gridColumn: "1/-1" }}>
+                      <label className="form-label">Raison sociale *</label>
+                      <input className="form-input" value={newClientForm.raison_sociale}
+                        onChange={e => setNewClientForm(f => ({ ...f, raison_sociale: e.target.value }))}
+                        placeholder="Ex : Burger Queen SARL" />
+                    </div>
+                    <div className="form-group" style={{ gridColumn: "1/-1" }}>
+                      <label className="form-label">SIREN (9 chiffres) — permet la recherche automatique</label>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <input className="form-input" style={{ flex: 1, fontFamily: "DM Mono" }}
+                          value={newClientForm.siren}
+                          onChange={e => setNewClientForm(f => ({ ...f, siren: e.target.value.replace(/[^\d]/g, "").slice(0, 9) }))}
+                          placeholder="123456789" />
+                        <button type="button" className="btn btn-primary btn-sm"
+                          onClick={lookupSirenInfo}
+                          disabled={sirenLookupLoading || (newClientForm.siren || "").replace(/\s/g, "").length !== 9}
+                          style={{ whiteSpace: "nowrap" }}>
+                          {sirenLookupLoading ? "⏳..." : "🔍 Récupérer"}
+                        </button>
+                      </div>
+                      {newClientForm.siren && newClientForm.siren.replace(/\s/g, "").length !== 9 && (
+                        <div style={{ fontSize: 10, color: "var(--orange)", marginTop: 4 }}>⚠️ 9 chiffres requis</div>
+                      )}
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">N° TVA intracom</label>
+                      <input className="form-input" value={newClientForm.vat_number}
+                        onChange={e => setNewClientForm(f => ({ ...f, vat_number: e.target.value.toUpperCase() }))}
+                        placeholder="FR12345678901" style={{ fontFamily: "DM Mono" }} />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Personne contact</label>
+                      <input className="form-input" value={newClientForm.contact_person}
+                        onChange={e => setNewClientForm(f => ({ ...f, contact_person: e.target.value }))}
+                        placeholder="Ex : Jean Dupont" />
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    {/* Bloc PARTICULIER (historique) */}
+                    <div className="form-group" style={{ gridColumn: "1/-1" }}>
+                      <label className="form-label">Civilité</label>
+                      <select className="form-input" value={newClientForm.civilite} onChange={e => setNewClientForm(f => ({ ...f, civilite: e.target.value }))}>
+                        <option value="">—</option>
+                        <option value="M">M.</option>
+                        <option value="F">Mme</option>
+                      </select>
+                    </div>
+                    {[["prenom", "Prénom"], ["nom", "Nom *"]].map(([k, l]) => (
+                      <div className="form-group" key={k}>
+                        <label className="form-label">{l}</label>
+                        <input className="form-input" value={newClientForm[k]} onChange={e => setNewClientForm(f => ({ ...f, [k]: e.target.value }))} />
+                      </div>
+                    ))}
+                  </>
+                )}
+                {/* COMMUN aux deux modes : email, téléphone, adresse */}
+                {[["email", "Email"], ["phone", "Téléphone"]].map(([k, l]) => (
                   <div className="form-group" key={k}>
                     <label className="form-label">{l}</label>
                     <input className="form-input" value={newClientForm[k]} onChange={e => setNewClientForm(f => ({ ...f, [k]: e.target.value }))} />
@@ -5257,6 +5519,8 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
   const [print, setPrint] = useState(null);
   const [cession, setCession] = useState(null);
   const [payment, setPayment] = useState(null);
+  // v8.61.1 — Popup avertissement bypass PDP en B2B avant PaymentModal
+  const [paymentWarning, setPaymentWarning] = useState(null);
   const [search, setSearch] = useState("");
   const [pendingDelete, setPendingDelete] = useState(null);
   const [showDemoLimit, setShowDemoLimit] = useState(false);
@@ -5554,6 +5818,18 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
         onClose={() => setCession(null)}
       />}
       {viewMode === "trial" && showDemoLimit && <DemoLimitModal type="orders" onClose={() => setShowDemoLimit(false)} />}
+      {paymentWarning && <B2BPaymentWarningModal
+        order={paymentWarning}
+        onConfirm={() => {
+          // L'utilisateur a coché la case et confirmé → on enchaîne sur la
+          // PaymentModal normale. Le fr:212 partira automatiquement côté
+          // IOBILL quand mark_invoice_paid sera appelé (facture soldée).
+          const ord = paymentWarning;
+          setPaymentWarning(null);
+          setPayment(ord);
+        }}
+        onClose={() => setPaymentWarning(null)}
+      />}
       {payment && <PaymentModal order={payment} onSave={o => {
         setOrders(orders.map(x => x.id === o.id ? o : x));
         setPayment(null);
@@ -5767,7 +6043,23 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
                         }}>↩️</button>;
                       })()}
                       {o.type === "facture" && c.reste > 0.01 && viewMode !== "trial" && (
-                        <button className="btn btn-ghost btn-xs" style={{ color: "var(--green)" }} onClick={() => setPayment(o)}>💳</button>
+                        <button className="btn btn-ghost btn-xs" style={{ color: "var(--green)" }} onClick={() => {
+                          // v8.61.1 — Routing B2B/B2C au clic 💳 :
+                          //   - Client société (type=company OU siren présent) + facture
+                          //     transmise à IOBILL → popup avertissement bypass PDP AVANT
+                          //     la PaymentModal (l'utilisateur doit cocher "encaissé autre
+                          //     canal" pour continuer).
+                          //   - Client particulier ou facture non encore poussée à IOBILL
+                          //     → PaymentModal directe (comportement B2C actuel inchangé).
+                          const isCompanyClient = o.client?.type === "company"
+                            || !!(o.client?.siren && String(o.client.siren).trim());
+                          const alreadyBridged = !!o.iobill_invoice_id;
+                          if (isCompanyClient && alreadyBridged) {
+                            setPaymentWarning(o);
+                          } else {
+                            setPayment(o);
+                          }
+                        }}>💳</button>
                       )}
                       {o.type === "avoir" && c.reste > 0.01 && viewMode !== "trial" && (
                         <button className="btn btn-ghost btn-xs" style={{ color: "var(--red)" }} title="Marquer comme remboursé" onClick={() => {
@@ -10836,7 +11128,12 @@ export default function App() {
 
     // Premier tick immédiat pour rafraîchir dès l'ouverture de la page
     pollOnce();
-    const interval = setInterval(pollOnce, 30000);
+    // v8.61.1 — Polling accéléré 30s → 10s pour réactivité UI côté abonné
+    // (fr:211 remonte souvent en quelques secondes après paiement Tricatel,
+    // 30s c'était trop lent pour un ressenti "temps réel"). Le polling ne se
+    // déclenche que s'il y a au moins une facture non-terminale à surveiller
+    // (cf. hasPending juste au-dessus) → 0 requête si aucune B2B en attente.
+    const interval = setInterval(pollOnce, 10000);
     return () => {
       cancelled = true;
       clearInterval(interval);
