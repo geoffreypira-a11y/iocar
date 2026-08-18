@@ -10237,6 +10237,58 @@ function AdminPage({ token }) {
     setUpdating(null);
   };
 
+  // v8.61.5 — Prolonger l'essai d'un garage bloqué (paywall en cours).
+  const extendTrial = async (g) => {
+    const daysStr = window.prompt(
+      `Prolonger l'essai de "${g.name || g.email}" ?\n\n` +
+      `Nombre de jours d'accès à partir de maintenant (1-365) :`,
+      "7"
+    );
+    if (daysStr === null) return;
+    const days = parseInt(daysStr, 10);
+    if (!Number.isInteger(days) || days < 1 || days > 365) {
+      alert("Nombre de jours invalide (1 à 365)");
+      return;
+    }
+    setUpdating(g.id);
+    try {
+      const { trial_ends_at } = await adminCall("extend_trial", { garageId: g.id, days });
+      setGarages(garages.map(x => x.id === g.id ? {
+        ...x,
+        trial_ends_at,
+        sub_status: "trialing",
+        is_active: true,
+        updated_at: new Date().toISOString(),
+      } : x));
+    } catch(e) {
+      alert("Erreur : " + e.message);
+    }
+    setUpdating(null);
+  };
+
+  // v8.61.5 — Exempter (accès permanent gratuit).
+  const toggleExempt = async (g) => {
+    const isCurrentlyExempt = g.sub_status === "exempt";
+    const msg = isCurrentlyExempt
+      ? `Retirer le statut exempt de "${g.name || g.email}" ?\n\nLe garage repartira sur un essai de 7 jours à partir de maintenant.`
+      : `Marquer "${g.name || g.email}" comme EXEMPT (accès permanent gratuit) ?\n\nCe garage ne verra jamais le paywall.`;
+    if (!window.confirm(msg)) return;
+    setUpdating(g.id);
+    try {
+      const { sub_status } = await adminCall("set_exempt", { garageId: g.id, value: !isCurrentlyExempt });
+      setGarages(garages.map(x => x.id === g.id ? {
+        ...x,
+        sub_status,
+        is_active: true,
+        trial_ends_at: sub_status === "exempt" ? null : new Date(Date.now() + 7*86400000).toISOString(),
+        updated_at: new Date().toISOString(),
+      } : x));
+    } catch(e) {
+      alert("Erreur : " + e.message);
+    }
+    setUpdating(null);
+  };
+
   const unarchiveGarage = async (g) => {
     if (!window.confirm(
       `Désarchiver le compte de "${g.name || g.email}" ?\n\n` +
@@ -10613,6 +10665,34 @@ function AdminPage({ token }) {
                           title="Désarchiver le compte — le client devra se réabonner via Stripe"
                         >
                           🔄 Réactiver
+                        </button>
+                      )}
+
+                      {/* v8.61.5 — Prolonger l'essai (débloque paywall) */}
+                      {!g._archived && (
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => extendTrial(g)}
+                          disabled={updating === g.id}
+                          style={{ fontSize: 11, color: "var(--gold)" }}
+                          title="Prolonger l'essai gratuit de N jours (débloque le paywall). L'accès est immédiatement rendu au garage."
+                        >
+                          🎁 Prolonger essai
+                        </button>
+                      )}
+
+                      {/* v8.61.5 — Exempter (accès permanent gratuit) */}
+                      {!g._archived && (
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => toggleExempt(g)}
+                          disabled={updating === g.id}
+                          style={{ fontSize: 11, color: g.sub_status === "exempt" ? "#bbb" : "var(--gold)" }}
+                          title={g.sub_status === "exempt"
+                            ? "Retirer le statut exempt (retour trialing 7 jours)"
+                            : "Marquer comme exempt (accès permanent gratuit, jamais de paywall)"}
+                        >
+                          {g.sub_status === "exempt" ? "✕ Retirer exempt" : "✅ Exempter"}
                         </button>
                       )}
 

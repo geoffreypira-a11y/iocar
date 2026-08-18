@@ -1,5 +1,5 @@
 // api/admin.js — endpoints admin sécurisés
-// Route selon req.body.action : list | export | backup | toggle_active | set_plan | update_rapidapi
+// Route selon req.body.action : list | export | backup | toggle_active | set_plan | update_rapidapi | extend_trial | set_exempt
 // Tout passe par la clé service_role côté serveur après vérification is_admin.
 import { verifyUser, setCors } from './_lib/auth.js';
 
@@ -232,6 +232,74 @@ export default async function handler(req, res) {
           .eq('id', garageId);
         if (error) return res.status(500).json({ error: error.message });
         return res.status(200).json({ ok: true });
+      }
+
+      // ─── PROLONGER L'ESSAI GRATUIT ──────────────────────────
+      // v8.61.5 — Repousse la date de fin d'essai de N jours ET réactive
+      // le garage. Utile quand un abonné vient d'expirer (badge "🔒 Bloqué
+      // essai fini") et qu'on veut lui rendre l'accès sans passer par
+      // Stripe (essai commercial, cas de support, etc.).
+      // Cascade IOBILL : is_active=true est propagé côté IOBILL.
+      case 'extend_trial': {
+        const { garageId, days } = payload || {};
+        const nDays = parseInt(days, 10);
+        if (!garageId || !Number.isInteger(nDays) || nDays < 1 || nDays > 365) {
+          return res.status(400).json({ error: 'Paramètres invalides (garageId + days entre 1 et 365)' });
+        }
+        // On calcule la nouvelle date d'expiration à partir de MAINTENANT
+        // (pas de trial_ends_at actuel + N — un essai déjà expiré depuis 3
+        // jours doit repartir sur N jours pleins, pas N-3).
+        const newTrialEnd = new Date(Date.now() + nDays * 86400000).toISOString();
+        const { error } = await supabase
+          .from('garages')
+          .update({
+            trial_ends_at: newTrialEnd,
+            sub_status: 'trialing',
+            is_active: true,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', garageId);
+        if (error) return res.status(500).json({ error: error.message });
+
+        // Cascade IOBILL : réactive la company (comme toggle_active(true))
+        // ⚠ AWAIT obligatoire (voir toggle_active pour l'explication Vercel)
+        try {
+          await cascadeToggleIobill(supabase, garageId, true);
+        } catch (e) {
+          console.warn('[extend_trial cascade IOBILL]', e.message);
+        }
+
+        return res.status(200).json({ ok: true, trial_ends_at: newTrialEnd });
+      }
+
+      // ─── EXEMPTER (ACCÈS PERMANENT GRATUIT) ─────────────────
+      // v8.61.5 — Marque le garage comme exempt : sub_status='exempt' +
+      // is_active=true + trial_ends_at NULL. Le badge admin affichera
+      // "✅ Exempt" et le paywall ne s'affichera JAMAIS. Utile pour un
+      // compte interne, un beta-testeur, un partenariat.
+      case 'set_exempt': {
+        const { garageId, value } = payload || {};
+        if (!garageId || typeof value !== 'boolean') {
+          return res.status(400).json({ error: 'Paramètres invalides' });
+        }
+        // Si value=true : exempt permanent. Si value=false : retour trialing
+        // avec 7 jours d'essai à partir de maintenant (fallback conservateur).
+        const update = value
+          ? { sub_status: 'exempt', is_active: true, trial_ends_at: null, updated_at: new Date().toISOString() }
+          : { sub_status: 'trialing', is_active: true, trial_ends_at: new Date(Date.now() + 7*86400000).toISOString(), updated_at: new Date().toISOString() };
+        const { error } = await supabase
+          .from('garages')
+          .update(update)
+          .eq('id', garageId);
+        if (error) return res.status(500).json({ error: error.message });
+
+        try {
+          await cascadeToggleIobill(supabase, garageId, true);
+        } catch (e) {
+          console.warn('[set_exempt cascade IOBILL]', e.message);
+        }
+
+        return res.status(200).json({ ok: true, sub_status: value ? 'exempt' : 'trialing' });
       }
 
       // ─── MODIFIER LA CLÉ RapidAPI D'UN GARAGE ───────────────
