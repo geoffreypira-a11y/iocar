@@ -1843,24 +1843,20 @@ async function handleRefreshPdpStatus(garage, supabase, body, res) {
   }
 
   // 3) Met à jour orders un par un (max 100, chaque UPDATE est indépendant)
+  // v8.61.8 — FIX RACINE : callIobill wrappe la réponse dans { ok, data }.
+  // Le vrai payload retourné par IOBILL est donc dans j.data (pas j).
+  // Sans ce fix, j.invoices était undefined → invoicesById vide → skippedNoInv=39
+  // pour toutes les factures → aucun UPDATE → facturx_status/pdp_transmission_id
+  // jamais peuplés côté orders IOCAR → badge PDP jamais affiché + bouton Livré
+  // B2B toujours grisé (voir logs v8.61.7 : j.invoices type=undefined length=0).
+  const invoices = (j.data && Array.isArray(j.data.invoices)) ? j.data.invoices : [];
   const nowIso = new Date().toISOString();
-  console.log(`[refresh_pdp_status DEBUG] j.invoices type=${typeof j.invoices} isArray=${Array.isArray(j.invoices)} length=${(j.invoices || []).length}`);
-  if (Array.isArray(j.invoices) && j.invoices.length > 0) {
-    console.log(`[refresh_pdp_status DEBUG] j.invoices[0] keys=${Object.keys(j.invoices[0]).join(',')}`);
-    console.log(`[refresh_pdp_status DEBUG] j.invoices[0] external_id="${j.invoices[0].external_id}"`);
-    console.log(`[refresh_pdp_status DEBUG] pending[0].id="${pending[0].id}"`);
-    console.log(`[refresh_pdp_status DEBUG] equal? ${j.invoices[0].external_id === pending[0].id}`);
-    console.log(`[refresh_pdp_status DEBUG] full j.invoices[0]=${JSON.stringify(j.invoices[0])}`);
-  }
-  const invoicesById = new Map((j.invoices || []).map((inv) => [inv.external_id, inv]));
-  console.log(`[refresh_pdp_status DEBUG] invoicesById.size=${invoicesById.size}, pending.length=${pending.length}`);
+  const invoicesById = new Map(invoices.map((inv) => [inv.external_id, inv]));
   const updatedOrders = [];
-  let skippedNoInv = 0;
-  let skippedUpdateErr = 0;
 
   for (const order of pending) {
     const inv = invoicesById.get(order.id);
-    if (!inv) { skippedNoInv++; continue; }
+    if (!inv) continue;
 
     // On ne fait un UPDATE que si un des champs a réellement changé,
     // pour éviter le bruit de updated_at à chaque polling.
@@ -1883,7 +1879,6 @@ async function handleRefreshPdpStatus(garage, supabase, body, res) {
       .eq('id', order.id);
 
     if (uErr) {
-      skippedUpdateErr++;
       console.warn(`[refresh_pdp_status] UPDATE order=${order.id} échec:`, uErr.message);
       continue;
     }
@@ -1898,7 +1893,6 @@ async function handleRefreshPdpStatus(garage, supabase, body, res) {
     });
   }
 
-  console.log(`[refresh_pdp_status DEBUG] FIN : pending=${pending.length} skippedNoInv=${skippedNoInv} skippedUpdateErr=${skippedUpdateErr} updatedOrders.length=${updatedOrders.length} changedCount=${updatedOrders.filter((o) => o.changed).length}`);
   return res.status(200).json({
     ok: true,
     polled: pending.length,
