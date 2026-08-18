@@ -1844,12 +1844,23 @@ async function handleRefreshPdpStatus(garage, supabase, body, res) {
 
   // 3) Met à jour orders un par un (max 100, chaque UPDATE est indépendant)
   const nowIso = new Date().toISOString();
+  console.log(`[refresh_pdp_status DEBUG] j.invoices type=${typeof j.invoices} isArray=${Array.isArray(j.invoices)} length=${(j.invoices || []).length}`);
+  if (Array.isArray(j.invoices) && j.invoices.length > 0) {
+    console.log(`[refresh_pdp_status DEBUG] j.invoices[0] keys=${Object.keys(j.invoices[0]).join(',')}`);
+    console.log(`[refresh_pdp_status DEBUG] j.invoices[0] external_id="${j.invoices[0].external_id}"`);
+    console.log(`[refresh_pdp_status DEBUG] pending[0].id="${pending[0].id}"`);
+    console.log(`[refresh_pdp_status DEBUG] equal? ${j.invoices[0].external_id === pending[0].id}`);
+    console.log(`[refresh_pdp_status DEBUG] full j.invoices[0]=${JSON.stringify(j.invoices[0])}`);
+  }
   const invoicesById = new Map((j.invoices || []).map((inv) => [inv.external_id, inv]));
+  console.log(`[refresh_pdp_status DEBUG] invoicesById.size=${invoicesById.size}, pending.length=${pending.length}`);
   const updatedOrders = [];
+  let skippedNoInv = 0;
+  let skippedUpdateErr = 0;
 
   for (const order of pending) {
     const inv = invoicesById.get(order.id);
-    if (!inv) continue;
+    if (!inv) { skippedNoInv++; continue; }
 
     // On ne fait un UPDATE que si un des champs a réellement changé,
     // pour éviter le bruit de updated_at à chaque polling.
@@ -1872,6 +1883,7 @@ async function handleRefreshPdpStatus(garage, supabase, body, res) {
       .eq('id', order.id);
 
     if (uErr) {
+      skippedUpdateErr++;
       console.warn(`[refresh_pdp_status] UPDATE order=${order.id} échec:`, uErr.message);
       continue;
     }
@@ -1886,6 +1898,7 @@ async function handleRefreshPdpStatus(garage, supabase, body, res) {
     });
   }
 
+  console.log(`[refresh_pdp_status DEBUG] FIN : pending=${pending.length} skippedNoInv=${skippedNoInv} skippedUpdateErr=${skippedUpdateErr} updatedOrders.length=${updatedOrders.length} changedCount=${updatedOrders.filter((o) => o.changed).length}`);
   return res.status(200).json({
     ok: true,
     polled: pending.length,
