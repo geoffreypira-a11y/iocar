@@ -1119,11 +1119,16 @@ function mapOrderToInvoice(order, calc) {
   //   TVA marge = max(0, marge) × 20/120     (plancher 0 : marge négative ⇒ 0)
   // Régime marge uniquement (avecTva=false).
   let purchase_price_cents = 0;
+  let marge_cents = 0;
   let tva_marge_cents = 0;
   if (!avecTva) {
     const prixAchat = Number(v.prix_achat) || 0;
     purchase_price_cents = Math.round(prixAchat * 100 * sign);
     const marge = baseApresRem - prixAchat;
+    // v8.65 — On stocke la marge EXACTE (marge_cents), pas seulement sa TVA :
+    // dériver la marge depuis tva_marge (× 6) perd ~2 cts d'arrondi à l'affichage
+    // du registre. vente = achat + marge (exact) ; tva_marge reste le montant dû.
+    marge_cents = marge > 0 ? Math.round(marge * 100 * sign) : 0;
     tva_marge_cents = marge > 0 ? Math.round((marge * 20 / 120) * 100 * sign) : 0;
   }
 
@@ -1334,6 +1339,7 @@ function mapOrderToInvoice(order, calc) {
     vat_regime: avecTva ? 'standard' : 'margin_297a',
     // v8.63 (P2a) — Données TVA sur marge (jamais dans la TVA de la facture)
     purchase_price_cents,
+    marge_cents,
     tva_marge_cents
   };
 }
