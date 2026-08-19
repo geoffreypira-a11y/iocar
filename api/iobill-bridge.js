@@ -1126,14 +1126,20 @@ function mapOrderToInvoice(order, calc) {
     vat_rate: vehVatRate,
     discount_pct: 0
   });
-  // L2 — frais de mise à disposition : TOUJOURS au taux normal (même en régime marge)
+  // L2 — frais de mise à disposition : TOUJOURS au taux normal (même en régime marge).
+  // v8.62 — Fix rejet SUPER PDP 213 : en régime marge, `tvaPct` vaut 0 (cf. plus
+  // haut) — la ligne frais héritait donc d'un vat_rate=0, la TVA des frais était
+  // perdue et le Factur-X devenait incohérent (prestation taxable sans TVA) →
+  // rejet fonctionnel. Les frais sont une prestation accessoire indépendante du
+  // véhicule d'occasion : on les force au taux normal quel que soit le régime.
   if (fraisMD > 0) {
-    const fraisHt = fraisMD / (1 + tvaPct / 100);
+    const fraisVatRate = Number(order.tva_pct) || 20;
+    const fraisHt = fraisMD / (1 + fraisVatRate / 100);
     lines.push({
       description: 'Frais de mise à disposition',
       quantity: 1,
       unit_price_ht_cents: Math.round(fraisHt * 100 * sign),
-      vat_rate: tvaPct,
+      vat_rate: fraisVatRate,
       discount_pct: 0
     });
   }
