@@ -6158,19 +6158,17 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
                           setAvoirChoice({ order: o, totalTtc });
                         }}>↩️</button>;
                       })()}
-                      {o.type === "facture" && c.reste > 0.01 && viewMode !== "trial" && (
+                      {o.type === "facture" && c.reste > 0.01 && !isOrderPaidViaAnyChannel(o) && viewMode !== "trial" && (
                         <button className="btn btn-ghost btn-xs" style={{ color: "var(--green)" }} onClick={() => {
-                          // v8.61.1 — Routing B2B/B2C au clic 💳 :
-                          //   - Client société (type=company OU siren présent) + facture
-                          //     transmise à IOBILL → popup avertissement bypass PDP AVANT
-                          //     la PaymentModal (l'utilisateur doit cocher "encaissé autre
-                          //     canal" pour continuer).
-                          //   - Client particulier ou facture non encore poussée à IOBILL
-                          //     → PaymentModal directe (comportement B2C actuel inchangé).
+                          // v8.61.7 — Popup "paiement hors PDP" AVANT tout paiement
+                          // manuel d'une facture société, INDÉPENDAMMENT de l'état de
+                          // transmission (la transmission PDP et l'encaissement sont
+                          // deux choses distinctes). Avant, le popup était bridé sur
+                          // `alreadyBridged` → absent tant que la facture n'était pas
+                          // transmise. Particulier (B2C) → PaymentModal directe.
                           const isCompanyClient = o.client?.type === "company"
                             || !!(o.client?.siren && String(o.client.siren).trim());
-                          const alreadyBridged = !!o.iobill_invoice_id;
-                          if (isCompanyClient && alreadyBridged) {
+                          if (isCompanyClient) {
                             setPaymentWarning(o);
                           } else {
                             setPayment(o);
