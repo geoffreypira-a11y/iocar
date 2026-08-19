@@ -1111,6 +1111,22 @@ function mapOrderToInvoice(order, calc) {
   const km = v.kilometrage ? `${Number(v.kilometrage).toLocaleString('fr-FR')} km` : '';
   const description1 = sanitizeString(`VENTE VÉHICULE — ${vehicleLabel}${vehiclePlate ? ' (' + vehiclePlate + ')' : ''}${km ? ' · ' + km : ''}`);
 
+  // v8.63 (P2a) — TVA sur marge (art. 297 A CGI). Calculée ICI mais JAMAIS
+  // injectée dans la TVA de la facture (art. 297 E : invisible sur le document,
+  // hors vat_total_cents → pas de double-compte). Sert uniquement au registre
+  // marge et au bloc "reste à déclarer" de la déclaration TVA IOBILL.
+  //   marge = (prix de vente véhicule TTC après remise) − (prix d'achat)
+  //   TVA marge = max(0, marge) × 20/120     (plancher 0 : marge négative ⇒ 0)
+  // Régime marge uniquement (avecTva=false).
+  let purchase_price_cents = 0;
+  let tva_marge_cents = 0;
+  if (!avecTva) {
+    const prixAchat = Number(v.prix_achat) || 0;
+    purchase_price_cents = Math.round(prixAchat * 100 * sign);
+    const marge = baseApresRem - prixAchat;
+    tva_marge_cents = marge > 0 ? Math.round((marge * 20 / 120) * 100 * sign) : 0;
+  }
+
   const lines = [];
   // v8.48.9 — Régime TVA :
   //   - avecTva=true (régime normal) : véhicule + frais taxables au taux normal
@@ -1315,7 +1331,10 @@ function mapOrderToInvoice(order, calc) {
     business_mentions: buildOrderSpecificMentions(order),
     // v8.39 — Débours (CG, malus...) : hors TVA, sortis du tableau lignes
     debours: debours.length > 0 ? debours : null,
-    vat_regime: avecTva ? 'standard' : 'margin_297a'
+    vat_regime: avecTva ? 'standard' : 'margin_297a',
+    // v8.63 (P2a) — Données TVA sur marge (jamais dans la TVA de la facture)
+    purchase_price_cents,
+    tva_marge_cents
   };
 }
 

@@ -3791,6 +3791,9 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
         kilometrage: v.kilometrage, couleur: v.couleur, motorisation: v.motorisation,
         boite: v.boite, date_entree: v.date_entree,
         options: v.options,
+        // v8.63 (P2a) — prix d'achat embarqué pour permettre au pont de calculer
+        // la TVA sur marge (art. 297 A). Seul IOCAR connaît ce prix.
+        prix_achat: v.prix_achat,
       },
       prix_ht: f.prix_ht || v.prix_vente || "",
       // Hérite régime TVA et synchronise avec_tva (sauf si l'user a déjà fait un choix manuel)
