@@ -47,6 +47,10 @@ export default function IobillInvoiceSync({ token, order, garage, onSync }) {
   const [error, setError] = useState("");
   const [expanded, setExpanded] = useState(false);
   const [hovered, setHovered] = useState(false);
+  // v8.61.6 — Modale de confirmation AVANT transmission B2B (émission définitive
+  // + transmission SUPER PDP irréversible). Voir requestPush().
+  const [confirmTx, setConfirmTx] = useState(false);
+  const [confirmChecked, setConfirmChecked] = useState(false);
 
   const linked = !!garage?.iobill_company_id;
   const synced = !!order?.iobill_invoice_id && !order?.iobill_sync_error;
@@ -177,6 +181,26 @@ export default function IobillInvoiceSync({ token, order, garage, onSync }) {
     }
   }
 
+  // v8.61.6 — Point d'entrée du bouton d'action de la pastille.
+  // Pour une facture SOCIÉTÉ pas encore transmise, `pushDraft` → push_invoice_issued
+  // = émission définitive (numérotation verrouillée) + auto-transmission SUPER PDP,
+  // IRRÉVERSIBLE. On exige une confirmation explicite avant. Tous les autres cas
+  // (B2C brouillon, avoir, finalisation d'un draft déjà synced) passent direct.
+  function requestPush() {
+    const cli = order?.client || {};
+    const isCompanyClient = cli.type === "company"
+      || !!(cli.siren && String(cli.siren).trim());
+    const willEmitToPdp = isCompanyClient
+      && order.type === "facture"
+      && !synced;           // 1er push seulement (sinon c'est une finalisation)
+    if (willEmitToPdp) {
+      setConfirmChecked(false);
+      setConfirmTx(true);
+    } else {
+      smartPush();
+    }
+  }
+
   // ─── Pas lié : pilule grise ──────────────────────────────────
   if (!linked) {
     return (
@@ -208,6 +232,15 @@ export default function IobillInvoiceSync({ token, order, garage, onSync }) {
   //   - !isFinalized (pas de facturx_status et pas issued/paid) → "En brouillon"
   //   - fallback → "Transmise" (vert, compat pré-v8.61)
   const fxStatus = order?.facturx_status || null;
+
+  // v8.61.6 — La facture est-elle DÉJÀ dans le circuit SUPER PDP ?
+  // (transmise / client a payé / soldée, OU finalisée côté IOBILL sans
+  //  facturx_status pour les données pré-v8.61). Si oui, on NE propose plus
+  //  "Re-transmettre" : le suivi se fait automatiquement via le polling.
+  const alreadyTransmitted =
+    fxStatus === "transmitted" || fxStatus === "payment_sent" || fxStatus === "paid" ||
+    (!fxStatus && (iobillStatus === "paid" || iobillStatus === "issued"));
+
   let pillBg, pillBorder, pillColor, pillLabel, pillIcon;
   if (hasError) {
     pillBg = "rgba(229,73,73,0.12)";
@@ -319,10 +352,14 @@ export default function IobillInvoiceSync({ token, order, garage, onSync }) {
         title="Replier"
       >
         <span style={{ color: pillColor, fontWeight: 600 }}>
+          {/* v8.61.6 — On affiche le VRAI label calculé (pillLabel) pour tous les
+              états v8.61 (Soldé, Transmise · attente client, Client a payé…). Avant,
+              le mapping en dur retombait sur "Non transmise" pour tout ce qui n'était
+              pas l'un des 3 labels historiques → faux "Non transmise" sur factures
+              déjà encaissées. */}
           {pillIcon} {pillLabel === "Transmise" ? "Transmise à IO BILL" :
                      pillLabel === "En brouillon" ? "En brouillon IO BILL" :
-                     pillLabel === "Échec transmission" ? "Échec transmission" :
-                     "Non transmise"}
+                     pillLabel}
         </span>
         <span style={{
           marginLeft: "auto",
@@ -380,32 +417,116 @@ export default function IobillInvoiceSync({ token, order, garage, onSync }) {
         </div>
       )}
 
-      {/* Bouton action */}
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          smartPush();
-        }}
-        disabled={busy}
-        style={{
-          padding: "7px 14px", borderRadius: 6,
-          border: "1px solid var(--border, rgba(255,255,255,0.15))",
-          background: hasError || !synced ? "var(--gold, #d4a843)" : "transparent",
-          color: hasError || !synced ? "#0b0c10" : "var(--muted)",
-          fontSize: 11, fontWeight: 600,
-          cursor: busy ? "wait" : "pointer",
-          alignSelf: "flex-start"
-        }}
-      >
-        {busy ? "⏳ …" :
-         hasError ? "🔁 Réessayer" :
-         !synced ? (order.type === "avoir" ? "🦉 Transmettre l'avoir" : "🦉 Transmettre") :
-         isFinalized ? "🔄 Re-transmettre" :
-         (order.type === "avoir" ? "🔄 Forcer la transmission" : "🔄 Forcer la finalisation")}
-      </button>
+      {/* v8.61.6 — Bouton action.
+          Si la facture est déjà dans le circuit SUPER PDP (transmise / client a
+          payé / soldée), on NE propose PLUS "Re-transmettre" : le suivi est
+          automatique via le polling. On affiche juste une ligne d'info. */}
+      {alreadyTransmitted ? (
+        <div style={{ fontSize: 11, color: "var(--muted)", fontStyle: "italic" }}>
+          ✅ Dans le circuit SUPER PDP — suivi automatique
+        </div>
+      ) : (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            requestPush();
+          }}
+          disabled={busy}
+          style={{
+            padding: "7px 14px", borderRadius: 6,
+            border: "1px solid var(--border, rgba(255,255,255,0.15))",
+            background: hasError || !synced ? "var(--gold, #d4a843)" : "transparent",
+            color: hasError || !synced ? "#0b0c10" : "var(--muted)",
+            fontSize: 11, fontWeight: 600,
+            cursor: busy ? "wait" : "pointer",
+            alignSelf: "flex-start"
+          }}
+        >
+          {busy ? "⏳ …" :
+           hasError ? "🔁 Réessayer" :
+           !synced ? (order.type === "avoir" ? "🦉 Transmettre l'avoir" : "🦉 Transmettre") :
+           (order.type === "avoir" ? "🔄 Forcer la transmission" : "🔄 Forcer la finalisation")}
+        </button>
+      )}
 
       {error && (
         <div style={{ color: "var(--red)", fontSize: 11 }}>❌ {error}</div>
+      )}
+
+      {/* v8.61.6 — Modale de confirmation AVANT transmission B2B (chemin manuel
+          pastille). Rendue ici mais en position fixed → couvre tout l'écran. */}
+      {confirmTx && (
+        <div
+          onClick={(e) => { e.stopPropagation(); setConfirmTx(false); }}
+          style={{
+            position: "fixed", inset: 0, zIndex: 9999,
+            background: "rgba(0,0,0,0.6)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            padding: 20
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "100%", maxWidth: 460,
+              background: "#0b0c10",
+              border: "1px solid rgba(212,168,67,0.40)",
+              borderRadius: 12, padding: 24,
+              boxShadow: "0 20px 60px rgba(0,0,0,0.5)",
+              color: "var(--text, #e8e8ea)", fontSize: 13, lineHeight: 1.5
+            }}
+          >
+            <div style={{ fontSize: 16, fontWeight: 700, color: "var(--gold, #d4a843)", marginBottom: 12 }}>
+              🏛️ Transmettre à SUPER PDP ?
+            </div>
+            <p style={{ margin: "0 0 12px", color: "var(--muted)" }}>
+              Cette facture <strong>société</strong> va être <strong>émise définitivement</strong>
+              {" "}(numérotation verrouillée, art. 242 nonies A CGI) puis
+              {" "}<strong>transmise à SUPER PDP</strong> pour le cycle e-invoicing.
+            </p>
+            <p style={{ margin: "0 0 16px", color: "var(--muted)" }}>
+              ⚠️ Cette action est <strong>irréversible</strong> : une fois transmise,
+              la facture ne peut plus être modifiée ni supprimée. Un avoir sera
+              nécessaire pour toute correction.
+            </p>
+            <label style={{
+              display: "flex", alignItems: "flex-start", gap: 8,
+              padding: "10px 12px", borderRadius: 8,
+              background: "rgba(212,168,67,0.08)",
+              border: "1px solid rgba(212,168,67,0.25)",
+              cursor: "pointer", marginBottom: 18
+            }}>
+              <input
+                type="checkbox"
+                checked={confirmChecked}
+                onChange={(e) => setConfirmChecked(e.target.checked)}
+                style={{ marginTop: 2, accentColor: "#d4a843" }}
+              />
+              <span>Je confirme l'émission définitive et la transmission de cette facture.</span>
+            </label>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button
+                onClick={() => setConfirmTx(false)}
+                style={{
+                  padding: "8px 16px", borderRadius: 8,
+                  border: "1px solid rgba(255,255,255,0.15)",
+                  background: "transparent", color: "var(--muted)",
+                  fontSize: 12, fontWeight: 600, cursor: "pointer"
+                }}
+              >Annuler</button>
+              <button
+                disabled={!confirmChecked}
+                onClick={() => { setConfirmTx(false); smartPush(); }}
+                style={{
+                  padding: "8px 16px", borderRadius: 8, border: "none",
+                  background: confirmChecked ? "var(--gold, #d4a843)" : "rgba(212,168,67,0.25)",
+                  color: "#0b0c10", fontSize: 12, fontWeight: 700,
+                  cursor: confirmChecked ? "pointer" : "not-allowed"
+                }}
+              >🦉 Transmettre</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

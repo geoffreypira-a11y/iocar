@@ -819,13 +819,32 @@ function getQuotaStatus(usage) {
 }
 
 
-function getPayStatut(c, type) {
+// v8.61.6 — Vérité "payé" UNIFIÉE pour une facture.
+// En B2B, le paiement arrive via le circuit SUPER PDP (fr:211/fr:212) OU est
+// marqué payé côté IOBILL : dans ces cas il n'y a AUCUN paiement local dans
+// `order.paiements`, donc le calcul local (reste/encaisse) reste à "À encaisser"
+// à tort. Le polling refresh_pdp_status remonte `facturx_status` et `iobill_status`
+// sur l'order : on s'en sert ici comme source de vérité complémentaire.
+//   - facturx_status ∈ {paid, payment_sent} → client a payé via PDP
+//   - iobill_status === 'paid'              → IOBILL a marqué la facture encaissée
+// (le paiement manuel 💳 reste couvert par le calcul local reste<=0.01).
+function isOrderPaidViaAnyChannel(order) {
+  if (!order) return false;
+  const fx = order.facturx_status;
+  if (fx === "paid" || fx === "payment_sent") return true;
+  if (order.iobill_status === "paid") return true;
+  return false;
+}
+
+function getPayStatut(c, type, order) {
   if (type === "avoir") {
     if (c.reste <= 0.01) return { label: "✅ Remboursé", cls: "badge-green" };
     if (c.encaisse > 0) return { label: "⏳ Partiel", cls: "badge-orange" };
     return { label: "💸 À rembourser", cls: "badge-red" };
   }
   if (c.grandTotal <= 0) return { label: "—", cls: "badge-muted" };
+  // v8.61.6 — B2B soldé via PDP/IOBILL sans paiement local → Soldé (pas "À encaisser").
+  if (isOrderPaidViaAnyChannel(order)) return { label: "✅ Soldé", cls: "badge-green" };
   if (c.reste <= 0.01) return { label: "✅ Soldé", cls: "badge-green" };
   if (c.encaisse > 0) return { label: "⏳ Partiel", cls: "badge-orange" };
   return { label: "💰 À encaisser", cls: "badge-red" };
@@ -2184,7 +2203,7 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
                     </div>
                     <div style={{ textAlign: "right" }}>
                       <div style={{ fontWeight: 700, fontSize: 13 }}>{fmt(c.grandTotal)}</div>
-                      <span className={`badge ${getPayStatut(c, o.type).cls}`}>{getPayStatut(c, o.type).label}</span>
+                      <span className={`badge ${getPayStatut(c, o.type, o).cls}`}>{getPayStatut(c, o.type, o).label}</span>
                     </div>
                   </div>
                 );
@@ -3103,7 +3122,16 @@ function FleetPage({ vehicles, setVehicles, orders, setOrders, apiKey, usage, se
                         );
                         const isCompanyClient = linkedInvoice?.client?.type === "company"
                           || !!(linkedInvoice?.client?.siren && String(linkedInvoice.client.siren).trim());
-                        const isPaid = linkedInvoice?.status === "paid";
+                        // v8.61.6 — "payé" = statut local 'paid' (legacy) OU circuit
+                        // PDP/IOBILL (facturx_status/iobill_status remontés par le
+                        // polling) OU paiement local encaissé (💳). Avant, seul
+                        // linkedInvoice.status était testé, or il n'est JAMAIS mis à
+                        // 'paid' par le cycle PDP → le bouton restait grisé à vie.
+                        const isPaid = !!linkedInvoice && (
+                          linkedInvoice.status === "paid" ||
+                          isOrderPaidViaAnyChannel(linkedInvoice) ||
+                          calcOrder(linkedInvoice).reste <= 0.01
+                        );
                         const isB2BUnpaid = !!linkedInvoice && isCompanyClient && !isPaid;
 
                         if (isB2BUnpaid) {
@@ -3403,6 +3431,69 @@ function B2BPaymentWarningModal({ order, onConfirm, onClose }) {
             }}
           >
             Confirmer et enregistrer le paiement
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// v8.61.6 — Confirmation AVANT transmission d'une facture société.
+// Déclenchée à la conversion BC→Facture (le vrai moment où IOCAR émet en dur
+// + auto-transmet à SUPER PDP via push_invoice_issued). Action IRRÉVERSIBLE :
+// numérotation verrouillée + facture déposée sur le circuit e-invoicing.
+function B2BTransmitWarningModal({ order, onConfirm, onClose }) {
+  const [confirmed, setConfirmed] = React.useState(false);
+  return (
+    <div className="modal-bg" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal modal-sm">
+        <div className="modal-hd">
+          <span className="modal-title">🏛️ Transmettre à SUPER PDP ?</span>
+          <button className="close-btn" onClick={onClose}>×</button>
+        </div>
+        <div className="modal-body">
+          <div style={{
+            background: "rgba(212, 168, 67, 0.1)",
+            border: "1px solid var(--gold)",
+            borderRadius: 8,
+            padding: "14px 16px",
+            marginBottom: 16,
+            fontSize: 13,
+            lineHeight: 1.5
+          }}>
+            Cette facture <strong>société</strong> va être <strong>émise
+            définitivement</strong> (numérotation verrouillée, art. 242 nonies A CGI)
+            puis <strong>transmise à SUPER PDP</strong> pour le cycle e-invoicing 2026.
+            <div style={{ marginTop: 10, color: "var(--muted)", fontSize: 12 }}>
+              ⚠️ Action irréversible : une fois transmise, la facture ne peut plus
+              être modifiée ni supprimée. Toute correction nécessitera un avoir.
+            </div>
+          </div>
+          <label style={{
+            display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer",
+            padding: "10px 12px", background: "var(--card2)", borderRadius: 6, fontSize: 13
+          }}>
+            <input
+              type="checkbox"
+              checked={confirmed}
+              onChange={e => setConfirmed(e.target.checked)}
+              style={{ marginTop: 2, cursor: "pointer" }}
+            />
+            <span>
+              Je confirme l'<strong>émission définitive</strong> et la
+              {" "}<strong>transmission</strong> de cette facture société.
+            </span>
+          </label>
+        </div>
+        <div className="modal-foot">
+          <button className="btn btn-ghost" onClick={onClose}>Annuler</button>
+          <button
+            className="btn btn-primary"
+            onClick={() => confirmed && onConfirm()}
+            disabled={!confirmed}
+            style={{ opacity: confirmed ? 1 : 0.4, cursor: confirmed ? "pointer" : "not-allowed" }}
+          >
+            🦉 Émettre et transmettre
           </button>
         </div>
       </div>
@@ -5521,6 +5612,9 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
   const [payment, setPayment] = useState(null);
   // v8.61.1 — Popup avertissement bypass PDP en B2B avant PaymentModal
   const [paymentWarning, setPaymentWarning] = useState(null);
+  // v8.61.6 — Popup confirmation AVANT transmission B2B (conversion BC→Facture
+  // société = émission définitive + auto-transmission SUPER PDP irréversible).
+  const [transmitWarning, setTransmitWarning] = useState(null);
   const [search, setSearch] = useState("");
   const [pendingDelete, setPendingDelete] = useState(null);
   const [showDemoLimit, setShowDemoLimit] = useState(false);
@@ -5830,6 +5924,16 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
         }}
         onClose={() => setPaymentWarning(null)}
       />}
+      {/* v8.61.6 — Confirmation avant émission+transmission d'une facture société */}
+      {transmitWarning && <B2BTransmitWarningModal
+        order={transmitWarning}
+        onConfirm={() => {
+          const ord = transmitWarning;
+          setTransmitWarning(null);
+          toFacture(ord);
+        }}
+        onClose={() => setTransmitWarning(null)}
+      />}
       {payment && <PaymentModal order={payment} onSave={o => {
         setOrders(orders.map(x => x.id === o.id ? o : x));
         setPayment(null);
@@ -5973,7 +6077,7 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
             {filtered.map(o => {
               const c = calcOrder(o);
               const pct = c.grandTotal > 0 ? Math.round(c.encaisse / c.grandTotal * 100) : 0;
-              const paySt = getPayStatut(c, o.type);
+              const paySt = getPayStatut(c, o.type, o);
               return (
                 <tr key={o.id}>
                   <td style={{ fontFamily: "DM Mono", fontSize: 12, fontWeight: 600 }}>{o.ref}</td>
@@ -6032,7 +6136,19 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
                       )}
                       {/* En mode démo : facture validée = lecture seule */}
                       {(viewMode !== "trial" || o.type === "bc") && o.type === "bc" && (
-                        <button className="btn btn-ghost btn-xs" onClick={() => toFacture(o)} title="Convertir en facture">🧾</button>
+                        <button className="btn btn-ghost btn-xs" title="Convertir en facture" onClick={() => {
+                          // v8.61.6 — Si client société : la conversion déclenche une
+                          // émission définitive + transmission SUPER PDP (irréversible)
+                          // → on demande confirmation AVANT. Particulier → direct (draft).
+                          const isCompanyClient = o.client?.type === "company"
+                            || !!(o.client?.siren && String(o.client.siren).trim());
+                          const autoPushOn = !!(dealer?.iobill_auto_push && dealer?.iobill_company_id);
+                          if (isCompanyClient && autoPushOn) {
+                            setTransmitWarning(o);
+                          } else {
+                            toFacture(o);
+                          }
+                        }}>🧾</button>
                       )}
                       {o.type === "facture" && viewMode !== "trial" && !orders.some(a => a.type === "avoir" && a.facture_origine === o.ref) && (() => {
                         return <button className="btn btn-ghost btn-xs" title="Créer un avoir" onClick={() => {
