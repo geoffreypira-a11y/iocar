@@ -1253,6 +1253,8 @@ function mapOrderToInvoice(order, calc) {
   if (isCompany) {
     clientPayload = {
       external_id: clientExternalId ? String(clientExternalId) : null,
+      // v8.80 — client_type explicite (évite l'inférence côté IOBILL).
+      client_type: "company",
       // Raison sociale : `cli.nom` (nouveau CrmModal Société) OU `cli.name` (legacy)
       legal_name: sanitizeString(cli.nom) || sanitizeString(cli.name) || null,
       first_name: null,
@@ -1281,6 +1283,8 @@ function mapOrderToInvoice(order, calc) {
     }
     clientPayload = {
       external_id: clientExternalId ? String(clientExternalId) : null,
+      // v8.80 — client_type explicite : déclenche processing_rule=B2C côté IOBILL.
+      client_type: "individual",
       legal_name: null,
       first_name: firstName || null,
       last_name: lastName || null,
@@ -1577,6 +1581,7 @@ function mapOrderToCreditNote(order, calc, overrideStatus = null) {
   if (hasSiren) {
     clientPayload = {
       external_id: clientExternalId ? String(clientExternalId) : null,
+      client_type: "company",
       legal_name: sanitizeString(cli.name) || null,
       first_name: null, last_name: null,
       siret: String(cli.siren).replace(/\s/g, '') || null,
@@ -1592,6 +1597,7 @@ function mapOrderToCreditNote(order, calc, overrideStatus = null) {
     const lastName = parts.length > 1 ? parts[parts.length - 1] : null;
     clientPayload = {
       external_id: clientExternalId ? String(clientExternalId) : null,
+      client_type: "individual",
       legal_name: null,
       first_name: firstName || null, last_name: lastName || null,
       siret: null,
