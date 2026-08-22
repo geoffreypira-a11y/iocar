@@ -267,9 +267,11 @@ export default function IobillInvoiceSync({ token, order, garage, onSync }) {
     pillLabel = "Soldé";
     pillIcon = "✅";
   } else if (fxStatus === "payment_sent") {
-    pillBg = "rgba(62,207,122,0.10)";
-    pillBorder = "rgba(62,207,122,0.35)";
-    pillColor = "var(--green, #3ecf7a)";
+    // v8.100 — fr:211 = paiement INITIÉ (véhicule livrable) mais PAS encore
+    // encaissé → ambre, pas vert. Le vert (Soldé) est réservé à fr:212 (paid).
+    pillBg = "rgba(229,151,60,0.12)";
+    pillBorder = "rgba(229,151,60,0.40)";
+    pillColor = "var(--orange, #e5973c)";
     pillLabel = "Client a payé · à finaliser";
     pillIcon = "💰";
   } else if (fxStatus === "transmitted") {
