@@ -7471,6 +7471,7 @@ function LivreDePolice({ vehicles, livrePolice, setLivrePolice, dealer, setDeale
     date_entree: "Date d'entrée",
     date_sortie: "Date de sortie",
     prix_achat: "Prix d'achat",
+    prix_vente: "Prix de vente",
     mode_reglement: "Mode de règlement",
     vendeur_nom: "Nom vendeur",
     vendeur_prenom: "Prénom vendeur",
@@ -8075,6 +8076,13 @@ function LivrePoliceModal({ entry, nextNum, vehicles, onSave, onClose }) {
             <div className="form-group">
               <label className="form-label">Prix d'achat (€)</label>
               <input className="form-input" type="number" value={form.prix_achat||""} onChange={e => set("prix_achat", e.target.value)} />
+            </div>
+            {/* v8.83 — Prix de vente éditable : véhicule seul (hors frais / carte
+                grise / reprise). C'est la base de la marge 297A (vente − achat)
+                affichée dans le registre. Permet de corriger les anciennes entrées. */}
+            <div className="form-group">
+              <label className="form-label">Prix de vente (€) <span style={{ color: "var(--muted)", fontWeight: 400, fontSize: 11 }}>— véhicule seul, hors frais</span></label>
+              <input className="form-input" type="number" value={form.prix_vente||""} onChange={e => set("prix_vente", e.target.value)} />
             </div>
             <div className="form-group">
               <label className="form-label">Mode de règlement</label>
