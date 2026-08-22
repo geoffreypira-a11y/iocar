@@ -842,6 +842,16 @@ function isOrderPaidViaAnyChannel(order) {
   return false;
 }
 
+// v8.99 — Encaissement RÉEL (l'argent est arrivé) : SEUL fr:212 (paid, Encaissée)
+// ou le clic "encaissé" côté IOBILL (iobill_status="paid") comptent. fr:211
+// (payment_sent) = paiement INITIÉ → véhicule livrable mais RESTE encore en
+// ambre (non soldé). Distinct de isOrderPaidViaAnyChannel (qui, lui, débloque
+// le véhicule dès fr:211).
+function isOrderFullyEncaissed(order) {
+  if (!order) return false;
+  return order.facturx_status === "paid" || order.iobill_status === "paid";
+}
+
 function getPayStatut(c, type, order) {
   if (type === "avoir") {
     if (c.reste <= 0.01) return { label: "✅ Remboursé", cls: "badge-green" };
@@ -916,13 +926,13 @@ function calcOrder(o) {
   // v8.49.11 — reste calculé sur grandTotal (ce que paye vraiment le client, avec débours)
   const reste = grandTotal - encaisse;
 
-  // v8.98 — Réglée via PDP/IOBILL (fr:211 payment_sent / fr:212 paid, ou marquage
-  // IOBILL) : en B2B il n'y a PAS de paiement LOCAL dans IOCAR, mais la facture est
-  // bel et bien encaissée. On reflète donc l'encaissement dans les colonnes
-  // ENCAISSÉ/RESTE (sinon "—" et reste plein alors que le badge dit "Soldé").
+  // v8.99 — On ne solde le RESTE (reste=0, ENCAISSÉ=plein) QUE si la facture est
+  // RÉELLEMENT encaissée : fr:212 (paid) ou clic "encaissé" IOBILL. Avec fr:211
+  // (payment_sent), le véhicule est livrable (cf. isOrderPaidViaAnyChannel) mais
+  // le paiement n'est qu'initié → le RESTE reste affiché en ambre (non soldé).
   let encaisseFinal = encaisse;
   let resteFinal = reste;
-  if (o.type !== "avoir" && reste > 0.01 && isOrderPaidViaAnyChannel(o)) {
+  if (o.type !== "avoir" && reste > 0.01 && isOrderFullyEncaissed(o)) {
     encaisseFinal = grandTotal;
     resteFinal = 0;
   }
