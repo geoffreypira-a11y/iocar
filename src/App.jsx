@@ -916,6 +916,17 @@ function calcOrder(o) {
   // v8.49.11 — reste calculé sur grandTotal (ce que paye vraiment le client, avec débours)
   const reste = grandTotal - encaisse;
 
+  // v8.98 — Réglée via PDP/IOBILL (fr:211 payment_sent / fr:212 paid, ou marquage
+  // IOBILL) : en B2B il n'y a PAS de paiement LOCAL dans IOCAR, mais la facture est
+  // bel et bien encaissée. On reflète donc l'encaissement dans les colonnes
+  // ENCAISSÉ/RESTE (sinon "—" et reste plein alors que le badge dit "Soldé").
+  let encaisseFinal = encaisse;
+  let resteFinal = reste;
+  if (o.type !== "avoir" && reste > 0.01 && isOrderPaidViaAnyChannel(o)) {
+    encaisseFinal = grandTotal;
+    resteFinal = 0;
+  }
+
   // Net après acompte = utile pour l'affichage sur le PDF (séparation visuelle
   // entre acompte signature et paiements ultérieurs)
   // v8.49.11 — sur grandTotal aussi.
@@ -931,7 +942,7 @@ function calcOrder(o) {
     ttc: ttc * sign,                    // v8.49.11 — TTC hors débours (base TVA)
     debourTotal: debourTotal * sign,    // v8.49.11 — Somme débours (art. 267 II 2°)
     grandTotal: grandTotal * sign,      // v8.49.11 — À payer par le client
-    encaisse, reste, avecTva, tvaPct, acompteTtc,
+    encaisse: encaisseFinal, reste: resteFinal, avecTva, tvaPct, acompteTtc,
     netApresAcompte: netApresAcompte * sign, paiementsTotal
   };
 }
