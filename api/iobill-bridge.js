@@ -1891,20 +1891,36 @@ async function handleRefreshPdpStatus(garage, supabase, body, res) {
   const invoicesById = new Map(invoices.map((inv) => [inv.external_id, inv]));
   const updatedOrders = [];
 
+  // v8.97 — Rangs du cycle de vie PDP. Le statut est appliqué de façon MONOTONE :
+  // on ne redescend jamais (une transition rapide ne peut plus "retomber" à un
+  // état antérieur, et un état franchi — ex. fr:211 payment_sent — reste acquis).
+  // "rejected" (refus) est un état terminal distinct → toujours appliqué.
+  const FX_RANK = { pending: 0, generated: 0, transmitted: 1, accepted: 2, payment_sent: 3, paid: 4 };
+
   for (const order of pending) {
     const inv = invoicesById.get(order.id);
     if (!inv) continue;
 
+    // Statut PDP à appliquer, en respectant la monotonie (pas de redescente).
+    let nextFx = order.facturx_status;
+    if (inv.facturx_status !== undefined) {
+      const cand = inv.facturx_status;
+      if (cand === "rejected" || (FX_RANK[cand] ?? 0) >= (FX_RANK[order.facturx_status] ?? -1)) {
+        nextFx = cand;
+      }
+    }
+
     // On ne fait un UPDATE que si un des champs a réellement changé,
     // pour éviter le bruit de updated_at à chaque polling.
     const changed =
-      inv.facturx_status !== order.facturx_status ||
-      (inv.pdp_transmission_id && inv.pdp_transmission_id !== order.pdp_transmission_id);
+      nextFx !== order.facturx_status ||
+      (inv.pdp_transmission_id && inv.pdp_transmission_id !== order.pdp_transmission_id) ||
+      (inv.status && inv.status !== order.iobill_status);
 
     const patch = {
       pdp_last_poll_at: nowIso
     };
-    if (inv.facturx_status !== undefined) patch.facturx_status = inv.facturx_status;
+    if (nextFx !== order.facturx_status) patch.facturx_status = nextFx;
     if (inv.pdp_transmission_id) patch.pdp_transmission_id = inv.pdp_transmission_id;
     if (inv.pdp_transmitted_at) patch.pdp_transmitted_at = inv.pdp_transmitted_at;
     // Reflet du statut IOBILL (paid / issued / ...) sur orders.iobill_status

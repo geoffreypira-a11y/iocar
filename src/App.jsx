@@ -831,6 +831,12 @@ function getQuotaStatus(usage) {
 function isOrderPaidViaAnyChannel(order) {
   if (!order) return false;
   const fx = order.facturx_status;
+  // v8.97 — fr:211 (payment_sent, paiement initié par l'acheteur) ET fr:212
+  // (paid, encaissé) valent "réglé" → le véhicule est débloqué dès que le
+  // paiement est INITIÉ. C'est fiable car le `facturx_status` est désormais
+  // MONOTONE côté sync (iobill-bridge) : une fois un état franchi, on ne
+  // redescend jamais — donc un paiement rapide ne peut plus "retomber" à un
+  // état antérieur, et un paiement lent reste débloqué une fois fr:211 vu.
   if (fx === "paid" || fx === "payment_sent") return true;
   if (order.iobill_status === "paid") return true;
   return false;
