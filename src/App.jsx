@@ -2916,11 +2916,13 @@ function FleetPage({ vehicles, setVehicles, orders, setOrders, apiKey, usage, se
       if (linkedOrder) {
         const prixVenteRaw = parseFloat(linkedOrder.prix_ht) || 0;
         const remiseAmt = parseFloat(linkedOrder.remise_ttc) || 0;
-        const fraisMD = parseFloat(linkedOrder.frais_mise_dispo) || 0;
-        const carteGrise = parseFloat(linkedOrder.carte_grise) || 0;
-        const reprise = linkedOrder.reprise_active ? (parseFloat(linkedOrder.reprise_valeur) || 0) : 0;
-        // Total TTC encaissé par le garage = prix vente TTC - remise + frais + CG - reprise
-        prixVenteFinal = ((prixVenteRaw - remiseAmt) + fraisMD + carteGrise - reprise).toFixed(2);
+        // v8.82 — Le prix de vente du Livre de Police (et donc la marge 297A =
+        // vente − achat) porte sur le VÉHICULE SEUL. On EXCLUT :
+        //   • les frais de mise à disposition (prestation de service, taxée à 20 %)
+        //   • la carte grise (débours art. 267 II 2° CGI, avancée pour le client)
+        //   • la reprise (transaction distincte, ne réduit pas le prix du véhicule)
+        // Avant, ils étaient ajoutés → la marge du LP était surévaluée.
+        prixVenteFinal = (prixVenteRaw - remiseAmt).toFixed(2);
       }
 
       console.log("🚗 Livré → recherche client:", { vehicleId: v.id, plate: v.plate, found: !!linkedOrder, clientName, prixVenteFinal, ordersCount: (orders || []).length });
