@@ -2725,9 +2725,11 @@ function VehicleFiche({ v, dealer, onClose }) {
               win.document.write('<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Syne:wght@700;800&display=swap" rel="stylesheet">');
               win.document.write('<style>');
               document.querySelectorAll('style').forEach(s => win.document.write(s.textContent));
-              win.document.write('body{margin:0;padding:20px;background:#fff;font-family:"DM Sans",sans-serif}');
-              win.document.write('.fiche-print{max-width:700px;margin:0 auto}');
-              win.document.write('@page{size:A4 portrait;margin:10mm}');
+              win.document.write('body{margin:0;padding:0;background:#fff;font-family:"DM Sans",sans-serif}');
+              // v8.136 — Remplit l'A4 : zoom 1.2 (équivaut au "120%" manuel) sur une
+              // base 600px → ~720px imprimés, cale sur la largeur utile (marge 8mm).
+              win.document.write('.fiche-print{max-width:none;width:600px;margin:0 auto;zoom:1.2}');
+              win.document.write('@page{size:A4 portrait;margin:8mm}');
               win.document.write('@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}');
               win.document.write('</style>');
               win.document.write('</head><body>');
