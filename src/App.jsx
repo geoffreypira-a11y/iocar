@@ -10181,6 +10181,9 @@ function AdminPage({ token }) {
   const [garages, setGarages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch]   = useState("");
+  // v8.133 — Anti-autofill Chrome : le champ recherche reste readOnly tant qu'il
+  // n'a pas le focus (Chrome ne peut rien y injecter), déverrouillé au clic.
+  const [searchFocused, setSearchFocused] = useState(false);
   const [updating, setUpdating] = useState(null);
   const [exporting, setExporting] = useState(false);
   const [backupInfo, setBackupInfo] = useState(null);
@@ -10626,8 +10629,12 @@ function AdminPage({ token }) {
 
       {/* Recherche */}
       <input className="search-input" style={{ marginBottom: 16, width: "100%", maxWidth: 400 }}
-        type="search" name="admin-concessions-search" autoComplete="off"
-        placeholder="Rechercher par nom, email, SIRET..."
+        type="search" name="iocar-adm-cs-nofill" autoComplete="off"
+        data-lpignore="true" data-1p-ignore data-form-type="other"
+        readOnly={!searchFocused}
+        onFocus={() => setSearchFocused(true)}
+        onBlur={() => setSearchFocused(false)}
+        placeholder="Rechercher par nom, e‑mail, SIRET..."
         value={search} onChange={e => setSearch(e.target.value)} />
 
       {/* Table */}
