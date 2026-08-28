@@ -8004,6 +8004,24 @@ function LivrePoliceModal({ entry, nextNum, vehicles, onSave, onClose }) {
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const [showHistorique, setShowHistorique] = useState(false);
 
+  // v8.134 — Brouillon récupérable (comme véhicule/facture) : ne plus perdre sa
+  // saisie si on clique en dehors ou ferme la modale par erreur.
+  const DRAFT_KEY = "lp_new";
+  const isEdit = !!entry;
+  const [draftToRestore, setDraftToRestore] = useState(null);
+  useEffect(() => {
+    if (isEdit) return;
+    const draft = loadDraft(DRAFT_KEY);
+    if (draft && (draft.marque || draft.modele || draft.immat || draft.vin || draft.vendeur_nom)) {
+      setDraftToRestore(draft);
+    }
+  }, []);
+  useEffect(() => {
+    if (isEdit) return;
+    const t = setTimeout(() => saveDraft(DRAFT_KEY, form), 1000);
+    return () => clearTimeout(t);
+  }, [form, isEdit]);
+
   const fillFromVehicle = (vid) => {
     const v = vehicles?.find(x => x.id === vid);
     if (!v) return;
@@ -8019,6 +8037,39 @@ function LivrePoliceModal({ entry, nextNum, vehicles, onSave, onClose }) {
 
   return (
     <div className="modal-bg" onClick={e => e.target === e.currentTarget && onClose()}>
+      {/* v8.134 — Popup de reprise de brouillon (identique véhicule/facture) */}
+      {draftToRestore && (
+        <div className="modal-bg" style={{ zIndex: 1000 }}>
+          <div className="modal modal-sm" onClick={e => e.stopPropagation()}>
+            <div className="modal-hd">
+              <span className="modal-title">📝 Brouillon récupéré</span>
+            </div>
+            <div className="modal-body">
+              <p style={{ fontSize: 13, lineHeight: 1.6, marginBottom: 16 }}>
+                Une saisie d'entrée en cours a été détectée
+                {draftToRestore?.immat && <> pour <strong>{draftToRestore.immat}</strong></>}
+                {!draftToRestore?.immat && draftToRestore?.marque && <> pour <strong>{draftToRestore.marque} {draftToRestore.modele || ""}</strong></>}
+                .<br />
+                Voulez-vous reprendre où vous en étiez ?
+              </p>
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => { clearDraft(DRAFT_KEY); setDraftToRestore(null); }}
+                >
+                  🗑 Repartir de zéro
+                </button>
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={() => { setForm(draftToRestore); setDraftToRestore(null); }}
+                >
+                  ↩ Restaurer ma saisie
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="modal modal-lg">
         <div className="modal-hd">
           <span className="modal-title">📋 Entrée livre de police — N°{String(form.num_ordre).padStart(4, "0")}</span>
@@ -8231,6 +8282,7 @@ function LivrePoliceModal({ entry, nextNum, vehicles, onSave, onClose }) {
               kilometrage: parseInt(form.kilometrage) || 0,
               _incomplete: isComplete ? false : form._incomplete,
             });
+            if (!isEdit) clearDraft(DRAFT_KEY);
           }}>💾 Enregistrer</button>
         </div>
 
