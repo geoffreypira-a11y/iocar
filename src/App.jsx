@@ -5020,7 +5020,6 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
                       <div className="pdoc-sig">Signature client / Bon pour accord</div>
                     )}
                   </div>
-                  <div className="pdoc-legal">Acompte de 30% requis à la signature. Document non contractuel avant encaissement de l'acompte.</div>
                 </div>
               </div>
             ) : (
