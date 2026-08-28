@@ -2333,7 +2333,8 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
     kilometrage: "", vin: "", date_entree: today(),
     prix_achat: "", prix_vente: "",
     statut: "disponible", options: "", notes: "",
-    includeTreso: false,
+    // v8.135 — Toggle "Prix d'achat" actif par défaut sur une nouvelle entrée.
+    includeTreso: true,
     // v8.39 — Régime TVA : 'normal' (défaut) ou 'margin_297a' (achat à particulier)
     vat_regime: "normal",
   });
