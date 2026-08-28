@@ -2358,6 +2358,8 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
   }, [form, isEdit]);
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  // v8.138 — Setter pour l'objet fournisseur (à qui on a acheté le véhicule).
+  const setFourn = (k, val) => setForm(f => ({ ...f, fournisseur: { ...(f.fournisseur || {}), [k]: val } }));
 
   // ─── QUOTA MENSUEL ────────────────────────────────────────────
   // Utilise les constantes globales (QUOTA_FREE, COST_EXTRA) et le helper getQuotaStatus.
@@ -2590,6 +2592,37 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
                 </div>
               </div>
             )}
+          </div>
+
+          {/* v8.138 — Fournisseur : à qui le véhicule a été acheté. Préremplit le
+              vendeur dans le Livre de Police (traçabilité anti-recel). */}
+          <div style={{ marginBottom: 16, padding: 14, borderRadius: 10, background: "rgba(212,168,67,.05)", border: "1px solid var(--border2)" }}>
+            <div style={{ fontSize: 10, letterSpacing: 2, textTransform: "uppercase", color: "var(--gold)", fontWeight: 700, marginBottom: 10 }}>
+              Fournisseur — à qui vous avez acheté le véhicule <span style={{ color: "var(--muted)", fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>(préremplit le Livre de Police)</span>
+            </div>
+            <div className="form-grid">
+              <div className="form-group">
+                <label className="form-label">Type</label>
+                <select className="form-input" value={form.fournisseur?.type || "particulier"} onChange={e => setFourn("type", e.target.value)}>
+                  <option value="particulier">Particulier</option>
+                  <option value="professionnel">Professionnel</option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="form-label">{form.fournisseur?.type === "professionnel" ? "Raison sociale" : "Nom"}</label>
+                <input className="form-input" value={form.fournisseur?.nom || ""} onChange={e => setFourn("nom", e.target.value)} />
+              </div>
+              {form.fournisseur?.type !== "professionnel" && (
+                <div className="form-group">
+                  <label className="form-label">Prénom</label>
+                  <input className="form-input" value={form.fournisseur?.prenom || ""} onChange={e => setFourn("prenom", e.target.value)} />
+                </div>
+              )}
+              <div className="form-group full">
+                <label className="form-label">Adresse</label>
+                <input className="form-input" value={form.fournisseur?.adresse || ""} onChange={e => setFourn("adresse", e.target.value)} placeholder="12 rue de la Paix, 13000 Marseille" />
+              </div>
+            </div>
           </div>
 
           <div className="form-grid">
@@ -2834,11 +2867,20 @@ function FleetPage({ vehicles, setVehicles, orders, setOrders, apiKey, usage, se
           // Côté LP, ce client EST le vendeur/fournisseur (point de vue anti-recel).
           // L'abonné devra quand même compléter la pièce d'identité (non capturée en facture).
           const repriseClient = v.origine === "reprise" && v.reprise_client ? v.reprise_client : null;
+          // v8.138 — Fournisseur saisi à la création du véhicule (à qui on l'a acheté).
+          // Sert à préremplir le vendeur du LP pour un achat NORMAL (hors reprise).
+          const fournisseur = (!repriseClient && v.fournisseur && (v.fournisseur.nom || v.fournisseur.prenom))
+            ? v.fournisseur : null;
           const vendeurDefaults = repriseClient ? {
             vendeur_type: repriseClient.type || "particulier",
             vendeur_nom: repriseClient.nom || repriseClient.name || "",       // "name" pour rétrocompat
             vendeur_prenom: repriseClient.prenom || "",
             vendeur_adresse: repriseClient.adresse || repriseClient.address || "", // "address" pour rétrocompat
+          } : fournisseur ? {
+            vendeur_type: fournisseur.type || "particulier",
+            vendeur_nom: fournisseur.nom || "",
+            vendeur_prenom: fournisseur.prenom || "",
+            vendeur_adresse: fournisseur.adresse || "",
           } : {
             vendeur_type: "particulier",
             vendeur_nom: "",
@@ -5142,7 +5184,19 @@ function CessionDoc({ order, dealer, vehicles, clients, onUpdateOrder, onClose }
         const cpLine = lines.find(l => /\d{5}/.test(l)) || "";
         const cpMatch = cpLine.match(/(\d{5})\s*(.*)/);
         const cp = cpMatch ? cpMatch[1] : "";
-        const ville = cpMatch ? cpMatch[2].trim() : "";
+        // v8.138 — Ville robuste (corrige "Fait à" vide sur le CERFA) :
+        //  1) ville APRÈS le CP sur la même ligne  → "13000 Marseille"
+        //  2) sinon ville AVANT le CP              → "Marseille 13000"
+        //  3) sinon CP seul sur sa ligne → dernière ligne "texte" (hors rue)
+        let ville = cpMatch ? cpMatch[2].trim() : "";
+        if (!ville && cpLine && cp) {
+          const before = cpLine.slice(0, cpLine.indexOf(cp)).trim();
+          if (before && !/^\d/.test(before)) ville = before;
+        }
+        if (!ville) {
+          const cand = lines.filter(l => l !== rue && l !== cpLine && !/\d{5}/.test(l) && !/^\d/.test(l));
+          if (cand.length) ville = cand[cand.length - 1].trim();
+        }
         const types = ["RUE","AVENUE","AVE","AV","BOULEVARD","BD","BLVD","IMPASSE","IMP","CHEMIN","CH","ROUTE","RTE","PLACE","PL","ALLÉE","ALLEE","PASSAGE","COURS","SQUARE","SQ","LOTISSEMENT","LOT","RÉSIDENCE","RESIDENCE","HAMEAU","LIEU-DIT","QUAI","VOIE","SENTIER","TRAVERSE"];
         const extensions = ["BIS","TER","QUATER","A","B","C"];
         const parts = rue.split(/\s+/);
