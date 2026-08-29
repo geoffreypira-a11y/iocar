@@ -241,6 +241,26 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
 
     setLoading(true);
     try {
+      // v8.139.1 — Charge pdf-lib à la volée si absent (même logique que le tunnel
+      // de vente), pour que l'onglet fonctionne en autonomie totale.
+      if (!window.PDFLib) {
+        await new Promise((resolve, reject) => {
+          const script = document.createElement("script");
+          script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js";
+          script.onload = resolve;
+          script.onerror = reject;
+          document.head.appendChild(script);
+        });
+      }
+      if (!window.PDFLib) {
+        await new Promise((resolve, reject) => {
+          const script = document.createElement("script");
+          script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js";
+          script.onload = resolve;
+          script.onerror = reject;
+          document.head.appendChild(script);
+        });
+      }
       if (!window.PDFLib) throw new Error("Librairie PDF non chargée (PDFLib).");
       const { PDFDocument } = window.PDFLib;
       const pdfBytes = await fetch("/cerfa_15776-01_acroform.pdf").then(r => r.arrayBuffer());
