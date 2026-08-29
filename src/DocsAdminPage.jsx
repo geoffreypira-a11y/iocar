@@ -125,6 +125,11 @@ function NewContactForm({ value, onChange, showSave, saveChecked, onToggleSave }
 export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}, setDealer }) {
   const fournisseurs = useMemo(() => Array.isArray(dealer?.admin_fournisseurs) ? dealer.admin_fournisseurs : [], [dealer]);
 
+  // v8.142 — Type de document : cession (15776) ou mandat d'immatriculation (13757*03).
+  const [docType, setDocType] = useState("cession");
+  const [natureOp, setNatureOp] = useState("Immatriculation");
+  const [lieuMandat, setLieuMandat] = useState(() => parseAddress(dealer?.address || "").ville);
+
   // Sélections : "garage" | "c:<id>" | "f:<id>" | "nouveau"
   const [vendeurSel, setVendeurSel] = useState("garage");     // par défaut : garage en vendeur…
   const [acquereurSel, setAcquereurSel] = useState("garage"); // …mais on force l'acquéreur = garage par défaut ci-dessous
@@ -356,20 +361,107 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
     }
   }
 
+  // ── Génère le MANDAT d'immatriculation 13757*03 ──
+  async function generateMandat() {
+    setError(null);
+    const veh = resolveVehicle();
+    if (!veh || !veh.plate) { setError("Sélectionne un véhicule (au moins l'immatriculation)."); return; }
+    const M1 = resolveParty(vendeurSel, newVendeur);    // mandant (donneur d'ordre)
+    const M2 = resolveParty(acquereurSel, newAcquereur); // mandataire (fait les démarches)
+    if (!buildIdentite(M1)) { setError("Le mandant est incomplet (nom / raison sociale)."); return; }
+    if (!buildIdentite(M2)) { setError("Le mandataire est incomplet (nom / raison sociale)."); return; }
+
+    setLoading(true);
+    try {
+      if (!window.PDFLib) {
+        await new Promise((resolve, reject) => {
+          const script = document.createElement("script");
+          script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js";
+          script.onload = resolve; script.onerror = reject;
+          document.head.appendChild(script);
+        });
+      }
+      if (!window.PDFLib) throw new Error("Librairie PDF non chargée (PDFLib).");
+      const { PDFDocument, PDFName } = window.PDFLib;
+      const pdfBytes = await fetch("/cerfa_1375703.pdf").then(r => r.arrayBuffer());
+      const pdfDoc = await PDFDocument.load(pdfBytes);
+      // Retire la couche XFA pour que les valeurs AcroForm s'affichent partout.
+      try {
+        const acro = pdfDoc.catalog.lookup(PDFName.of("AcroForm"));
+        if (acro && acro.delete) acro.delete(PDFName.of("XFA"));
+      } catch (e) {}
+      const form = pdfDoc.getForm();
+      const setText = (n, v) => { if (!v) return; try { form.getTextField(n).setText(String(v)); } catch (e) {} };
+      const setCheck = (n) => { try { form.getCheckBox(n).check(); } catch (e) {} };
+
+      const pre = "topmostSubform[0].Page1[0].";
+      const mA = parseAddress(M1.adresse);
+      const [yy, mm, dd] = dateCession.split("-");
+
+      // Mandant
+      setText(pre + "txt_IdentitéMandant[0]", buildIdentite(M1));
+      if (M1.siret) setText(pre + "num_SIRETMandant[0]", String(M1.siret).replace(/\s/g, ""));
+      setText(pre + "num_VoieAdresse[0]", mA.num);
+      setText(pre + "txt_ExtensionAdresse[0]", mA.ext);
+      setText(pre + "txt_TypeVoieAdresse[0]", mA.type);
+      setText(pre + "txt_NomVoieAdresse[0]", mA.nom);
+      setText(pre + "num_CodePostalAdresse[0]", mA.cp);
+      setText(pre + "txt_CommuneAdresse[0]", mA.ville);
+      setText(pre + "txt_PaysAdresse[0]", "France");
+      // Mandataire
+      setText(pre + "txt_IdentitéMandataire[0]", buildIdentite(M2));
+      if (M2.siret) setText(pre + "num_SIRETMandataire[0]", String(M2.siret).replace(/\s/g, ""));
+      // Opération + véhicule
+      setText(pre + "txt_NatureOpération[0]", natureOp);
+      setText(pre + "txt_MarqueVéhicule[0]", veh.marque);
+      setText(pre + "txt_NumVinVéhicule[0]", veh.vin);
+      setText(pre + "txt_MarqueImmatriculation[0]", veh.plate);
+      // Lieu + date + confirmation
+      setText(pre + "txt_LieuDéclaration[0]", lieuMandat || mA.ville);
+      setText(pre + "num_DateJourDéclaration[0]", dd);
+      setText(pre + "num_DateMoisDéclaration[0]", mm);
+      setText(pre + "num_DateAnnéeDéclaration[0]", yy);
+      setCheck(pre + "ckb_ConfirmationInformation[0]");
+
+      const filled = await pdfDoc.save();
+      const blob = new Blob([filled], { type: "application/pdf" });
+      setPdfUrl(URL.createObjectURL(blob));
+
+      if (vendeurSel === "nouveau") maybeSaveFournisseur(newVendeur, saveVendeurFourn);
+      if (acquereurSel === "nouveau") maybeSaveFournisseur(newAcquereur, saveAcquereurFourn);
+    } catch (e) {
+      setError("Erreur mandat : " + (e?.message || e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   const options = partyOptions();
 
   return (
     <div style={{ maxWidth: 900, margin: "0 auto" }}>
       <div className="page-title">Documents administratifs</div>
-      <p style={{ color: "var(--muted)", fontSize: 13, marginTop: -6, marginBottom: 20 }}>
-        Générez un CERFA de cession (15776) à la carte — véhicule entrant, retour/remboursement, etc.
+      <p style={{ color: "var(--muted)", fontSize: 13, marginTop: -6, marginBottom: 16 }}>
+        Générez un CERFA à la carte — cession (15776) ou mandat d'immatriculation (13757*03).
         Cet onglet lit vos données mais n'écrit rien ailleurs.
       </p>
 
+      {/* Sélecteur de type de document */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
+        <button className={"btn " + (docType === "cession" ? "btn-primary" : "btn-ghost")} onClick={() => { setDocType("cession"); setPdfUrl(null); }}>
+          📄 Cession (15776)
+        </button>
+        <button className={"btn " + (docType === "mandat" ? "btn-primary" : "btn-ghost")} onClick={() => { setDocType("mandat"); setPdfUrl(null); }}>
+          🖊 Mandat d'immatriculation (13757)
+        </button>
+      </div>
+
       <div style={{ display: "grid", gap: 20, gridTemplateColumns: "1fr" }}>
-        {/* VENDEUR */}
+        {/* PARTIE 1 : Vendeur (cession) / Mandant (mandat) */}
         <div className="card">
-          <div style={{ fontSize: 10, letterSpacing: 2, textTransform: "uppercase", color: "var(--red)", fontWeight: 700, marginBottom: 8 }}>Vendeur (ancien propriétaire)</div>
+          <div style={{ fontSize: 10, letterSpacing: 2, textTransform: "uppercase", color: "var(--red)", fontWeight: 700, marginBottom: 8 }}>
+            {docType === "mandat" ? "Mandant (donneur d'ordre)" : "Vendeur (ancien propriétaire)"}
+          </div>
           <select className="form-input" value={vendeurSel} onChange={e => setVendeurSel(e.target.value)}>
             {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
@@ -379,9 +471,11 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
           )}
         </div>
 
-        {/* ACQUÉREUR */}
+        {/* PARTIE 2 : Acquéreur (cession) / Mandataire (mandat) */}
         <div className="card">
-          <div style={{ fontSize: 10, letterSpacing: 2, textTransform: "uppercase", color: "var(--gold)", fontWeight: 700, marginBottom: 8 }}>Acquéreur (nouveau propriétaire)</div>
+          <div style={{ fontSize: 10, letterSpacing: 2, textTransform: "uppercase", color: "var(--gold)", fontWeight: 700, marginBottom: 8 }}>
+            {docType === "mandat" ? "Mandataire (qui fait les démarches)" : "Acquéreur (nouveau propriétaire)"}
+          </div>
           <select className="form-input" value={acquereurSel} onChange={e => setAcquereurSel(e.target.value)}>
             {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
@@ -390,6 +484,14 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
               saveChecked={saveAcquereurFourn} onToggleSave={() => setSaveAcquereurFourn(s => !s)} />
           )}
         </div>
+
+        {/* MANDAT : nature de l'opération */}
+        {docType === "mandat" && (
+          <div className="card">
+            <div style={{ fontSize: 10, letterSpacing: 2, textTransform: "uppercase", color: "var(--muted2)", fontWeight: 700, marginBottom: 8 }}>Nature de l'opération</div>
+            <input className="form-input" value={natureOp} onChange={e => setNatureOp(e.target.value)} placeholder="Immatriculation, changement de titulaire, duplicata…" />
+          </div>
+        )}
 
         {/* VÉHICULE */}
         <div className="card">
@@ -417,26 +519,35 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
           )}
         </div>
 
-        {/* DATE / HEURE */}
+        {/* DATE (+ heure cession, ou Fait à mandat) */}
         <div className="card">
-          <div style={{ fontSize: 10, letterSpacing: 2, textTransform: "uppercase", color: "var(--muted2)", fontWeight: 700, marginBottom: 8 }}>Date & heure de cession</div>
+          <div style={{ fontSize: 10, letterSpacing: 2, textTransform: "uppercase", color: "var(--muted2)", fontWeight: 700, marginBottom: 8 }}>
+            {docType === "mandat" ? "Lieu & date" : "Date & heure de cession"}
+          </div>
           <div className="form-grid">
             <div className="form-group">
               <label className="form-label">Date</label>
               <input className="form-input" type="date" value={dateCession} onChange={e => setDateCession(e.target.value)} />
             </div>
-            <div className="form-group">
-              <label className="form-label">Heure</label>
-              <input className="form-input" type="time" value={heureCession} onChange={e => setHeureCession(e.target.value)} />
-            </div>
+            {docType === "mandat" ? (
+              <div className="form-group">
+                <label className="form-label">Fait à</label>
+                <input className="form-input" value={lieuMandat} onChange={e => setLieuMandat(e.target.value)} placeholder="Marseille" />
+              </div>
+            ) : (
+              <div className="form-group">
+                <label className="form-label">Heure</label>
+                <input className="form-input" type="time" value={heureCession} onChange={e => setHeureCession(e.target.value)} />
+              </div>
+            )}
           </div>
         </div>
 
         {error && <div style={{ color: "var(--red)", fontSize: 13 }}>{error}</div>}
 
         <div>
-          <button className="btn btn-primary" onClick={generate} disabled={loading}>
-            {loading ? "Génération…" : "📄 Générer le CERFA"}
+          <button className="btn btn-primary" onClick={docType === "mandat" ? generateMandat : generate} disabled={loading}>
+            {loading ? "Génération…" : (docType === "mandat" ? "🖊 Générer le mandat" : "📄 Générer le CERFA")}
           </button>
         </div>
 
@@ -446,12 +557,12 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
               <button className="btn btn-primary btn-sm" onClick={() => window.open(pdfUrl, "_blank")}>
                 ↗ Ouvrir en plein écran
               </button>
-              <a className="btn btn-ghost btn-sm" href={pdfUrl} download="cerfa-cession-15776.pdf" style={{ textDecoration: "none" }}>
+              <a className="btn btn-ghost btn-sm" href={pdfUrl} download={docType === "mandat" ? "mandat-immatriculation-13757.pdf" : "cerfa-cession-15776.pdf"} style={{ textDecoration: "none" }}>
                 ⬇ Télécharger
               </a>
             </div>
             <div style={{ height: 620, overflow: "hidden", borderRadius: 8 }}>
-              <iframe src={pdfUrl} style={{ width: "100%", height: "100%", border: "none" }} title="CERFA 15776" />
+              <iframe src={pdfUrl} style={{ width: "100%", height: "100%", border: "none" }} title={docType === "mandat" ? "Mandat 13757" : "CERFA 15776"} />
             </div>
           </div>
         )}
