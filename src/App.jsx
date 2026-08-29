@@ -4,6 +4,7 @@ import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recha
 
 // v8.37 — Pont IO BILL (composants UI)
 import IobillBridgeCard from "./components/IobillBridgeCard.jsx";
+import DocsAdminPage from "./DocsAdminPage.jsx";
 import IobillInvoiceSync from "./components/IobillInvoiceSync.jsx";
 
 // v8.49.16 — Système d'essai gratuit 7 jours + paywall
@@ -11799,6 +11800,7 @@ export default function App() {
     { id: "orders",      icon: "📄", label: "Factures" },
     { id: "crm",         icon: "👥", label: "CRM" },
     { id: "livrepolice", icon: "📋", label: "Police" },
+    { id: "docsadmin",   icon: "🗂", label: "Docs admin" },
     { id: "settings",    icon: "⚙️", label: "Paramètres" },
     ...(isRealAdmin ? [{ id: "admin", icon: "🛡", label: "Admin IO Car" }] : []),
   ];
@@ -12038,6 +12040,7 @@ export default function App() {
                 <button className="btn btn-primary" onClick={handleLogout}>🚀 S'abonner — 34,99€/mois</button>
               </div>
             ) : <LivreDePolice vehicles={activeVehicles} livrePolice={activeLivrePolice} setLivrePolice={setLivrePoliceRaw} dealer={dealer} setDealer={setDealerRaw} viewMode={viewMode} />)}
+            {tab === "docsadmin"   && <DocsAdminPage vehicles={activeVehicles} clients={activeClients} dealer={dealer} setDealer={setDealerRaw} />}
             {tab === "settings"    && <SettingsPage dealer={dealer} setDealer={setDealerRaw} usage={usage} isRealAdmin={isRealAdmin} token={token} />}
           </main>
         </div>
