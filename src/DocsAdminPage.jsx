@@ -441,8 +441,18 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
         </div>
 
         {pdfUrl && (
-          <div className="card" style={{ height: 600, padding: 0, overflow: "hidden" }}>
-            <iframe src={pdfUrl} style={{ width: "100%", height: "100%", border: "none" }} title="CERFA 15776" />
+          <div className="card" style={{ padding: 12 }}>
+            <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+              <button className="btn btn-primary btn-sm" onClick={() => window.open(pdfUrl, "_blank")}>
+                ↗ Ouvrir en plein écran
+              </button>
+              <a className="btn btn-ghost btn-sm" href={pdfUrl} download="cerfa-cession-15776.pdf" style={{ textDecoration: "none" }}>
+                ⬇ Télécharger
+              </a>
+            </div>
+            <div style={{ height: 620, overflow: "hidden", borderRadius: 8 }}>
+              <iframe src={pdfUrl} style={{ width: "100%", height: "100%", border: "none" }} title="CERFA 15776" />
+            </div>
           </div>
         )}
       </div>
