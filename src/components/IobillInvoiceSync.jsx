@@ -280,6 +280,16 @@ export default function IobillInvoiceSync({ token, order, garage, onSync }) {
     pillColor = "var(--blue, #5ea8f0)";
     pillLabel = "Transmise · attente client";
     pillIcon = "📨";
+  } else if (iobillStatus === "paid") {
+    // v8.149 — Encaissement MANUEL côté IOBILL (iobill_status="paid") alors que le
+    // cycle PDP n'est encore qu'en amont (generated/pending/absent) → "Soldé" (vert).
+    // ⚠️ Placé APRÈS transmitted/payment_sent : on ne masque PAS la progression PDP
+    // active (une facture réellement transmise en attente client garde son badge).
+    pillBg = "rgba(62,207,122,0.14)";
+    pillBorder = "rgba(62,207,122,0.45)";
+    pillColor = "var(--green, #3ecf7a)";
+    pillLabel = "Soldé";
+    pillIcon = "✅";
   } else if (fxStatus === "generated") {
     pillBg = "rgba(212,168,67,0.12)";
     pillBorder = "rgba(212,168,67,0.40)";
