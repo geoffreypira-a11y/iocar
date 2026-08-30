@@ -1206,7 +1206,9 @@ function mapOrderToInvoice(order, calc) {
   if (order.type !== 'avoir' && Number(order.acompte_ttc) > 0) {
     payments.push({
       amount_cents: Math.round(Number(order.acompte_ttc) * 100),
-      method: 'cash', // pas tracé côté IOCAR, on met cash par défaut
+      // v8.146 — Moyen de l'acompte choisi à la création (order.acompte_mode),
+      // fallback 'cash' si non renseigné (anciennes commandes).
+      method: order.acompte_mode ? mapPaymentMethod(order.acompte_mode) : 'cash',
       paid_at: toIsoDate(order.date_facture || order.date_creation),
       notes: 'Acompte versé à la signature (IO CAR)',
       reference: order.ref ? sanitizeString(`Acompte ${order.ref}`) : null
@@ -1623,11 +1625,13 @@ function mapOrderToCreditNote(order, calc, overrideStatus = null) {
 // Map les modes de paiement IOCAR → IOBILL
 function mapPaymentMethod(mode) {
   if (!mode) return 'other';
-  const m = String(mode).toLowerCase();
+  // v8.146 — on retire les accents : "espèces".includes('espece') était FAUX
+  // (le "è" cassait la correspondance) → tout tombait sur 'other'.
+  const m = String(mode).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   if (m.includes('virement')) return 'bank_transfer';
   if (m.includes('cb') || m.includes('carte') || m.includes('stripe')) return 'stripe';
   if (m.includes('espece') || m.includes('cash')) return 'cash';
-  if (m.includes('chèque') || m.includes('cheque')) return 'check';
+  if (m.includes('cheque')) return 'check';
   return 'other';
 }
 

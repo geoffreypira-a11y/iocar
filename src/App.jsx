@@ -3671,6 +3671,7 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
     garantie_mois: 3, // durée garantie : 3, 6 ou 12 mois
     carte_grise: 0, // frais carte grise
     acompte_ttc: 0, // acompte versé à la signature (en TTC, par défaut 0)
+    acompte_mode: "Espèces", // v8.146 — moyen de l'acompte (repris dans l'historique)
     // Reprise véhicule (optionnelle)
     reprise_active: false,
     reprise_plate: "",
@@ -4252,6 +4253,18 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
                   value={form.acompte_ttc ?? 0}
                   onChange={e => set("acompte_ttc", parseFloat(e.target.value) || 0)}
                 />
+                {/* v8.146 — Moyen de paiement de l'acompte (repris dans l'historique IOBILL) */}
+                {Number(form.acompte_ttc) > 0 && (
+                  <div style={{ marginTop: 10 }}>
+                    <label className="form-label" style={{ display: "block", marginBottom: 6 }}>Moyen de l'acompte</label>
+                    <select className="form-input" value={form.acompte_mode || "Espèces"} onChange={e => set("acompte_mode", e.target.value)}>
+                      <option value="Espèces">Espèces</option>
+                      <option value="Virement">Virement</option>
+                      <option value="Carte">Carte</option>
+                      <option value="Chèque">Chèque</option>
+                    </select>
+                  </div>
+                )}
               </div>
             </div>
           )}
