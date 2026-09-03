@@ -482,10 +482,21 @@ async function handlePushInvoiceIssued(garage, supabase, body, res) {
   const mappedInvoice = mapOrderToInvoice(order, calc);
   // Force status=issued pour cette action (facture B2B émise, en attente paiement)
   mappedInvoice.status = 'issued';
-  // Pas de payments — la facture n'est pas encore payée
-  mappedInvoice.payments = [];
-  // paid_cents = 0 pour bien indiquer "en attente"
-  mappedInvoice.totals = { paid_cents: 0 };
+  // v8.150 — Les règlements déjà reçus sont désormais transmis.
+  //
+  // Ce flux les vidait, au motif que « la facture n'est pas encore payée ».
+  // Mais « pas soldée » n'est pas « rien versé » : sur VEH-2026-0086, le client
+  // avait remis 1 000 € d'acompte. Le PDF IOCAR annonçait « Reste à payer
+  // 9 493,76 € » et le document transmis en réclamait 10 180,00 € — une facture
+  // qui redemande un acompte déjà encaissé.
+  //
+  // BT-113 « Paid amount » existe exactement pour ça, et BR-CO-16 en tient
+  // compte : montant dû = total − prépayé. IOBILL l'émet déjà dès que
+  // paid_cents est renseigné, et son PDF affiche alors « Déjà encaissé » puis
+  // « Reste à régler ».
+  //
+  // On laisse donc passer les règlements construits par le mapping : acompte
+  // de signature, versements enregistrés, et reprise remise en nature.
 
   const payload = {
     action: 'push_invoice',
@@ -1087,6 +1098,43 @@ function calcOrderBackend(o) {
 // dans IOBILL le détail des règlements (mode, date, montant) plutôt
 // qu'un simple total.
 // ═══════════════════════════════════════════════════════════════════
+// v8.150 — La reprise n'est pas une réduction de prix : c'est un règlement en
+// nature. Le client remet son véhicule en paiement d'une partie du prix de vente.
+//
+// Elle était transmise à IOBILL en ligne de facture à prix unitaire NÉGATIF.
+// Deux conséquences, constatées sur les factures réelles VEH-2026-0085 et 0087 :
+//
+//   1. Rejet SUPER PDP. La règle EN 16931 BR-27 interdit un prix unitaire net
+//      négatif (BT-146). Les deux factures portant une reprise ont été refusées ;
+//      celles sans reprise (0086 en TVA normale, 0088 en régime marge) sont
+//      passées. Le régime de TVA n'y est pour rien, c'est la ligne négative.
+//
+//   2. Sous-déclaration de TVA en régime normal. La ligne négative à 20 %
+//      réduisait la base taxable : sur VEH-2026-0087, le PDF remis au client
+//      annonçait 1 696,67 € de TVA et le document transmis 1 530,00 €. L'écart
+//      vaut toujours la TVA contenue dans la reprise, soit reprise TTC / 6 à 20 %.
+//
+// Portée en règlement, la reprise laisse la base taxable au prix de vente réel
+// et la ligne négative disparaît.
+function buildReprisePayment(order, sign = 1) {
+  const reprise = order.reprise_active ? (Number(order.reprise_valeur) || 0) : 0;
+  if (reprise <= 0) return null;
+  const desc = sanitizeString([
+    'Reprise véhicule',
+    order.reprise_plate ? `· ${order.reprise_plate}` : '',
+    order.reprise_marque || order.reprise_modele
+      ? `· ${[order.reprise_marque, order.reprise_modele].filter(Boolean).join(' ')}`
+      : ''
+  ].filter(Boolean).join(' '));
+  return {
+    amount_cents: Math.round(reprise * 100 * sign),
+    method: 'other',
+    paid_at: toIsoDate(order.date_facture || order.date_creation),
+    notes: 'Règlement en nature — reprise véhicule (IO CAR)',
+    reference: desc
+  };
+}
+
 function mapOrderToInvoice(order, calc) {
   const avecTva = order.avec_tva !== false;
   const tvaPct = avecTva ? (Number(order.tva_pct) || 20) : 0;
@@ -1179,25 +1227,9 @@ function mapOrderToInvoice(order, calc) {
       reference: order.carte_grise_reference || null
     });
   }
-  // L4 — reprise (ligne négative)
-  if (reprise > 0) {
-    const reprDesc = sanitizeString([
-      'Reprise véhicule',
-      order.reprise_plate ? `· ${order.reprise_plate}` : '',
-      order.reprise_marque || order.reprise_modele
-        ? `· ${[order.reprise_marque, order.reprise_modele].filter(Boolean).join(' ')}`
-        : ''
-    ].filter(Boolean).join(' '));
-    // Reprise : contre-partie du véhicule, donc même régime TVA
-    const reprHt = avecTva ? ttcToHt(reprise) : reprise;
-    lines.push({
-      description: reprDesc,
-      quantity: 1,
-      unit_price_ht_cents: -Math.round(reprHt * 100 * sign),
-      vat_rate: vehVatRate,
-      discount_pct: 0
-    });
-  }
+  // v8.150 — L4 (REPRISE) : SORTIE des lignes, portée en règlement en nature.
+  // Voir buildReprisePayment ci-dessus : la ligne à prix négatif faisait rejeter
+  // la facture par la PDP (BR-27) et sous-déclarait la TVA en régime normal.
 
   // ─── Paiements : on construit la liste détaillée pour IOBILL ──
   // 1) L'acompte signature (si > 0 et facture non-avoir)
@@ -1227,6 +1259,9 @@ function mapOrderToInvoice(order, calc) {
       });
     }
   }
+  // 3) La reprise, réglée en nature à la signature
+  const reprisePaymentLine = buildReprisePayment(order, sign);
+  if (reprisePaymentLine) payments.push(reprisePaymentLine);
 
   // ─── Client : structure IOCAR = order.client { name, address, phone, email, siren }
   // Si siren rempli → société. Sinon particulier (on splite le name).
@@ -1312,11 +1347,18 @@ function mapOrderToInvoice(order, calc) {
     lines,
     payments,
     totals: {
-      // v8.59.1 — Fix débours : paid_cents doit inclure les débours (carte grise, etc.)
-      // pour qu'une facture soldée côté IOCAR (grandTotal payé) soit également
-      // soldée côté IOBILL. Avant : `calc.ttc` (TTC hors débours) → IOBILL affichait
-      // "reste à régler = montant débours" alors que côté IOCAR c'était soldé.
-      paid_cents: Math.round(Math.abs(calc.grandTotal) * 100)  // = TTC + débours (art. 267 II 2° CGI)
+      // v8.150 — Somme réelle des règlements construits ci-dessus.
+      //
+      // L'ancienne valeur visait `calc.grandTotal`, un champ que
+      // calcOrderBackend ne renvoie pas (il renvoie `ttc`) : elle valait donc
+      // NaN, sérialisé en null, stocké 0 côté IOBILL. Le défaut était masqué
+      // parce que les deux flux qui comptent écrasent `totals` juste après.
+      //
+      // L'intention d'origine était par ailleurs fausse : paid = total aurait
+      // marqué « soldée » toute facture émise, acompte simple compris. La
+      // somme des règlements est juste dans tous les cas — acompte seul,
+      // facture soldée, ou reprise en nature.
+      paid_cents: Math.abs(payments.reduce((sum, p) => sum + (Number(p.amount_cents) || 0), 0))
     },
     vehicle_meta: {
       plate: vehiclePlate,
