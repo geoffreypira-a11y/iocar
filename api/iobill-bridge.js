@@ -482,16 +482,21 @@ async function handlePushInvoiceIssued(garage, supabase, body, res) {
   const mappedInvoice = mapOrderToInvoice(order, calc);
   // Force status=issued pour cette action (facture B2B émise, en attente paiement)
   mappedInvoice.status = 'issued';
-  // v8.150 — Les règlements encaissés (acompte, virements) restent hors de ce
-  // flux : la facture est émise, pas payée. La REPRISE fait exception, parce
-  // qu'elle n'est pas un encaissement à venir mais un bien déjà remis à la
-  // signature. Sans elle, la facture transmise réclamerait le prix de vente
-  // entier alors qu'elle porte aujourd'hui le prix diminué de la reprise —
-  // la retirer des lignes sans la porter ici aggraverait l'écart au lieu de
-  // le corriger.
-  const repriseIssued = buildReprisePayment(order);
-  mappedInvoice.payments = repriseIssued ? [repriseIssued] : [];
-  mappedInvoice.totals = { paid_cents: repriseIssued ? Math.abs(repriseIssued.amount_cents) : 0 };
+  // v8.150 — Les règlements déjà reçus sont désormais transmis.
+  //
+  // Ce flux les vidait, au motif que « la facture n'est pas encore payée ».
+  // Mais « pas soldée » n'est pas « rien versé » : sur VEH-2026-0086, le client
+  // avait remis 1 000 € d'acompte. Le PDF IOCAR annonçait « Reste à payer
+  // 9 493,76 € » et le document transmis en réclamait 10 180,00 € — une facture
+  // qui redemande un acompte déjà encaissé.
+  //
+  // BT-113 « Paid amount » existe exactement pour ça, et BR-CO-16 en tient
+  // compte : montant dû = total − prépayé. IOBILL l'émet déjà dès que
+  // paid_cents est renseigné, et son PDF affiche alors « Déjà encaissé » puis
+  // « Reste à régler ».
+  //
+  // On laisse donc passer les règlements construits par le mapping : acompte
+  // de signature, versements enregistrés, et reprise remise en nature.
 
   const payload = {
     action: 'push_invoice',
@@ -1342,11 +1347,18 @@ function mapOrderToInvoice(order, calc) {
     lines,
     payments,
     totals: {
-      // v8.59.1 — Fix débours : paid_cents doit inclure les débours (carte grise, etc.)
-      // pour qu'une facture soldée côté IOCAR (grandTotal payé) soit également
-      // soldée côté IOBILL. Avant : `calc.ttc` (TTC hors débours) → IOBILL affichait
-      // "reste à régler = montant débours" alors que côté IOCAR c'était soldé.
-      paid_cents: Math.round(Math.abs(calc.grandTotal) * 100)  // = TTC + débours (art. 267 II 2° CGI)
+      // v8.150 — Somme réelle des règlements construits ci-dessus.
+      //
+      // L'ancienne valeur visait `calc.grandTotal`, un champ que
+      // calcOrderBackend ne renvoie pas (il renvoie `ttc`) : elle valait donc
+      // NaN, sérialisé en null, stocké 0 côté IOBILL. Le défaut était masqué
+      // parce que les deux flux qui comptent écrasent `totals` juste après.
+      //
+      // L'intention d'origine était par ailleurs fausse : paid = total aurait
+      // marqué « soldée » toute facture émise, acompte simple compris. La
+      // somme des règlements est juste dans tous les cas — acompte seul,
+      // facture soldée, ou reprise en nature.
+      paid_cents: Math.abs(payments.reduce((sum, p) => sum + (Number(p.amount_cents) || 0), 0))
     },
     vehicle_meta: {
       plate: vehiclePlate,
