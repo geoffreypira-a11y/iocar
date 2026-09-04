@@ -4686,19 +4686,12 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
         <div className="modal-hd no-print" style={{ flexShrink: 0 }}>
           <span className="modal-title">Aperçu — {order.ref}</span>
           <div style={{ display: "flex", gap: 8 }}>
-            {order.type === "facture" && viewMode !== "trial" && (
-              <button className="btn btn-ghost btn-sm" onClick={() => exportFacturX(order, dealer, "en16931")}
-                title="Export Factur-X EN16931 — compatible Plateforme Agréée (PA/PDP)">
-                ⚡ Factur-X PA
-              </button>
-            )}
-            {order.type === "facture" && viewMode === "trial" && (
-              <button className="btn btn-ghost btn-sm" style={{ opacity: .5, cursor: "not-allowed" }}
-                title="Disponible avec un abonnement"
-                onClick={() => window.dispatchEvent(new CustomEvent("iocar_goto_register"))}>
-                ⚡ Factur-X PA 🔒
-              </button>
-            )}
+            {/* v8.154 — Bouton « Factur-X PA » retiré : cet export local
+                produisait un XML qu'un validateur EN 16931 aurait refusé
+                (BasisAmount = prix TTC du véhicule seul contre une TVA calculée
+                sur HT + frais, et débours ajouté au GrandTotalAmount sans charge
+                document, donc BR-CO-15 en défaut). La facture électronique part
+                d'IOBILL vers la PDP : c'est le seul chemin de transmission. */}
             <button className="btn btn-primary btn-sm" onClick={() => {
               const el = document.querySelector('.print-doc');
               if (!el) return;
@@ -8522,133 +8515,6 @@ function LivrePoliceModal({ entry, nextNum, vehicles, onSave, onClose }) {
   );
 }
 
-/* ═══════════════════════════════════════════════════════════════
-   FACTUR-X — Export facture électronique conforme 2026
-   Profils : minimum | en16931 (PA-compatible)
-═══════════════════════════════════════════════════════════════ */
-function exportFacturX(order, dealer, profil = "minimum") {
-  const c = calcOrder(order);
-  const dateISO = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-  const dueDate = (order.date_echeance || today()).split("/").reverse().join("");
-  const isEN16931 = profil === "en16931";
-  const siren = (dealer?.siret || "").replace(/\s/g, "").slice(0, 9);
-  const profilID = isEN16931
-    ? "urn:cen.eu:en16931:2017#conformant#urn:factur-x.eu:1p0:en16931"
-    : "urn:factur-x.eu:1p0:minimum";
-
-  const lignes = isEN16931 ? (order.lignes || [{
-    id: "1", nom: order.vehicle_label || "Véhicule", qte: 1,
-    prix_unitaire: c.base.toFixed(2), montant_net: c.base.toFixed(2),
-    tva_code: "S", tva_pct: order.tva_pct || 20,
-  }]) : [];
-
-  const lignesXml = lignes.map((l, i) => [
-    '    <ram:IncludedSupplyChainTradeLineItem>',
-    '      <ram:AssociatedDocumentLineDocument>',
-    `        <ram:LineID>${i + 1}</ram:LineID>`,
-    '      </ram:AssociatedDocumentLineDocument>',
-    '      <ram:SpecifiedTradeProduct>',
-    `        <ram:Name>${l.nom}</ram:Name>`,
-    '      </ram:SpecifiedTradeProduct>',
-    '      <ram:SpecifiedLineTradeAgreement>',
-    '        <ram:NetPriceProductTradePrice>',
-    `          <ram:ChargeAmount>${l.prix_unitaire}</ram:ChargeAmount>`,
-    '        </ram:NetPriceProductTradePrice>',
-    '      </ram:SpecifiedLineTradeAgreement>',
-    '      <ram:SpecifiedLineTradeDelivery>',
-    `        <ram:BilledQuantity unitCode="C62">${l.qte}</ram:BilledQuantity>`,
-    '      </ram:SpecifiedLineTradeDelivery>',
-    '      <ram:SpecifiedLineTradeSettlement>',
-    '        <ram:ApplicableTradeTax>',
-    '          <ram:TypeCode>VAT</ram:TypeCode>',
-    `          <ram:CategoryCode>${l.tva_code}</ram:CategoryCode>`,
-    `          <ram:RateApplicablePercent>${l.tva_pct}</ram:RateApplicablePercent>`,
-    '        </ram:ApplicableTradeTax>',
-    '        <ram:SpecifiedTradeSettlementLineMonetarySummation>',
-    `          <ram:LineTotalAmount>${l.montant_net}</ram:LineTotalAmount>`,
-    '        </ram:SpecifiedTradeSettlementLineMonetarySummation>',
-    '      </ram:SpecifiedLineTradeSettlement>',
-    '    </ram:IncludedSupplyChainTradeLineItem>',
-  ].join("\n")).join("\n");
-
-  const lines = [
-    '<?xml version="1.0" encoding="UTF-8"?>',
-    `<!-- Factur-X 1.08 / ZUGFeRD 2.4 profil ${isEN16931 ? "EN16931" : "MINIMUM"} — conforme reforme 01/09/2026 -->`,
-    '<rsm:CrossIndustryInvoice xmlns:rsm="urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100"',
-    '  xmlns:ram="urn:un:unece:uncefact:data:standard:ReusableAggregateBusinessInformationEntity:100"',
-    '  xmlns:udt="urn:un:unece:uncefact:data:standard:UnqualifiedDataType:100">',
-    '  <rsm:ExchangedDocumentContext>',
-    '    <ram:GuidelineSpecifiedDocumentContextParameter>',
-    `      <ram:ID>${profilID}</ram:ID>`,
-    '    </ram:GuidelineSpecifiedDocumentContextParameter>',
-    '  </rsm:ExchangedDocumentContext>',
-    '  <rsm:ExchangedDocument>',
-    `    <ram:ID>${order.ref}</ram:ID>`,
-    '    <ram:TypeCode>380</ram:TypeCode>',
-    '    <ram:IssueDateTime>',
-    `      <udt:DateTimeString format="102">${dateISO}</udt:DateTimeString>`,
-    '    </ram:IssueDateTime>',
-    '  </rsm:ExchangedDocument>',
-    '  <rsm:SupplyChainTradeTransaction>',
-    ...(isEN16931 && lignesXml ? [lignesXml] : []),
-    '    <ram:ApplicableHeaderTradeAgreement>',
-    '      <ram:SellerTradeParty>',
-    `        <ram:Name>${dealer?.name || ""}</ram:Name>`,
-    ...(siren ? [
-      '        <ram:SpecifiedLegalOrganization>',
-      `          <ram:ID schemeID="0002">${siren}</ram:ID>`,
-      '        </ram:SpecifiedLegalOrganization>',
-    ] : []),
-    '        <ram:PostalTradeAddress>',
-    `          <ram:LineOne>${(dealer?.address || "").split("\n")[0]}</ram:LineOne>`,
-    '          <ram:CountryID>FR</ram:CountryID>',
-    '        </ram:PostalTradeAddress>',
-    '        <ram:SpecifiedTaxRegistration>',
-    `          <ram:ID schemeID="VA">${dealer?.tva_num || ""}</ram:ID>`,
-    '        </ram:SpecifiedTaxRegistration>',
-    '      </ram:SellerTradeParty>',
-    '      <ram:BuyerTradeParty>',
-    `        <ram:Name>${order.client?.name || ""}</ram:Name>`,
-    '      </ram:BuyerTradeParty>',
-    '    </ram:ApplicableHeaderTradeAgreement>',
-    '    <ram:ApplicableHeaderTradeDelivery/>',
-    '    <ram:ApplicableHeaderTradeSettlement>',
-    '      <ram:InvoiceCurrencyCode>EUR</ram:InvoiceCurrencyCode>',
-    '      <ram:ApplicableTradeTax>',
-    `        <ram:CalculatedAmount>${c.tvaAmt.toFixed(2)}</ram:CalculatedAmount>`,
-    '        <ram:TypeCode>VAT</ram:TypeCode>',
-    `        <ram:BasisAmount>${c.base.toFixed(2)}</ram:BasisAmount>`,
-    '        <ram:CategoryCode>S</ram:CategoryCode>',
-    `        <ram:RateApplicablePercent>${order.tva_pct || 20}</ram:RateApplicablePercent>`,
-    '      </ram:ApplicableTradeTax>',
-    '      <ram:SpecifiedTradePaymentTerms>',
-    '        <ram:DueDateDateTime>',
-    `          <udt:DateTimeString format="102">${dueDate}</udt:DateTimeString>`,
-    '        </ram:DueDateDateTime>',
-    '      </ram:SpecifiedTradePaymentTerms>',
-    '      <ram:SpecifiedTradeSettlementHeaderMonetarySummation>',
-    `        <ram:LineTotalAmount>${c.base.toFixed(2)}</ram:LineTotalAmount>`,
-    `        <ram:TaxBasisTotalAmount>${c.base.toFixed(2)}</ram:TaxBasisTotalAmount>`,
-    `        <ram:TaxTotalAmount currencyID="EUR">${c.tvaAmt.toFixed(2)}</ram:TaxTotalAmount>`,
-    // v8.49.11 — Norme EN 16931 : GrandTotalAmount inclut les débours (montant à payer)
-    `        <ram:GrandTotalAmount>${c.grandTotal.toFixed(2)}</ram:GrandTotalAmount>`,
-    `        <ram:TotalPrepaidAmount>${c.encaisse.toFixed(2)}</ram:TotalPrepaidAmount>`,
-    `        <ram:DuePayableAmount>${c.reste.toFixed(2)}</ram:DuePayableAmount>`,
-    '      </ram:SpecifiedTradeSettlementHeaderMonetarySummation>',
-    '    </ram:ApplicableHeaderTradeSettlement>',
-    '  </rsm:SupplyChainTradeTransaction>',
-    '</rsm:CrossIndustryInvoice>',
-  ];
-
-  const xml = lines.join("\n");
-  const blob = new Blob([xml], { type: "application/xml;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `${order.ref}_facturx_${isEN16931 ? "EN16931" : "MINIMUM"}.xml`;
-  a.click();
-  URL.revokeObjectURL(url);
-}
 
 /* ═══════════════════════════════════════════════════════════════
    CRM — CLIENTS
