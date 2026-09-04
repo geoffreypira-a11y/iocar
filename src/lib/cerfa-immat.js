@@ -12,6 +12,8 @@
 // verticaux), puis contrôlées sur un rendu du document rempli.
 // ═══════════════════════════════════════════════════════════════════
 
+import { splitDate } from "./cerfa-common.js";
+
 // Cases à cocher de l'en-tête « Veuillez cocher la case correspondante ».
 export const NATURES_DEMANDE = [
   { value: "certificat", label: "Certificat", box: [148.2, 760.1] },
@@ -94,17 +96,6 @@ function winAnsi(str) {
     .replace(/[‘’]/g, "'").replace(/[“”]/g, '"')
     .replace(/[–—]/g, "-").replace(/[  ]/g, " ")
     .replace(/[^\x20-\xFF]/g, "");
-}
-
-// Découpe une date en jour / mois / année, qu'elle arrive en jj/mm/aaaa
-// (saisie libre) ou en aaaa-mm-jj (input date / base).
-export function splitDate(value) {
-  const s = String(value || "").trim();
-  let m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-  if (m) return { jour: m[1], mois: m[2], annee: m[3] };
-  m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (m) return { jour: m[3], mois: m[2], annee: m[1] };
-  return null;
 }
 
 /**

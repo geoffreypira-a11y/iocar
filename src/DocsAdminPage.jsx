@@ -1,5 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { fillCerfaImmat, NATURES_DEMANDE } from "./lib/cerfa-immat.js";
+import { fillCerfaMandat } from "./lib/cerfa-mandat.js";
+import { loadPdfLib, parseAddress, buildIdentite } from "./lib/cerfa-common.js";
 
 // ═══════════════════════════════════════════════════════════════════
 // v8.139 — Onglet "Documents administratifs" (stand-alone)
@@ -21,47 +23,8 @@ const uid = () => (crypto.randomUUID ? crypto.randomUUID()
     }));
 
 // Parser d'adresse française (version robuste v8.138).
-function parseAddress(addr) {
-  if (!addr) return { num: "", ext: "", type: "", nom: "", cp: "", ville: "" };
-  const lines = String(addr).split("\n").map(l => l.trim()).filter(Boolean);
-  const rue = lines[0] || "";
-  const cpLine = lines.find(l => /\d{5}/.test(l)) || "";
-  const cpMatch = cpLine.match(/(\d{5})\s*(.*)/);
-  const cp = cpMatch ? cpMatch[1] : "";
-  let ville = cpMatch ? cpMatch[2].trim() : "";
-  if (!ville && cpLine && cp) {
-    const before = cpLine.slice(0, cpLine.indexOf(cp)).trim();
-    if (before && !/^\d/.test(before)) ville = before;
-  }
-  if (!ville) {
-    const cand = lines.filter(l => l !== rue && l !== cpLine && !/\d{5}/.test(l) && !/^\d/.test(l));
-    if (cand.length) ville = cand[cand.length - 1].trim();
-  }
-  const types = ["RUE","AVENUE","AVE","AV","BOULEVARD","BD","BLVD","IMPASSE","IMP","CHEMIN","CH","ROUTE","RTE","PLACE","PL","ALLÉE","ALLEE","PASSAGE","COURS","SQUARE","SQ","LOTISSEMENT","LOT","RÉSIDENCE","RESIDENCE","HAMEAU","LIEU-DIT","QUAI","VOIE","SENTIER","TRAVERSE"];
-  const extensions = ["BIS","TER","QUATER","A","B","C"];
-  const parts = rue.split(/\s+/);
-  let num = "", ext = "", type = "", nom = "";
-  let idx = 0;
-  if (parts[idx] && /^\d+$/.test(parts[idx])) { num = parts[idx]; idx++; }
-  if (parts[idx] && extensions.includes(parts[idx].toUpperCase())) { ext = parts[idx]; idx++; }
-  if (parts[idx] && types.includes(parts[idx].toUpperCase())) { type = parts[idx]; idx++; }
-  nom = parts.slice(idx).join(" ");
-  if (!type && !num) nom = rue;
-  return { num, ext, type, nom, cp, ville };
-}
 
 // Construit "NOM Prénom" (particulier) ou "RAISON SOCIALE" (société).
-function buildIdentite(p) {
-  if (p.isMorale) return (p.identite || "").toUpperCase().trim();
-  if (p.nom || p.prenom) return `${(p.nom || "").toUpperCase()} ${p.prenom || ""}`.trim();
-  const parts = (p.identite || "").trim().split(/\s+/);
-  if (parts.length >= 2) {
-    const nom = parts[parts.length - 1];
-    const prenom = parts.slice(0, -1).join(" ");
-    return `${nom.toUpperCase()} ${prenom}`.trim();
-  }
-  return p.identite || "";
-}
 
 const emptyContact = { type: "particulier", nom: "", prenom: "", raison: "", adresse: "", siret: "", civilite: "M", tel: "", email: "" };
 const emptyVeh = { plate: "", vin: "", marque: "", modele: "", finition: "", genre: "VP", date_mec: "", kilometrage: "", numero_formule: "" };
@@ -263,28 +226,8 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
 
     setLoading(true);
     try {
-      // v8.139.1 — Charge pdf-lib à la volée si absent (même logique que le tunnel
-      // de vente), pour que l'onglet fonctionne en autonomie totale.
-      if (!window.PDFLib) {
-        await new Promise((resolve, reject) => {
-          const script = document.createElement("script");
-          script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js";
-          script.onload = resolve;
-          script.onerror = reject;
-          document.head.appendChild(script);
-        });
-      }
-      if (!window.PDFLib) {
-        await new Promise((resolve, reject) => {
-          const script = document.createElement("script");
-          script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js";
-          script.onload = resolve;
-          script.onerror = reject;
-          document.head.appendChild(script);
-        });
-      }
-      if (!window.PDFLib) throw new Error("Librairie PDF non chargée (PDFLib).");
-      const { PDFDocument } = window.PDFLib;
+      // v8.139.1 — pdf-lib est chargé à la volée (cf. lib/cerfa-common).
+      const { PDFDocument } = await loadPdfLib();
       const pdfBytes = await fetch("/cerfa_15776-01_acroform.pdf").then(r => r.arrayBuffer());
       const pdfDoc = await PDFDocument.load(pdfBytes);
       const form = pdfDoc.getForm();
@@ -390,57 +333,16 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
 
     setLoading(true);
     try {
-      if (!window.PDFLib) {
-        await new Promise((resolve, reject) => {
-          const script = document.createElement("script");
-          script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js";
-          script.onload = resolve; script.onerror = reject;
-          document.head.appendChild(script);
-        });
-      }
-      if (!window.PDFLib) throw new Error("Librairie PDF non chargée (PDFLib).");
-      const { PDFDocument, PDFName } = window.PDFLib;
+      const PDFLib = await loadPdfLib();
       const pdfBytes = await fetch("/cerfa_1375703.pdf").then(r => r.arrayBuffer());
-      const pdfDoc = await PDFDocument.load(pdfBytes);
-      // Retire la couche XFA pour que les valeurs AcroForm s'affichent partout.
-      try {
-        const acro = pdfDoc.catalog.lookup(PDFName.of("AcroForm"));
-        if (acro && acro.delete) acro.delete(PDFName.of("XFA"));
-      } catch (e) {}
-      const form = pdfDoc.getForm();
-      const setText = (n, v) => { if (!v) return; try { form.getTextField(n).setText(String(v)); } catch (e) {} };
-      const setCheck = (n) => { try { form.getCheckBox(n).check(); } catch (e) {} };
-
-      const pre = "topmostSubform[0].Page1[0].";
-      const mA = parseAddress(M1.adresse);
-      const [yy, mm, dd] = dateCession.split("-");
-
-      // Mandant
-      setText(pre + "txt_IdentitéMandant[0]", buildIdentite(M1));
-      if (M1.siret) setText(pre + "num_SIRETMandant[0]", String(M1.siret).replace(/\s/g, ""));
-      setText(pre + "num_VoieAdresse[0]", mA.num);
-      setText(pre + "txt_ExtensionAdresse[0]", mA.ext);
-      setText(pre + "txt_TypeVoieAdresse[0]", mA.type);
-      setText(pre + "txt_NomVoieAdresse[0]", mA.nom);
-      setText(pre + "num_CodePostalAdresse[0]", mA.cp);
-      setText(pre + "txt_CommuneAdresse[0]", mA.ville);
-      setText(pre + "txt_PaysAdresse[0]", "France");
-      // Mandataire
-      setText(pre + "txt_IdentitéMandataire[0]", buildIdentite(M2));
-      if (M2.siret) setText(pre + "num_SIRETMandataire[0]", String(M2.siret).replace(/\s/g, ""));
-      // Opération + véhicule
-      setText(pre + "txt_NatureOpération[0]", natureOp);
-      setText(pre + "txt_MarqueVéhicule[0]", veh.marque);
-      setText(pre + "txt_NumVinVéhicule[0]", veh.vin);
-      setText(pre + "txt_MarqueImmatriculation[0]", veh.plate);
-      // Lieu + date + confirmation
-      setText(pre + "txt_LieuDéclaration[0]", lieuMandat || mA.ville);
-      setText(pre + "num_DateJourDéclaration[0]", dd);
-      setText(pre + "num_DateMoisDéclaration[0]", mm);
-      setText(pre + "num_DateAnnéeDéclaration[0]", yy);
-      setCheck(pre + "ckb_ConfirmationInformation[0]");
-
-      const filled = await pdfDoc.save();
+      const filled = await fillCerfaMandat(pdfBytes, PDFLib, {
+        mandant: M1,
+        mandataire: M2,
+        vehicule: veh,
+        nature: natureOp,
+        lieu: lieuMandat,
+        date: dateCession,
+      });
       const blob = new Blob([filled], { type: "application/pdf" });
       setPdfUrl(URL.createObjectURL(blob));
 
@@ -452,6 +354,7 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
       setLoading(false);
     }
   }
+
 
   // ── Génère la DEMANDE DE CERTIFICAT D'IMMATRICULATION 13750*07 ──
   // Ce CERFA est diffusé à plat (aucun champ AcroForm) : les valeurs sont
@@ -465,18 +368,10 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
 
     setLoading(true);
     try {
-      if (!window.PDFLib) {
-        await new Promise((resolve, reject) => {
-          const script = document.createElement("script");
-          script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js";
-          script.onload = resolve; script.onerror = reject;
-          document.head.appendChild(script);
-        });
-      }
-      if (!window.PDFLib) throw new Error("Librairie PDF non chargée (PDFLib).");
+      const PDFLib = await loadPdfLib();
       const pdfBytes = await fetch("/cerfa_1375007.pdf").then(r => r.arrayBuffer());
       const adr = parseAddress(T.adresse);
-      const filled = await fillCerfaImmat(pdfBytes, window.PDFLib, {
+      const filled = await fillCerfaImmat(pdfBytes, PDFLib, {
         nature: natureImmat,
         dateAchat: dateCession,
         faitA: lieuMandat || adr.ville,
