@@ -7,7 +7,7 @@ import IobillBridgeCard from "./components/IobillBridgeCard.jsx";
 import DocsAdminPage from "./DocsAdminPage.jsx";
 import { loadPdfLib, parseAddress, buildIdentite } from "./lib/cerfa-common.js";
 import { fillCerfaMandat } from "./lib/cerfa-mandat.js";
-import { fillCerfaImmat } from "./lib/cerfa-immat.js";
+import { fillCerfaImmat, couleurKey, teinteKey, TONS, TEINTES } from "./lib/cerfa-immat.js";
 import IobillInvoiceSync from "./components/IobillInvoiceSync.jsx";
 
 // v8.49.16 — Système d'essai gratuit 7 jours + paywall
@@ -5163,6 +5163,7 @@ function CerfaDocs({ order, dealer, vehicles, clients, onUpdateOrder, onClose })
     kilometrage: freshVehicle?.kilometrage || orderV.kilometrage,
     carburant: freshVehicle?.carburant || orderV.carburant,
     numero_formule: freshVehicle?.numero_formule || orderV.numero_formule,
+    couleur: freshVehicle?.couleur || orderV.couleur,
   };
   // Récupérer la civilité depuis le client CRM
   const crmClient = order.client_id && clients ? clients.find(c => c.id === order.client_id) : null;
@@ -5174,6 +5175,9 @@ function CerfaDocs({ order, dealer, vehicles, clients, onUpdateOrder, onClose })
   };
 
   const [tab, setTab] = useState("cession");
+  // Couleur dominante du 13750 : déduite du libellé de la flotte, corrigeable.
+  const [couleur, setCouleur] = useState(() => couleurKey(v.couleur));
+  const [teinte, setTeinte] = useState(() => teinteKey(v.couleur));
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   // Un PDF par onglet : on ne régénère pas en boucle quand on navigue.
@@ -5345,6 +5349,8 @@ function CerfaDocs({ order, dealer, vehicles, clients, onUpdateOrder, onClose })
     const pdfBytes = await fetch("/cerfa_1375007.pdf").then(r => r.arrayBuffer());
     return fillCerfaImmat(pdfBytes, PDFLib, {
       nature: "certificat",
+      couleur,
+      teinte,
       dateAchat: cessionDate,
       faitA: villeClient || villeGarage,
       faitLe: cessionDate,
@@ -5388,6 +5394,14 @@ function CerfaDocs({ order, dealer, vehicles, clients, onUpdateOrder, onClose })
     generate(tab);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
+
+  // La couleur est dessinée dans le document : tout changement le refabrique.
+  const couleurMontee = React.useRef(true);
+  React.useEffect(() => {
+    if (couleurMontee.current) { couleurMontee.current = false; return; }
+    generate("immat", true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [couleur, teinte]);
 
   React.useEffect(() => {
     // Si c'est la PREMIÈRE génération (pas de date sauvegardée sur l'order),
@@ -5456,6 +5470,23 @@ function CerfaDocs({ order, dealer, vehicles, clients, onUpdateOrder, onClose })
             </div>
           ))}
         </div>
+
+        {/* Couleur dominante — dessinée dans le PDF, donc toujours imprimée.
+            Les autres cases du cadre restent cochables dans le lecteur. */}
+        {tab === "immat" && (
+          <div style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", borderBottom: "1px solid var(--border2)", flexWrap: "wrap" }}>
+            <span style={{ fontSize: 11, letterSpacing: 1, textTransform: "uppercase", color: "var(--muted2)", fontWeight: 700 }}>Couleur dominante</span>
+            <select className="form-input" style={{ width: "auto", padding: "6px 10px", fontSize: 12 }} value={couleur} onChange={e => setCouleur(e.target.value)}>
+              <option value="">— non renseignée —</option>
+              {TONS.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+            </select>
+            <select className="form-input" style={{ width: "auto", padding: "6px 10px", fontSize: 12 }} value={teinte} onChange={e => setTeinte(e.target.value)}>
+              <option value="">— sans teinte —</option>
+              {TEINTES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+            </select>
+            {v.couleur && <span style={{ fontSize: 11, color: "var(--muted)" }}>fiche véhicule : {v.couleur}</span>}
+          </div>
+        )}
 
         <div style={{ flex: 1, overflow: "hidden", background: "#333", display: "flex", alignItems: "center", justifyContent: "center" }}>
           {loading ? (
