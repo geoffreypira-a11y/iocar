@@ -26,7 +26,9 @@ export const NATURES_DEMANDE = [
 const CELLS = {
   dateAchat: { jour: [172.3, 186.5], mois: [203.5, 217.7], annee: [235.0, 249.1, 263.3, 277.5], y: 706 },
   dateMec:   { jour: [448.3, 462.5], mois: [479.5, 493.7], annee: [511.0, 525.1, 539.3, 553.5], y: 706 },
-  siret:     { x: [408.0, 419.3, 430.6, 441.9, 453.3, 464.6, 475.9, 487.3, 498.7, 510.0, 521.3, 532.6, 544.0, 555.4], y: 544 },
+  // Le peigne SIRET est peu profond (dents de ~4 pt au-dessus du trait) :
+  // les chiffres se posent sur le trait, en corps 7.
+  siret:     { x: [408.0, 419.3, 430.6, 441.9, 453.3, 464.6, 475.9, 487.3, 498.7, 510.0, 521.3, 532.6, 544.0, 555.4], y: 540.5, size: 7 },
   codePostal:{ x: [89.4, 100.8, 112.1, 123.4, 134.8], y: 440, size: 7 },
 };
 
@@ -56,6 +58,24 @@ const TEXT = {
   faitA:            [57, 119.5, 55, 8],
   faitLe:           [118, 119.5, 55, 8],
 };
+
+// Cadre COULEUR DOMINANTE : carrés imprimés du gabarit, [x, y, largeur, hauteur].
+// On y superpose de vraies cases AcroForm pour que le garage coche la couleur
+// dans le PDF avant de l'imprimer — IOCAR ne connaît pas la couleur du véhicule.
+const COULEURS = [
+  { key: "clair",  label: "Clair",  rect: [374.2, 619.4, 5.7, 6.0] },
+  { key: "fonce",  label: "Foncé",  rect: [374.2, 595.2, 5.7, 6.0] },
+  { key: "noir",   label: "Noir",   rect: [421.0, 628.7, 6.4, 7.0] },
+  { key: "marron", label: "Marron", rect: [421.0, 615.5, 6.4, 7.0] },
+  { key: "rouge",  label: "Rouge",  rect: [421.0, 601.9, 6.4, 7.0] },
+  { key: "orange", label: "Orange", rect: [421.0, 588.2, 6.4, 7.0] },
+  { key: "jaune",  label: "Jaune",  rect: [466.6, 628.7, 6.4, 7.0] },
+  { key: "vert",   label: "Vert",   rect: [466.6, 615.5, 6.4, 7.0] },
+  { key: "bleu",   label: "Bleu",   rect: [466.6, 601.9, 6.4, 7.0] },
+  { key: "beige",  label: "Beige",  rect: [466.6, 588.2, 6.4, 7.0] },
+  { key: "gris",   label: "Gris",   rect: [509.8, 628.7, 6.7, 7.0] },
+  { key: "blanc",  label: "Blanc",  rect: [509.8, 615.5, 6.7, 7.0] },
+];
 
 // Cases « Personne physique / Sexe / Personne morale » du cadre TITULAIRE.
 const CHECK = {
@@ -161,7 +181,7 @@ export async function fillCerfaImmat(pdfBytes, PDFLib, data) {
     if (t.civilite === "F") check(CHECK.sexeF);
   }
   text("identite", t.identite);
-  if (t.siret) cells(CELLS.siret.x, String(t.siret).replace(/\D/g, ""), CELLS.siret.y);
+  if (t.siret) cells(CELLS.siret.x, String(t.siret).replace(/\D/g, ""), CELLS.siret.y, CELLS.siret.size);
 
   const a = t.adresse || {};
   text("domEtage", a.etage);
@@ -175,6 +195,23 @@ export async function fillCerfaImmat(pdfBytes, PDFLib, data) {
   if (a.cp) cells(CELLS.codePostal.x, a.cp, CELLS.codePostal.y, CELLS.codePostal.size);
   text("tel", t.tel);
   text("mel", t.email);
+
+  // ── Couleur dominante : cases cochables dans le lecteur PDF ──
+  // Ni fond ni bordure : le carré imprimé du gabarit reste visible, seule la
+  // coche s'ajoute. Le champ reste modifiable après téléchargement.
+  const form = doc.getForm();
+  for (const c of COULEURS) {
+    const [x, y, width, height] = c.rect;
+    const box = form.createCheckBox(`couleur_${c.key}`);
+    box.addToPage(page, {
+      x, y, width, height,
+      textColor: ink,
+      backgroundColor: undefined,
+      borderColor: undefined,
+      borderWidth: 0,
+    });
+    if (data.couleur === c.key) box.check();
+  }
 
   // ── Signature du titulaire ──
   text("faitA", data.faitA);
