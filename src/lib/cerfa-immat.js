@@ -62,9 +62,11 @@ const TEXT = {
 };
 
 // Cadre COULEUR DOMINANTE : carrés imprimés du gabarit, [x, y, largeur, hauteur].
-// On y superpose de vraies cases AcroForm pour que le garage coche la couleur
-// dans le PDF avant de l'imprimer — IOCAR ne connaît pas la couleur du véhicule.
-const COULEURS = [
+// La couleur choisie est dessinée en dur (elle s'imprime partout) ; les cases
+// non retenues restent de vraies cases AcroForm, cochables à la main dans le
+// lecteur PDF — à condition d'imprimer depuis ce lecteur, une coche saisie à
+// l'écran n'étant pas réinjectée dans le fichier généré.
+export const COULEURS = [
   { key: "clair",  label: "Clair",  rect: [374.2, 619.4, 5.7, 6.0] },
   { key: "fonce",  label: "Foncé",  rect: [374.2, 595.2, 5.7, 6.0] },
   { key: "noir",   label: "Noir",   rect: [421.0, 628.7, 6.4, 7.0] },
@@ -78,6 +80,33 @@ const COULEURS = [
   { key: "gris",   label: "Gris",   rect: [509.8, 628.7, 6.7, 7.0] },
   { key: "blanc",  label: "Blanc",  rect: [509.8, 615.5, 6.7, 7.0] },
 ];
+
+// Teintes (colonne de gauche du cadre), indépendantes de la couleur.
+export const TEINTES = COULEURS.filter(c => c.key === "clair" || c.key === "fonce");
+// Les douze couleurs proprement dites.
+export const TONS = COULEURS.filter(c => c.key !== "clair" && c.key !== "fonce");
+
+// « GRIS CLAIR », « Bleu foncé », « BLANC NACRE »… : la couleur du SIV est du
+// texte libre. On en extrait la case du CERFA (et la teinte quand elle y est).
+function normalise(str) {
+  return String(str || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+}
+const SYNONYMES = { ARGENT: "gris", ARGENTE: "gris", ANTHRACITE: "gris", IVOIRE: "beige", CREME: "beige" };
+
+export function couleurKey(libelle) {
+  const s = normalise(libelle);
+  if (!s) return "";
+  for (const c of TONS) if (s.includes(normalise(c.label))) return c.key;
+  for (const [mot, key] of Object.entries(SYNONYMES)) if (s.includes(mot)) return key;
+  return "";
+}
+
+export function teinteKey(libelle) {
+  const s = normalise(libelle);
+  if (/\bCLAIR/.test(s)) return "clair";
+  if (/\bFONCE|\bSOMBRE/.test(s)) return "fonce";
+  return "";
+}
 
 // Cases « Personne physique / Sexe / Personne morale » du cadre TITULAIRE.
 const CHECK = {
@@ -187,12 +216,26 @@ export async function fillCerfaImmat(pdfBytes, PDFLib, data) {
   text("tel", t.tel);
   text("mel", t.email);
 
-  // ── Couleur dominante : cases cochables dans le lecteur PDF ──
-  // Ni fond ni bordure : le carré imprimé du gabarit reste visible, seule la
-  // coche s'ajoute. Le champ reste modifiable après téléchargement.
+  // ── Couleur dominante ──
+  // Ce que le garage a choisi dans IOCAR est dessiné : une coche dessinée
+  // s'imprime toujours, alors qu'une case cochée à l'écran dans l'aperçu ne
+  // revient pas dans le fichier. Les autres cases restent des cases AcroForm
+  // sans fond ni bordure — le carré du gabarit reste visible — pour pouvoir
+  // compléter à la main dans le lecteur PDF avant impression.
+  const choisies = new Set([data.couleur, data.teinte].filter(Boolean));
   const form = doc.getForm();
   for (const c of COULEURS) {
     const [x, y, width, height] = c.rect;
+    if (choisies.has(c.key)) {
+      // Coche dessinée, centrée dans le carré du gabarit.
+      const size = height + 1;
+      page.drawText("X", {
+        x: x + (width - bold.widthOfTextAtSize("X", size)) / 2,
+        y: y + 1,
+        size, font: bold, color: ink,
+      });
+      continue;
+    }
     const box = form.createCheckBox(`couleur_${c.key}`);
     box.addToPage(page, {
       x, y, width, height,
@@ -201,7 +244,6 @@ export async function fillCerfaImmat(pdfBytes, PDFLib, data) {
       borderColor: undefined,
       borderWidth: 0,
     });
-    if (data.couleur === c.key) box.check();
   }
 
   // ── Signature du titulaire ──

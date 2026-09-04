@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from "react";
-import { fillCerfaImmat, NATURES_DEMANDE } from "./lib/cerfa-immat.js";
+import { fillCerfaImmat, NATURES_DEMANDE, couleurKey, teinteKey, TONS, TEINTES } from "./lib/cerfa-immat.js";
 import { fillCerfaMandat } from "./lib/cerfa-mandat.js";
 import { loadPdfLib, parseAddress, buildIdentite } from "./lib/cerfa-common.js";
 
@@ -104,6 +104,10 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
   const [natureOp, setNatureOp] = useState("Immatriculation");
   // v8.153 — Nature cochée en tête du CERFA 13750*07.
   const [natureImmat, setNatureImmat] = useState("certificat");
+  // Couleur dominante du 13750 : dessinée dans le document (une case cochée
+  // à l'écran dans l'aperçu ne reviendrait pas dans le fichier).
+  const [couleurImmat, setCouleurImmat] = useState("");
+  const [teinteImmat, setTeinteImmat] = useState("");
   const [lieuMandat, setLieuMandat] = useState(() => parseAddress(dealer?.address || "").ville);
 
   // Sélections : "garage" | "c:<id>" | "f:<id>" | "nouveau"
@@ -197,7 +201,7 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
       plate: v.plate || "", vin: v.vin || "", marque: v.marque || "", modele: v.modele || "",
       finition: v.finition || "", genre: v.genre || "VP",
       date_mec: v.date_mise_en_circulation || "", kilometrage: v.kilometrage || "",
-      numero_formule: v.numero_formule || "",
+      numero_formule: v.numero_formule || "", couleur: v.couleur || "",
     };
   }
 
@@ -373,6 +377,8 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
       const adr = parseAddress(T.adresse);
       const filled = await fillCerfaImmat(pdfBytes, PDFLib, {
         nature: natureImmat,
+        couleur: couleurImmat,
+        teinte: teinteImmat,
         dateAchat: dateCession,
         faitA: lieuMandat || adr.ville,
         faitLe: dateCession,
@@ -469,6 +475,26 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
             <select className="form-input" value={natureImmat} onChange={e => setNatureImmat(e.target.value)}>
               {NATURES_DEMANDE.map(n => <option key={n.value} value={n.value}>{n.label}</option>)}
             </select>
+
+            {/* La couleur choisie est dessinée dans le PDF, donc toujours
+                imprimée ; les autres cases du cadre restent cochables. */}
+            <div style={{ fontSize: 10, letterSpacing: 2, textTransform: "uppercase", color: "var(--muted2)", fontWeight: 700, margin: "14px 0 8px" }}>Couleur dominante</div>
+            <div className="form-grid">
+              <div className="form-group">
+                <label className="form-label">Couleur</label>
+                <select className="form-input" value={couleurImmat} onChange={e => setCouleurImmat(e.target.value)}>
+                  <option value="">— non renseignée —</option>
+                  {TONS.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Teinte</label>
+                <select className="form-input" value={teinteImmat} onChange={e => setTeinteImmat(e.target.value)}>
+                  <option value="">— sans teinte —</option>
+                  {TEINTES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+                </select>
+              </div>
+            </div>
           </div>
         )}
 
@@ -480,7 +506,14 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
             <button className={"btn btn-sm " + (vehMode === "manual" ? "btn-primary" : "btn-ghost")} onClick={() => setVehMode("manual")}>Saisie libre</button>
           </div>
           {vehMode === "existing" ? (
-            <select className="form-input" value={vehId} onChange={e => setVehId(e.target.value)}>
+            <select className="form-input" value={vehId} onChange={e => {
+              setVehId(e.target.value);
+              // Le SIV renvoie la couleur en texte libre (« GRIS CLAIR »…) :
+              // on préremplit les menus du 13750, corrigeables à la main.
+              const veh = vehicles.find(x => String(x.id) === e.target.value);
+              setCouleurImmat(couleurKey(veh?.couleur));
+              setTeinteImmat(teinteKey(veh?.couleur));
+            }}>
               <option value="">— Choisir un véhicule —</option>
               {vehicles.map(v => (
                 <option key={v.id} value={v.id}>{[v.marque, v.modele, v.plate].filter(Boolean).join(" · ")}</option>
