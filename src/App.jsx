@@ -905,16 +905,25 @@ function calcOrder(o) {
     tvaAmt = fraisMiseDispo - fraisHt;
   }
 
-  // Total TTC (BASE TVA) = HT + TVA − reprise véhicule.
-  // La reprise vient en déduction du TTC (c'est l'équivalent d'une remise
-  // sur le prix). La carte grise est traitée à part comme débours ci-dessous.
+  // Total TTC (BASE TVA) = HT + TVA. La carte grise est traitée à part comme
+  // débours ci-dessous.
   // v8.49.11 — Sémantique fiscalement correcte : la carte grise n'est PLUS
   // dans le TTC (base TVA), elle est en débours séparé (art. 267 II 2° CGI).
   //   - c.ttc         = HT + TVA (hors débours)         → base fiscale / CA
   //   - c.debourTotal = somme des débours refacturés    → HORS CA (compte 467)
   //   - c.grandTotal  = c.ttc + c.debourTotal            → à payer par le client
+  // v8.154 — La REPRISE ne vient plus en déduction du TTC. Ce n'est pas une
+  // remise : c'est un règlement en nature (le client paie une partie du prix
+  // avec son véhicule), donc deux ventes distinctes. La base imposable reste
+  // le prix de vente entier — art. 266-1-a du CGI : tout ce qui est reçu en
+  // contrepartie, paiement en nature compris. La reprise rejoint donc les
+  // encaissements, comme le fait déjà le pont IOBILL depuis la v8.150 (voir
+  // buildReprisePayment : la ligne négative faisait rejeter la facture par la
+  // PDP — EN 16931 BR-27 — et sous-déclarait la TVA).
+  // Le RESTE À PAYER est inchangé : ce qui sortait du total entre maintenant
+  // dans les encaissements.
   const repriseValeur = o.reprise_active ? (parseFloat(o.reprise_valeur) || 0) : 0;
-  const ttc = montantTTC_soumis - repriseValeur;
+  const ttc = montantTTC_soumis;
   const debourTotal = carteGrise;
   const grandTotal = ttc + debourTotal;
 
@@ -926,7 +935,9 @@ function calcOrder(o) {
   // d'une facture qui en avait un, on le neutralise ici.
   const acompteTtc = o.type === "avoir" ? 0 : (parseFloat(o.acompte_ttc) || 0);
   const paiementsTotal = (o.paiements || []).reduce((s, p) => s + (parseFloat(p.montant) || 0), 0);
-  const encaisse = acompteTtc + paiementsTotal;
+  // v8.154 — La reprise compte parmi les règlements (en nature), pour tous les
+  // types de document : sur un avoir, c'est le véhicule qui repart au client.
+  const encaisse = acompteTtc + repriseValeur + paiementsTotal;
   // v8.49.11 — reste calculé sur grandTotal (ce que paye vraiment le client, avec débours)
   const reste = grandTotal - encaisse;
 
@@ -941,10 +952,10 @@ function calcOrder(o) {
     resteFinal = 0;
   }
 
-  // Net après acompte = utile pour l'affichage sur le PDF (séparation visuelle
-  // entre acompte signature et paiements ultérieurs)
+  // Net après les règlements de la signature (acompte + reprise en nature) :
+  // utile pour l'affichage sur le PDF, avant les paiements ultérieurs.
   // v8.49.11 — sur grandTotal aussi.
-  const netApresAcompte = grandTotal - acompteTtc;
+  const netApresAcompte = grandTotal - acompteTtc - repriseValeur;
 
   // Les avoirs : le signe négatif est appliqué sur ttc/ht/tva pour le dashboard
   // Mais encaisse et reste restent en valeur absolue pour la logique de paiement
@@ -3042,17 +3053,9 @@ function FleetPage({ vehicles, setVehicles, orders, setOrders, apiKey, usage, se
       //   - la facture est totalement soldée (sécurité)
       if (token && dealer?.iobill_auto_push && dealer?.iobill_company_id
           && linkedOrder && linkedOrder.type === 'facture') {
-        // Calcul "reste" inline (réplique calcOrder simplifiée)
-        const prixVente = parseFloat(linkedOrder.prix_ht) || 0;
-        const remAmt = parseFloat(linkedOrder.remise_ttc) || 0;
-        const fraisMD = parseFloat(linkedOrder.frais_mise_dispo) || 0;
-        const carteGrise = parseFloat(linkedOrder.carte_grise) || 0;
-        const reprise = linkedOrder.reprise_active ? (parseFloat(linkedOrder.reprise_valeur) || 0) : 0;
-        const ttc = (prixVente - remAmt) + fraisMD + carteGrise - reprise;
-        const acompte = parseFloat(linkedOrder.acompte_ttc) || 0;
-        const paiements = (Array.isArray(linkedOrder.paiements) ? linkedOrder.paiements : [])
-          .reduce((s, p) => s + (parseFloat(p.montant) || 0), 0);
-        const reste = ttc - (acompte + paiements);
+        // v8.154 — Le reste vient de calcOrder : une réplique inline avait
+        // fini par diverger de la règle de la reprise.
+        const { reste } = calcOrder(linkedOrder);
 
         if (reste <= 0.01) {
           // Fire-and-forget : pas d'await, n'impacte pas la fluidité
@@ -4597,12 +4600,14 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
                   c.remAmt > 0 ? ["Remise", "- " + fmtDec(c.remAmt)] : null,
                   ["Total TTC", fmtDec(c.ttc)],
                   c.debourTotal > 0 ? ["Débours (CG)", fmtDec(c.debourTotal)] : null,
-                  c.debourTotal > 0 ? ["Total à payer", fmtDec(c.grandTotal)] : null
+                  c.debourTotal > 0 ? ["Total à payer", fmtDec(c.grandTotal)] : null,
+                  c.repriseValeur > 0 ? ["Reprise (règlement)", "- " + fmtDec(c.repriseValeur)] : null
                 ].filter(Boolean)
               : [
                   ["Prix TTC", fmtDec(c.ttc)],
                   c.debourTotal > 0 ? ["Débours (CG)", fmtDec(c.debourTotal)] : null,
                   c.debourTotal > 0 ? ["Total à payer", fmtDec(c.grandTotal)] : null,
+                  c.repriseValeur > 0 ? ["Reprise (règlement)", "- " + fmtDec(c.repriseValeur)] : null,
                   ["TVA", "Non applicable"],
                   ["Régime", "Art. 297A CGI"]
                 ].filter(Boolean)
@@ -4972,7 +4977,6 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
                     <div className="pdoc-trow"><span>Montant HT</span><span>{fmtDec(c.ht)}</span></div>
                     <div className="pdoc-trow"><span>TVA {c.tvaPct || 20}%</span><span>{fmtDec(c.tvaAmt)}</span></div>
                     {c.remAmt > 0 && <div className="pdoc-trow" style={{ color: "#e5973c" }}><span>Remise</span><span>- {fmtDec(c.remAmt)}</span></div>}
-                    {c.repriseValeur > 0 && <div className="pdoc-trow" style={{ color: "#c79528" }}><span>Reprise véhicule</span><span>- {fmtDec(c.repriseValeur)}</span></div>}
                     <div className="pdoc-trow big"><span>TOTAL TTC</span><span>{fmtDec(c.ttc)}</span></div>
                   </>
                 ) : (
@@ -4982,7 +4986,6 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
                     {c.tvaAmt > 0 && <div className="pdoc-trow"><span>TVA {c.tvaPct || 20}% (frais uniquement)</span><span>{fmtDec(c.tvaAmt)}</span></div>}
                     <div className="pdoc-trow" style={{ fontSize: 10, color: "#aaa" }}><span>Véhicule hors TVA</span><span>Art. 297A CGI</span></div>
                     {c.remAmt > 0 && <div className="pdoc-trow" style={{ color: "#e5973c" }}><span>Remise</span><span>- {fmtDec(c.remAmt)}</span></div>}
-                    {c.repriseValeur > 0 && <div className="pdoc-trow" style={{ color: "#c79528" }}><span>Reprise véhicule</span><span>- {fmtDec(c.repriseValeur)}</span></div>}
                     <div className="pdoc-trow big"><span>TOTAL TTC</span><span>{fmtDec(c.ttc)}</span></div>
                   </>
                 )}
@@ -5008,8 +5011,19 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
                     </div>
                   </>
                 )}
-                {c.acompteTtc > 0 && <>
-                  <div className="pdoc-trow" style={{ color: "#3ecf7a" }}><span>Acompte versé à la signature</span><span>- {fmtDec(c.acompteTtc)}</span></div>
+                {/* v8.154 — Règlements remis à la signature : l'acompte, et la
+                    reprise réglée en nature. Tous deux viennent APRÈS le total,
+                    la reprise n'étant pas une réduction de prix. */}
+                {(c.acompteTtc > 0 || c.repriseValeur > 0) && <>
+                  {c.acompteTtc > 0 && (
+                    <div className="pdoc-trow" style={{ color: "#3ecf7a" }}><span>Acompte versé à la signature</span><span>- {fmtDec(c.acompteTtc)}</span></div>
+                  )}
+                  {c.repriseValeur > 0 && (
+                    <div className="pdoc-trow" style={{ color: "#3ecf7a" }}>
+                      <span>{order.type === "avoir" ? "Reprise véhicule (restituée)" : "Reprise véhicule (règlement en nature)"}</span>
+                      <span>- {fmtDec(c.repriseValeur)}</span>
+                    </div>
+                  )}
                   <div className="pdoc-trow" style={{ fontWeight: 700, color: "#0a0a0a", borderTop: "1px solid #e8e8e8", paddingTop: 6, marginTop: 4 }}><span>Reste à payer</span><span>{fmtDec(c.netApresAcompte)}</span></div>
                 </>}
                 {/* Encaissements ULTÉRIEURS (hors acompte signature, qui est déjà affiché ci-dessus).
