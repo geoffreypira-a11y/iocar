@@ -1,8 +1,10 @@
 import React, { useState, useMemo } from "react";
+import { fillCerfaImmat, NATURES_DEMANDE } from "./lib/cerfa-immat.js";
 
 // ═══════════════════════════════════════════════════════════════════
 // v8.139 — Onglet "Documents administratifs" (stand-alone)
-// Génère un CERFA de cession 15776 "à la carte" : on choisit librement
+// Génère un CERFA "à la carte" : cession 15776, mandat 13757*03 ou demande
+// de certificat d'immatriculation 13750*07 — on choisit librement
 // le VENDEUR et l'ACQUÉREUR (clients CRM en lecture seule + garage +
 // fournisseurs dédiés + nouveau contact ponctuel), un véhicule (flotte
 // ou saisie libre), une date/heure de cession.
@@ -61,7 +63,7 @@ function buildIdentite(p) {
   return p.identite || "";
 }
 
-const emptyContact = { type: "particulier", nom: "", prenom: "", raison: "", adresse: "", siret: "", civilite: "M" };
+const emptyContact = { type: "particulier", nom: "", prenom: "", raison: "", adresse: "", siret: "", civilite: "M", tel: "", email: "" };
 const emptyVeh = { plate: "", vin: "", marque: "", modele: "", finition: "", genre: "VP", date_mec: "", kilometrage: "", numero_formule: "" };
 
 // Formulaire d'un contact "Nouveau…" (au niveau module → référence stable,
@@ -111,6 +113,14 @@ function NewContactForm({ value, onChange, showSave, saveChecked, onToggleSave }
           <label className="form-label">Adresse</label>
           <input className="form-input" value={value.adresse} onChange={e => onChange({ ...value, adresse: e.target.value })} placeholder="12 rue de la Paix, 13000 Marseille" />
         </div>
+        <div className="form-group">
+          <label className="form-label">Téléphone</label>
+          <input className="form-input" value={value.tel || ""} onChange={e => onChange({ ...value, tel: e.target.value })} placeholder="06 12 34 56 78" />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Mél</label>
+          <input className="form-input" value={value.email || ""} onChange={e => onChange({ ...value, email: e.target.value })} placeholder="contact@exemple.fr" />
+        </div>
       </div>
       {showSave && (
         <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, cursor: "pointer", fontSize: 13 }}>
@@ -125,9 +135,12 @@ function NewContactForm({ value, onChange, showSave, saveChecked, onToggleSave }
 export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}, setDealer }) {
   const fournisseurs = useMemo(() => Array.isArray(dealer?.admin_fournisseurs) ? dealer.admin_fournisseurs : [], [dealer]);
 
-  // v8.142 — Type de document : cession (15776) ou mandat d'immatriculation (13757*03).
+  // v8.142 — Type de document : cession (15776), mandat d'immatriculation
+  // (13757*03) ou demande de certificat d'immatriculation (13750*07).
   const [docType, setDocType] = useState("cession");
   const [natureOp, setNatureOp] = useState("Immatriculation");
+  // v8.153 — Nature cochée en tête du CERFA 13750*07.
+  const [natureImmat, setNatureImmat] = useState("certificat");
   const [lieuMandat, setLieuMandat] = useState(() => parseAddress(dealer?.address || "").ville);
 
   // Sélections : "garage" | "c:<id>" | "f:<id>" | "nouveau"
@@ -174,7 +187,8 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
   function resolveParty(sel, newForm) {
     if (sel === "garage") {
       return { isMorale: true, identite: dealer?.name || "", nom: "", prenom: "",
-               siret: dealer?.siret || "", adresse: dealer?.address || "", civilite: "" };
+               siret: dealer?.siret || "", adresse: dealer?.address || "", civilite: "",
+               tel: dealer?.phone || "", email: dealer?.email || "" };
     }
     if (sel && sel.startsWith("c:")) {
       const c = clients.find(x => String(x.id) === sel.slice(2)) || {};
@@ -185,6 +199,7 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
         nom: c.nom || "", prenom: c.prenom || "",
         siret: c.siren || "", adresse: c.address || c.adresse || "",
         civilite: c.civilite || "",
+        tel: c.phone || "", email: c.email || "",
       };
     }
     if (sel && sel.startsWith("f:")) {
@@ -196,6 +211,7 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
         nom: f.nom || "", prenom: f.prenom || "",
         siret: f.siret || "", adresse: f.adresse || "",
         civilite: f.civilite || "",
+        tel: f.tel || "", email: f.email || "",
       };
     }
     // "nouveau"
@@ -206,6 +222,7 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
       nom: newForm.nom || "", prenom: newForm.prenom || "",
       siret: newForm.siret || "", adresse: newForm.adresse || "",
       civilite: newForm.civilite || "",
+      tel: newForm.tel || "", email: newForm.email || "",
     };
   }
 
@@ -229,7 +246,7 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
       id: uid(),
       type: newForm.type, nom: newForm.nom, prenom: newForm.prenom,
       raison: newForm.raison, adresse: newForm.adresse, siret: newForm.siret,
-      civilite: newForm.civilite,
+      civilite: newForm.civilite, tel: newForm.tel || "", email: newForm.email || "",
     };
     const next = [...fournisseurs, f];
     if (typeof setDealer === "function") setDealer({ ...dealer, admin_fournisseurs: next });
@@ -436,13 +453,64 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
     }
   }
 
+  // ── Génère la DEMANDE DE CERTIFICAT D'IMMATRICULATION 13750*07 ──
+  // Ce CERFA est diffusé à plat (aucun champ AcroForm) : les valeurs sont
+  // dessinées sur le gabarit, cf. src/lib/cerfa-immat.js.
+  async function generateImmat() {
+    setError(null);
+    const veh = resolveVehicle();
+    if (!veh || !veh.plate) { setError("Sélectionne un véhicule (au moins l'immatriculation)."); return; }
+    const T = resolveParty(acquereurSel, newAcquereur); // titulaire = nouveau propriétaire
+    if (!buildIdentite(T)) { setError("Le titulaire est incomplet (nom / raison sociale)."); return; }
+
+    setLoading(true);
+    try {
+      if (!window.PDFLib) {
+        await new Promise((resolve, reject) => {
+          const script = document.createElement("script");
+          script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js";
+          script.onload = resolve; script.onerror = reject;
+          document.head.appendChild(script);
+        });
+      }
+      if (!window.PDFLib) throw new Error("Librairie PDF non chargée (PDFLib).");
+      const pdfBytes = await fetch("/cerfa_1375007.pdf").then(r => r.arrayBuffer());
+      const adr = parseAddress(T.adresse);
+      const filled = await fillCerfaImmat(pdfBytes, window.PDFLib, {
+        nature: natureImmat,
+        dateAchat: dateCession,
+        faitA: lieuMandat || adr.ville,
+        faitLe: dateCession,
+        vehicule: veh,
+        titulaire: {
+          isMorale: T.isMorale,
+          civilite: T.civilite,
+          identite: buildIdentite(T),
+          siret: T.siret,
+          tel: T.tel,
+          email: T.email,
+          adresse: adr,
+        },
+      });
+      const blob = new Blob([filled], { type: "application/pdf" });
+      setPdfUrl(URL.createObjectURL(blob));
+
+      if (acquereurSel === "nouveau") maybeSaveFournisseur(newAcquereur, saveAcquereurFourn);
+    } catch (e) {
+      setError("Erreur demande d'immatriculation : " + (e?.message || e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   const options = partyOptions();
 
   return (
     <div style={{ maxWidth: 900, margin: "0 auto" }}>
       <div className="page-title">Documents administratifs</div>
       <p style={{ color: "var(--muted)", fontSize: 13, marginTop: -6, marginBottom: 16 }}>
-        Générez un CERFA à la carte — cession (15776) ou mandat d'immatriculation (13757*03).
+        Générez un CERFA à la carte — cession (15776), mandat d'immatriculation (13757*03)
+        ou demande de certificat d'immatriculation (13750*07).
         Cet onglet lit vos données mais n'écrit rien ailleurs.
       </p>
 
@@ -454,11 +522,15 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
         <button className={"btn " + (docType === "mandat" ? "btn-primary" : "btn-ghost")} onClick={() => { setDocType("mandat"); setPdfUrl(null); }}>
           🖊 Mandat d'immatriculation (13757)
         </button>
+        <button className={"btn " + (docType === "immat" ? "btn-primary" : "btn-ghost")} onClick={() => { setDocType("immat"); setPdfUrl(null); }}>
+          🪪 Demande de carte grise (13750)
+        </button>
       </div>
 
       <div style={{ display: "grid", gap: 20, gridTemplateColumns: "1fr" }}>
-        {/* PARTIE 1 : Vendeur (cession) / Mandant (mandat) */}
-        <div className="card">
+        {/* PARTIE 1 : Vendeur (cession) / Mandant (mandat).
+            Le 13750*07 ne connaît qu'un titulaire : ce bloc n'a pas lieu d'être. */}
+        {docType !== "immat" && <div className="card">
           <div style={{ fontSize: 10, letterSpacing: 2, textTransform: "uppercase", color: "var(--red)", fontWeight: 700, marginBottom: 8 }}>
             {docType === "mandat" ? "Mandant (donneur d'ordre)" : "Vendeur (ancien propriétaire)"}
           </div>
@@ -469,12 +541,14 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
             <NewContactForm value={newVendeur} onChange={setNewVendeur} showSave
               saveChecked={saveVendeurFourn} onToggleSave={() => setSaveVendeurFourn(s => !s)} />
           )}
-        </div>
+        </div>}
 
         {/* PARTIE 2 : Acquéreur (cession) / Mandataire (mandat) */}
         <div className="card">
           <div style={{ fontSize: 10, letterSpacing: 2, textTransform: "uppercase", color: "var(--gold)", fontWeight: 700, marginBottom: 8 }}>
-            {docType === "mandat" ? "Mandataire (qui fait les démarches)" : "Acquéreur (nouveau propriétaire)"}
+            {docType === "mandat" ? "Mandataire (qui fait les démarches)"
+              : docType === "immat" ? "Titulaire de la carte grise"
+              : "Acquéreur (nouveau propriétaire)"}
           </div>
           <select className="form-input" value={acquereurSel} onChange={e => setAcquereurSel(e.target.value)}>
             {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -490,6 +564,16 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
           <div className="card">
             <div style={{ fontSize: 10, letterSpacing: 2, textTransform: "uppercase", color: "var(--muted2)", fontWeight: 700, marginBottom: 8 }}>Nature de l'opération</div>
             <input className="form-input" value={natureOp} onChange={e => setNatureOp(e.target.value)} placeholder="Immatriculation, changement de titulaire, duplicata…" />
+          </div>
+        )}
+
+        {/* 13750*07 : case à cocher en tête du formulaire */}
+        {docType === "immat" && (
+          <div className="card">
+            <div style={{ fontSize: 10, letterSpacing: 2, textTransform: "uppercase", color: "var(--muted2)", fontWeight: 700, marginBottom: 8 }}>Nature de la demande</div>
+            <select className="form-input" value={natureImmat} onChange={e => setNatureImmat(e.target.value)}>
+              {NATURES_DEMANDE.map(n => <option key={n.value} value={n.value}>{n.label}</option>)}
+            </select>
           </div>
         )}
 
@@ -522,14 +606,16 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
         {/* DATE (+ heure cession, ou Fait à mandat) */}
         <div className="card">
           <div style={{ fontSize: 10, letterSpacing: 2, textTransform: "uppercase", color: "var(--muted2)", fontWeight: 700, marginBottom: 8 }}>
-            {docType === "mandat" ? "Lieu & date" : "Date & heure de cession"}
+            {docType === "mandat" ? "Lieu & date"
+              : docType === "immat" ? "Date d'achat & lieu de signature"
+              : "Date & heure de cession"}
           </div>
           <div className="form-grid">
             <div className="form-group">
               <label className="form-label">Date</label>
               <input className="form-input" type="date" value={dateCession} onChange={e => setDateCession(e.target.value)} />
             </div>
-            {docType === "mandat" ? (
+            {docType === "mandat" || docType === "immat" ? (
               <div className="form-group">
                 <label className="form-label">Fait à</label>
                 <input className="form-input" value={lieuMandat} onChange={e => setLieuMandat(e.target.value)} placeholder="Marseille" />
@@ -546,8 +632,15 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
         {error && <div style={{ color: "var(--red)", fontSize: 13 }}>{error}</div>}
 
         <div>
-          <button className="btn btn-primary" onClick={docType === "mandat" ? generateMandat : generate} disabled={loading}>
-            {loading ? "Génération…" : (docType === "mandat" ? "🖊 Générer le mandat" : "📄 Générer le CERFA")}
+          <button
+            className="btn btn-primary"
+            onClick={docType === "mandat" ? generateMandat : docType === "immat" ? generateImmat : generate}
+            disabled={loading}
+          >
+            {loading ? "Génération…"
+              : docType === "mandat" ? "🖊 Générer le mandat"
+              : docType === "immat" ? "🪪 Générer la demande"
+              : "📄 Générer le CERFA"}
           </button>
         </div>
 
@@ -557,12 +650,12 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
               <button className="btn btn-primary btn-sm" onClick={() => window.open(pdfUrl, "_blank")}>
                 ↗ Ouvrir en plein écran
               </button>
-              <a className="btn btn-ghost btn-sm" href={pdfUrl} download={docType === "mandat" ? "mandat-immatriculation-13757.pdf" : "cerfa-cession-15776.pdf"} style={{ textDecoration: "none" }}>
+              <a className="btn btn-ghost btn-sm" href={pdfUrl} download={docType === "mandat" ? "mandat-immatriculation-13757.pdf" : docType === "immat" ? "demande-immatriculation-13750.pdf" : "cerfa-cession-15776.pdf"} style={{ textDecoration: "none" }}>
                 ⬇ Télécharger
               </a>
             </div>
             <div style={{ height: 620, overflow: "hidden", borderRadius: 8 }}>
-              <iframe src={pdfUrl} style={{ width: "100%", height: "100%", border: "none" }} title={docType === "mandat" ? "Mandat 13757" : "CERFA 15776"} />
+              <iframe src={pdfUrl} style={{ width: "100%", height: "100%", border: "none" }} title={docType === "mandat" ? "Mandat 13757" : docType === "immat" ? "CERFA 13750" : "CERFA 15776"} />
             </div>
           </div>
         )}
