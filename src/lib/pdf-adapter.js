@@ -64,6 +64,7 @@ export function orderToIobillFormat(order, garage) {
     : "invoice";
 
   // Détermine la garantie (comme dans iobill-bridge)
+  // -1 = extension de garantie, 0 = sans garantie, sinon nombre de mois
   const garantieMois = o.garantie_mois || 0;
 
   // Nom client

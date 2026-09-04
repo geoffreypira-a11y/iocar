@@ -3650,6 +3650,22 @@ function PaymentModal({ order, onSave, onClose }) {
 }
 
 /* ═══════════════════════════════════════════════════════════════
+   GARANTIE VÉHICULE
+   La garantie d'un document est stockée en mois dans `garantie_mois`.
+   Valeur sentinelle GARANTIE_EXTENSION : le véhicule est couvert par une
+   extension de garantie (durée gérée par le contrat du partenaire, donc
+   pas exprimable en mois dans le barème du garage).
+═══════════════════════════════════════════════════════════════ */
+const GARANTIE_EXTENSION = -1;
+
+function garantieLabel(mois) {
+  const m = parseInt(mois);
+  if (m === GARANTIE_EXTENSION) return "Extension de garantie";
+  if (m > 0) return `${m} mois`;
+  return null;
+}
+
+/* ═══════════════════════════════════════════════════════════════
    ORDER / INVOICE FORM
 ═══════════════════════════════════════════════════════════════ */
 function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClients, orders, setVehiclesRaw, usage, setUsage }) {
@@ -3668,7 +3684,7 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
     vehicle_data: null, // données complètes du véhicule pour la désignation
     prix_ht: "", remise_ttc: 0, tva_pct: 20, avec_tva: true,
     frais_mise_dispo: 180, // frais de mise à disposition (par défaut 180€)
-    garantie_mois: 3, // durée garantie : 3, 6 ou 12 mois
+    garantie_mois: 3, // garantie : 3, 6 ou 12 mois, -1 = extension de garantie, 0 = sans
     carte_grise: 0, // frais carte grise
     acompte_ttc: 0, // acompte versé à la signature (en TTC, par défaut 0)
     acompte_mode: "Espèces", // v8.146 — moyen de l'acompte (repris dans l'historique)
@@ -4209,6 +4225,7 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
                 <option value={3}>3 mois</option>
                 <option value={6}>6 mois</option>
                 <option value={12}>12 mois</option>
+                <option value={GARANTIE_EXTENSION}>Extension de garantie</option>
                 <option value={0}>Sans garantie</option>
               </select>
             </div>
@@ -5003,9 +5020,9 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
             </div>
 
             {/* Garantie véhicule */}
-            {(order.garantie_mois || 0) > 0 && (
+            {garantieLabel(order.garantie_mois) && (
               <div className="pdoc-section pdoc-garantie" style={{ marginTop: 12, padding: "8px 14px", background: "#f9f8f5", borderRadius: 6, fontSize: 11, color: "#555", border: "1px solid #e8e8e8" }}>
-                🛡 <strong>Garantie véhicule : {order.garantie_mois} mois</strong>
+                🛡 <strong>{parseInt(order.garantie_mois) === GARANTIE_EXTENSION ? "Extension de garantie" : `Garantie véhicule : ${garantieLabel(order.garantie_mois)}`}</strong>
               </div>
             )}
 

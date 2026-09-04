@@ -1429,6 +1429,10 @@ function buildOrderSpecificMentions(order) {
     overrides.garantie_override = sanitizeString(
       'V\u00e9hicule vendu sans garantie commerciale (uniquement les garanties l\u00e9gales).'
     );
+  } else if (garantieMois === -1) {
+    // -1 = extension de garantie : la dur\u00e9e est port\u00e9e par le contrat
+    // du partenaire, on transmet donc le libell\u00e9 et non un nombre de mois.
+    overrides.garantie_duree = 'Extension de garantie';
   } else if (garantieMois > 0) {
     overrides.garantie_duree = `${garantieMois} mois`;
   }

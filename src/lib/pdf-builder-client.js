@@ -356,8 +356,12 @@ export async function buildDocumentPdf({ docType, doc, lines, company }) {
         infosRight.push(`Puissance : ${powerParts.join(" · ")}`);
       }
       // Garantie
-      if (vm.garantie_mois && vm.garantie_mois > 0) {
-        infosRight.push(`Garantie : ${vm.garantie_mois} mois`);
+      // -1 = extension de garantie (durée portée par le contrat partenaire)
+      const garantieMois = parseInt(vm.garantie_mois) || 0;
+      if (garantieMois === -1) {
+        infosRight.push("Garantie : extension de garantie");
+      } else if (garantieMois > 0) {
+        infosRight.push(`Garantie : ${garantieMois} mois`);
       }
 
       // Calcul de la hauteur dynamique du bloc
