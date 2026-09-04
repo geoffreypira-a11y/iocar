@@ -5,6 +5,9 @@ import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recha
 // v8.37 — Pont IO BILL (composants UI)
 import IobillBridgeCard from "./components/IobillBridgeCard.jsx";
 import DocsAdminPage from "./DocsAdminPage.jsx";
+import { loadPdfLib, parseAddress, buildIdentite } from "./lib/cerfa-common.js";
+import { fillCerfaMandat } from "./lib/cerfa-mandat.js";
+import { fillCerfaImmat } from "./lib/cerfa-immat.js";
 import IobillInvoiceSync from "./components/IobillInvoiceSync.jsx";
 
 // v8.49.16 — Système d'essai gratuit 7 jours + paywall
@@ -5139,10 +5142,13 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
    ORDERS PAGE
 ═══════════════════════════════════════════════════════════════ */
 /* ═══════════════════════════════════════════════════════════════
-   DÉCLARATION DE CESSION (Cerfa 15776*02)
-   Pré-remplie avec les données véhicule + client + garage
+   CERFA DU DOSSIER (depuis une facture / un bon de commande)
+   Trois documents préremplis avec les données véhicule + client + garage :
+     • cession 15776       — le garage cède le véhicule au client
+     • mandat 13757*03     — le client mandate le garage pour les démarches
+     • carte grise 13750*07 — demande de certificat au nom du client
 ═══════════════════════════════════════════════════════════════ */
-function CessionDoc({ order, dealer, vehicles, clients, onUpdateOrder, onClose }) {
+function CerfaDocs({ order, dealer, vehicles, clients, onUpdateOrder, onClose }) {
   // Données véhicule : fraîches depuis la flotte si disponibles, sinon celles de la commande
   const freshVehicle = order.vehicle_id && vehicles ? vehicles.find(vh => vh.id === order.vehicle_id) : null;
   const orderV = order.vehicle_data || {};
@@ -5163,9 +5169,15 @@ function CessionDoc({ order, dealer, vehicles, clients, onUpdateOrder, onClose }
   const client = {
     ...(order.client || {}),
     civilite: order.client?.civilite || crmClient?.civilite || "",
+    phone: order.client?.phone || crmClient?.phone || "",
+    email: order.client?.email || crmClient?.email || "",
   };
+
+  const [tab, setTab] = useState("cession");
   const [loading, setLoading] = useState(false);
-  const [pdfUrl, setPdfUrl] = useState(null);
+  const [error, setError] = useState(null);
+  // Un PDF par onglet : on ne régénère pas en boucle quand on navigue.
+  const [urls, setUrls] = useState({});
 
   // ── DATE DU CERFA — figée à la première génération ──
   // Si le cerfa n'a jamais été généré (pas de cession_date sur l'order),
@@ -5174,195 +5186,210 @@ function CessionDoc({ order, dealer, vehicles, clients, onUpdateOrder, onClose }
   const [cessionDate, setCessionDate] = useState(order.cession_date || today());
   const [cessionHeure, setCessionHeure] = useState(order.cession_heure || new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }));
 
-  const generatePdf = async () => {
+  // ── Parties, telles que les attendent le mandat et la demande de carte grise ──
+  // Le garage vend : il est le vendeur de la cession, le mandataire du mandat.
+  // Le client devient titulaire : il donne mandat au garage pour les démarches.
+  const isCompanyClient = client.type === "company" || !!(client.siren && String(client.siren).trim());
+  const clientParty = {
+    isMorale: isCompanyClient,
+    identite: isCompanyClient ? (client.nom || client.name || "") : (client.name || ""),
+    nom: client.nom || "", prenom: client.prenom || "",
+    siret: client.siren || "", adresse: client.address || "",
+    civilite: client.civilite || "", tel: client.phone || "", email: client.email || "",
+  };
+  const garageParty = {
+    isMorale: true, identite: dealer?.name || "", nom: "", prenom: "",
+    siret: dealer?.siret || "", adresse: dealer?.address || "", civilite: "",
+    tel: dealer?.phone || "", email: dealer?.email || "",
+  };
+  const villeGarage = parseAddress(dealer?.address || "").ville;
+  const villeClient = parseAddress(client.address || "").ville;
+
+  const setUrl = (key, url) => setUrls(prev => ({ ...prev, [key]: url }));
+
+  // ── CERFA 15776 — déclaration de cession (garage → client) ──
+  const generateCession = async () => {
+    const { PDFDocument } = await loadPdfLib();
+    const pdfBytes = await fetch("/cerfa_15776-01_acroform.pdf").then(r => r.arrayBuffer());
+    const pdfDoc = await PDFDocument.load(pdfBytes);
+    const form = pdfDoc.getForm();
+
+    const setText = (name, value) => {
+      if (!value) return;
+      try { form.getTextField(name).setText(String(value)); }
+      catch(e) { console.warn("Champ:", name, e.message); }
+    };
+    const setCheck = (name) => {
+      try { form.getCheckBox(name).check(); }
+      catch(e) { console.warn("Check:", name, e.message); }
+    };
+    const setRadio = (name, value) => {
+      try { form.getRadioGroup(name).select(value); }
+      catch(e) { console.warn("Radio:", name, e.message); }
+    };
+
+    const dA = parseAddress(dealer?.address || "");
+    const cA = parseAddress(client.address || "");
+    // ⚠ On utilise la date FIGÉE depuis le state — pas today() — pour que la date
+    // ne change pas à chaque réouverture du document après l'impression.
+    const dateJ = cessionDate;
+    const [dj, dm, da] = dateJ.includes("/") ? dateJ.split("/") : ["","",""];
+    const heure = cessionHeure;
+    const [h1, h2] = heure.split(":");
+    const dateMEC = v.date_mise_en_circulation || "";
+    const mecP = dateMEC.includes("/") ? dateMEC.split("/") : [];
+
+    for (const pk of ["Page1", "Page2"]) {
+      const p = (n) => `${pk}.${n}`;
+
+      // VÉHICULE
+      setText(p("num_Immatriculation"), v.plate);
+      setText(p("num_Identification"), v.vin);
+      if (mecP.length === 3) {
+        setText(p("num_DateImmatriculationJour"), mecP[0]);
+        setText(p("num_DateImmatriculationMois"), mecP[1]);
+        setText(p("num_DateImmatriculationAnnée"), mecP[2]);
+      } else { setText(p("num_DateImmatriculationJour"), dateMEC); }
+      setText(p("txt_MarqueVéhicule"), v.marque);
+      setText(p("txt_TypeVarianteVersionVéhicule"), v.finition);
+      setText(p("txt_GenreNational"), v.genre || "VP");
+      setText(p("txt_DénominationCommerciale"), v.modele);
+      setText(p("num_KilométrageCompteur"), v.kilometrage ? String(Number(v.kilometrage).toLocaleString("fr-FR")).replace(/\u202f/g, " ").replace(/\u00a0/g, " ") : "");
+
+      // Numéro de formule du certificat d'immatriculation (préfixé par "20" sur le Cerfa)
+      if (v.numero_formule) setText(p("num_Formule"), v.numero_formule);
+
+      // Certificat immatriculation : OUI
+      setRadio(p("Groupe_de_boutons_radio1"), "1");
+
+      // ANCIEN PROPRIÉTAIRE
+      setRadio(p("Groupe_de_boutons_radio3"), "1");  // Personne morale
+      setText(p("txt_IdentitéVendeur"), dealer?.name);
+      setText(p("Num_Siret"), dealer?.siret);
+      setText(p("num_VoieAdresse"), dA.num);
+      setText(p("txt_ExtensionAdresse"), dA.ext);
+      setText(p("txt_TypeVoieAdresse"), dA.type);
+      setText(p("txt_NomVoie"), dA.nom);
+      setText(p("num_CodePostalAdresse"), dA.cp);
+      setText(p("txt_CommuneAdresse"), dA.ville);
+      setRadio(p("Groupe_de_boutons_radio4"), "1");  // Céder
+      setText(p("num_DateVenteJour"), dj);
+      setText(p("num_DateVenteMois"), dm);
+      setText(p("num_DateVenteAnnée"), da);
+      setText(p("num_HoraireVente1"), h1);
+      setText(p("num_HoraireVente2"), h2);
+      setCheck(p("ckb_ValidationDéclaration1"));
+      setCheck(p("ckb_ValidationDéclaration2"));
+      setText(p("txt_LieuDéclaration1"), dA.ville);
+      setText(p("num_DateDéclaration"), dateJ);
+
+      // NOUVEAU PROPRIÉTAIRE
+      // v8.59.2 — Détection Personne physique vs morale :
+      //   - client.type === "company" OU client.siren → Personne morale (radio5=1)
+      //   - Sinon → Personne physique (radio5=2) + civilité (radio6=1/2)
+      // Le CERFA officiel exige :
+      //   - Radio5 valeur "1" = Personne morale
+      //   - Radio5 valeur "2" = Personne physique
+      //   - Champ NOM/PRÉNOM ou RAISON SOCIALE en un seul champ txt_IdentitéAcheteur
+      //   - N° SIRET dans num_SiretAcheteur (obligatoire pour société, optionnel particulier)
+      // (isCompanyClient est calculé une fois pour les trois documents, plus haut)
+      if (isCompanyClient) {
+        // Personne morale — pas de civilité, raison sociale seule dans identité
+        setRadio(p("Groupe_de_boutons_radio5"), "1");
+      } else {
+        // Personne physique — civilité obligatoire (M ou F)
+        setRadio(p("Groupe_de_boutons_radio5"), "2");
+        if (client.civilite === "M") setRadio(p("Groupe_de_boutons_radio6"), "1");
+        if (client.civilite === "F") setRadio(p("Groupe_de_boutons_radio6"), "2");
+      }
+      // v8.48.7 — Ordre Cerfa officiel : "NOM Prénom" (nom en majuscules d'abord)
+      // v8.59.2 — Pour société : raison sociale seule. Même règle que le mandat
+      // et la demande de carte grise, d'où la brique partagée buildIdentite().
+      const identiteAcheteur = buildIdentite(clientParty);
+      setText(p("txt_IdentitéAcheteur"), identiteAcheteur);
+      // v8.59.2 — SIRET obligatoire pour société, préservé pour particulier si renseigné
+      if (client.siren) setText(p("num_SiretAcheteur"), String(client.siren).replace(/\s/g, ""));
+      setText(p("num_VoieAdresseAcheteur"), cA.num);
+      setText(p("txt_ExtensionAdresseAcheteur"), cA.ext);
+      setText(p("txt_TypeVoieAdresseAcheteur"), cA.type);
+      setText(p("txt_NomVoieAdresseAcheteur"), cA.nom);
+      setText(p("num_CodePostalAdresseAcheteur"), cA.cp);
+      setText(p("txt_CommuneAdresseAcheteur"), cA.ville);
+      setCheck(p("ckb_ValidationDéclarationA1"));
+      setCheck(p("ckb_ValidationDéclarationA2"));
+      setText(p("txt_LieuDéclaration2"), dA.ville);
+      setText(p("txt_dateDéclaration"), dateJ);
+    }
+
+
+    return pdfDoc.save();
+  };
+
+  // ── CERFA 13757*03 — mandat d'immatriculation (client → garage) ──
+  const generateMandat = async () => {
+    const PDFLib = await loadPdfLib();
+    const pdfBytes = await fetch("/cerfa_1375703.pdf").then(r => r.arrayBuffer());
+    return fillCerfaMandat(pdfBytes, PDFLib, {
+      mandant: clientParty,
+      mandataire: garageParty,
+      vehicule: v,
+      nature: "Immatriculation",
+      lieu: villeGarage || villeClient,
+      date: cessionDate,
+    });
+  };
+
+  // ── CERFA 13750*07 — demande de certificat d'immatriculation (titulaire = client) ──
+  const generateImmat = async () => {
+    const PDFLib = await loadPdfLib();
+    const pdfBytes = await fetch("/cerfa_1375007.pdf").then(r => r.arrayBuffer());
+    return fillCerfaImmat(pdfBytes, PDFLib, {
+      nature: "certificat",
+      dateAchat: cessionDate,
+      faitA: villeClient || villeGarage,
+      faitLe: cessionDate,
+      vehicule: {
+        plate: v.plate, vin: v.vin, marque: v.marque, modele: v.modele,
+        finition: v.finition, genre: v.genre,
+        date_mec: v.date_mise_en_circulation, numero_formule: v.numero_formule,
+      },
+      titulaire: {
+        isMorale: clientParty.isMorale,
+        civilite: clientParty.civilite,
+        identite: buildIdentite(clientParty),
+        siret: clientParty.siret,
+        tel: clientParty.tel,
+        email: clientParty.email,
+        adresse: parseAddress(clientParty.adresse),
+      },
+    });
+  };
+
+  const GENERATORS = { cession: generateCession, mandat: generateMandat, immat: generateImmat };
+
+  // Génère le document de l'onglet demandé. `force` sert au rafraîchissement
+  // de la date, qui doit refabriquer les trois PDF.
+  const generate = async (key, force) => {
+    if (urls[key] && !force) return;
     setLoading(true);
+    setError(null);
     try {
-      if (!window.PDFLib) {
-        await new Promise((resolve, reject) => {
-          const script = document.createElement("script");
-          script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js";
-          script.onload = resolve;
-          script.onerror = reject;
-          document.head.appendChild(script);
-        });
-      }
-      const { PDFDocument } = window.PDFLib;
-
-      const pdfBytes = await fetch("/cerfa_15776-01_acroform.pdf").then(r => r.arrayBuffer());
-      const pdfDoc = await PDFDocument.load(pdfBytes);
-      const form = pdfDoc.getForm();
-
-      // ── Helpers ultra-simples — exactement comme le test console qui marche ──
-      const setText = (name, value) => {
-        if (!value) return;
-        try { form.getTextField(name).setText(String(value)); }
-        catch(e) { console.warn("Champ:", name, e.message); }
-      };
-      const setCheck = (name) => {
-        try { form.getCheckBox(name).check(); }
-        catch(e) { console.warn("Check:", name, e.message); }
-      };
-      const setRadio = (name, value) => {
-        try { form.getRadioGroup(name).select(value); }
-        catch(e) { console.warn("Radio:", name, e.message); }
-      };
-
-      // ── Parser d'adresse française ──
-      const parseAddress = (addr) => {
-        if (!addr) return { num: "", ext: "", type: "", nom: "", cp: "", ville: "" };
-        const lines = addr.split("\n").map(l => l.trim()).filter(Boolean);
-        const rue = lines[0] || "";
-        const cpLine = lines.find(l => /\d{5}/.test(l)) || "";
-        const cpMatch = cpLine.match(/(\d{5})\s*(.*)/);
-        const cp = cpMatch ? cpMatch[1] : "";
-        // v8.138 — Ville robuste (corrige "Fait à" vide sur le CERFA) :
-        //  1) ville APRÈS le CP sur la même ligne  → "13000 Marseille"
-        //  2) sinon ville AVANT le CP              → "Marseille 13000"
-        //  3) sinon CP seul sur sa ligne → dernière ligne "texte" (hors rue)
-        let ville = cpMatch ? cpMatch[2].trim() : "";
-        if (!ville && cpLine && cp) {
-          const before = cpLine.slice(0, cpLine.indexOf(cp)).trim();
-          if (before && !/^\d/.test(before)) ville = before;
-        }
-        if (!ville) {
-          const cand = lines.filter(l => l !== rue && l !== cpLine && !/\d{5}/.test(l) && !/^\d/.test(l));
-          if (cand.length) ville = cand[cand.length - 1].trim();
-        }
-        const types = ["RUE","AVENUE","AVE","AV","BOULEVARD","BD","BLVD","IMPASSE","IMP","CHEMIN","CH","ROUTE","RTE","PLACE","PL","ALLÉE","ALLEE","PASSAGE","COURS","SQUARE","SQ","LOTISSEMENT","LOT","RÉSIDENCE","RESIDENCE","HAMEAU","LIEU-DIT","QUAI","VOIE","SENTIER","TRAVERSE"];
-        const extensions = ["BIS","TER","QUATER","A","B","C"];
-        const parts = rue.split(/\s+/);
-        let num = "", ext = "", type = "", nom = "";
-        let idx = 0;
-        if (parts[idx] && /^\d+$/.test(parts[idx])) { num = parts[idx]; idx++; }
-        if (parts[idx] && extensions.includes(parts[idx].toUpperCase())) { ext = parts[idx]; idx++; }
-        if (parts[idx] && types.includes(parts[idx].toUpperCase())) { type = parts[idx]; idx++; }
-        nom = parts.slice(idx).join(" ");
-        if (!type && !num) nom = rue;
-        return { num, ext, type, nom, cp, ville };
-      };
-
-      const dA = parseAddress(dealer?.address || "");
-      const cA = parseAddress(client.address || "");
-      // ⚠ On utilise la date FIGÉE depuis le state — pas today() — pour que la date
-      // ne change pas à chaque réouverture du document après l'impression.
-      const dateJ = cessionDate;
-      const [dj, dm, da] = dateJ.includes("/") ? dateJ.split("/") : ["","",""];
-      const heure = cessionHeure;
-      const [h1, h2] = heure.split(":");
-      const dateMEC = v.date_mise_en_circulation || "";
-      const mecP = dateMEC.includes("/") ? dateMEC.split("/") : [];
-
-      for (const pk of ["Page1", "Page2"]) {
-        const p = (n) => `${pk}.${n}`;
-
-        // VÉHICULE
-        setText(p("num_Immatriculation"), v.plate);
-        setText(p("num_Identification"), v.vin);
-        if (mecP.length === 3) {
-          setText(p("num_DateImmatriculationJour"), mecP[0]);
-          setText(p("num_DateImmatriculationMois"), mecP[1]);
-          setText(p("num_DateImmatriculationAnnée"), mecP[2]);
-        } else { setText(p("num_DateImmatriculationJour"), dateMEC); }
-        setText(p("txt_MarqueVéhicule"), v.marque);
-        setText(p("txt_TypeVarianteVersionVéhicule"), v.finition);
-        setText(p("txt_GenreNational"), v.genre || "VP");
-        setText(p("txt_DénominationCommerciale"), v.modele);
-        setText(p("num_KilométrageCompteur"), v.kilometrage ? String(Number(v.kilometrage).toLocaleString("fr-FR")).replace(/\u202f/g, " ").replace(/\u00a0/g, " ") : "");
-
-        // Numéro de formule du certificat d'immatriculation (préfixé par "20" sur le Cerfa)
-        if (v.numero_formule) setText(p("num_Formule"), v.numero_formule);
-
-        // Certificat immatriculation : OUI
-        setRadio(p("Groupe_de_boutons_radio1"), "1");
-
-        // ANCIEN PROPRIÉTAIRE
-        setRadio(p("Groupe_de_boutons_radio3"), "1");  // Personne morale
-        setText(p("txt_IdentitéVendeur"), dealer?.name);
-        setText(p("Num_Siret"), dealer?.siret);
-        setText(p("num_VoieAdresse"), dA.num);
-        setText(p("txt_ExtensionAdresse"), dA.ext);
-        setText(p("txt_TypeVoieAdresse"), dA.type);
-        setText(p("txt_NomVoie"), dA.nom);
-        setText(p("num_CodePostalAdresse"), dA.cp);
-        setText(p("txt_CommuneAdresse"), dA.ville);
-        setRadio(p("Groupe_de_boutons_radio4"), "1");  // Céder
-        setText(p("num_DateVenteJour"), dj);
-        setText(p("num_DateVenteMois"), dm);
-        setText(p("num_DateVenteAnnée"), da);
-        setText(p("num_HoraireVente1"), h1);
-        setText(p("num_HoraireVente2"), h2);
-        setCheck(p("ckb_ValidationDéclaration1"));
-        setCheck(p("ckb_ValidationDéclaration2"));
-        setText(p("txt_LieuDéclaration1"), dA.ville);
-        setText(p("num_DateDéclaration"), dateJ);
-
-        // NOUVEAU PROPRIÉTAIRE
-        // v8.59.2 — Détection Personne physique vs morale :
-        //   - client.type === "company" OU client.siren → Personne morale (radio5=1)
-        //   - Sinon → Personne physique (radio5=2) + civilité (radio6=1/2)
-        // Le CERFA officiel exige :
-        //   - Radio5 valeur "1" = Personne morale
-        //   - Radio5 valeur "2" = Personne physique
-        //   - Champ NOM/PRÉNOM ou RAISON SOCIALE en un seul champ txt_IdentitéAcheteur
-        //   - N° SIRET dans num_SiretAcheteur (obligatoire pour société, optionnel particulier)
-        const isCompanyClient = client.type === "company" || !!(client.siren && String(client.siren).trim());
-        if (isCompanyClient) {
-          // Personne morale — pas de civilité, raison sociale seule dans identité
-          setRadio(p("Groupe_de_boutons_radio5"), "1");
-        } else {
-          // Personne physique — civilité obligatoire (M ou F)
-          setRadio(p("Groupe_de_boutons_radio5"), "2");
-          if (client.civilite === "M") setRadio(p("Groupe_de_boutons_radio6"), "1");
-          if (client.civilite === "F") setRadio(p("Groupe_de_boutons_radio6"), "2");
-        }
-        // v8.48.7 — Ordre Cerfa officiel : "NOM Prénom" (nom en majuscules d'abord)
-        // v8.59.2 — Pour société : raison sociale seule (client.nom déjà = raison sociale en mode Société)
-        // Fallback : si nom/prénom séparés absents, on splitte client.name (qui est "Prénom Nom" par défaut)
-        const identiteAcheteur = (() => {
-          if (isCompanyClient) {
-            // Société : raison sociale seule, en majuscules
-            return (client.nom || "").toUpperCase().trim();
-          }
-          if (client.nom || client.prenom) {
-            return `${(client.nom || "").toUpperCase()} ${client.prenom || ""}`.trim();
-          }
-          // Fallback : split "Prénom Nom" → "NOM Prénom"
-          const parts = (client.name || "").trim().split(/\s+/);
-          if (parts.length >= 2) {
-            const nom = parts[parts.length - 1];
-            const prenom = parts.slice(0, -1).join(" ");
-            return `${nom.toUpperCase()} ${prenom}`.trim();
-          }
-          return client.name || "";
-        })();
-        setText(p("txt_IdentitéAcheteur"), identiteAcheteur);
-        // v8.59.2 — SIRET obligatoire pour société, préservé pour particulier si renseigné
-        if (client.siren) setText(p("num_SiretAcheteur"), String(client.siren).replace(/\s/g, ""));
-        setText(p("num_VoieAdresseAcheteur"), cA.num);
-        setText(p("txt_ExtensionAdresseAcheteur"), cA.ext);
-        setText(p("txt_TypeVoieAdresseAcheteur"), cA.type);
-        setText(p("txt_NomVoieAdresseAcheteur"), cA.nom);
-        setText(p("num_CodePostalAdresseAcheteur"), cA.cp);
-        setText(p("txt_CommuneAdresseAcheteur"), cA.ville);
-        setCheck(p("ckb_ValidationDéclarationA1"));
-        setCheck(p("ckb_ValidationDéclarationA2"));
-        setText(p("txt_LieuDéclaration2"), dA.ville);
-        setText(p("txt_dateDéclaration"), dateJ);
-      }
-
-      const filledBytes = await pdfDoc.save();
-      const blob = new Blob([filledBytes], { type: "application/pdf" });
-      setPdfUrl(URL.createObjectURL(blob));
+      const bytes = await GENERATORS[key]();
+      setUrl(key, URL.createObjectURL(new Blob([bytes], { type: "application/pdf" })));
     } catch (err) {
       console.error("Erreur Cerfa:", err);
-      alert("Erreur Cerfa : " + err.message);
+      setError(err?.message || String(err));
     } finally {
       setLoading(false);
     }
   };
 
   React.useEffect(() => {
-    generatePdf();
+    generate(tab);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
+
+  React.useEffect(() => {
     // Si c'est la PREMIÈRE génération (pas de date sauvegardée sur l'order),
     // on persiste maintenant la date+heure pour qu'elles restent stables.
     if (!order.cession_date && onUpdateOrder) {
@@ -5372,24 +5399,34 @@ function CessionDoc({ order, dealer, vehicles, clients, onUpdateOrder, onClose }
   }, []);
 
   // Bouton "Mettre à jour la date" : remet la date à aujourd'hui, sauvegarde,
-  // et regénère le PDF avec la nouvelle date.
+  // et regénère les documents avec la nouvelle date.
   const refreshDate = () => {
-    if (!window.confirm(`La date actuelle du Cerfa est ${cessionDate} à ${cessionHeure}.\n\nLa remplacer par la date d'aujourd'hui (${today()}) ?`)) return;
+    if (!window.confirm(`La date actuelle des Cerfa est ${cessionDate} à ${cessionHeure}.\n\nLa remplacer par la date d'aujourd'hui (${today()}) ?`)) return;
     const newDate = today();
     const newHeure = new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
     setCessionDate(newDate);
     setCessionHeure(newHeure);
     if (onUpdateOrder) onUpdateOrder({ ...order, cession_date: newDate, cession_heure: newHeure });
+    // Les trois documents portent la date : on repart de zéro.
+    setUrls({});
     // Petit délai pour laisser React mettre à jour le state avant regénération
-    setTimeout(() => generatePdf(), 50);
+    setTimeout(() => generate(tab, true), 50);
   };
+
+  const TABS = [
+    { key: "cession", label: "Cession", cerfa: "15776", file: "Cession" },
+    { key: "mandat",  label: "Mandat",  cerfa: "13757", file: "Mandat" },
+    { key: "immat",   label: "Carte grise", cerfa: "13750", file: "Carte-grise" },
+  ];
+  const current = TABS.find(t => t.key === tab);
+  const pdfUrl = urls[tab];
 
   return (
     <div className="modal-bg" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal" style={{ maxWidth: 1000, width: "98vw", height: "92vh", display: "flex", flexDirection: "column" }}>
         <div className="modal-hd" style={{ flexShrink: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12, flex: 1, minWidth: 0 }}>
-            <span className="modal-title">Cerfa 15776 — Cession {v.plate || ""}</span>
+            <span className="modal-title">Cerfa {current.cerfa} — {current.label} {v.plate || ""}</span>
             <span style={{ fontSize: 11, color: "var(--muted)", fontFamily: "DM Mono, monospace", whiteSpace: "nowrap" }}>
               📅 {cessionDate} · {cessionHeure}
             </span>
@@ -5403,13 +5440,23 @@ function CessionDoc({ order, dealer, vehicles, clients, onUpdateOrder, onClose }
                   title="Remplacer par la date du jour"
                   style={{ fontSize: 11 }}
                 >🔄 Mettre à jour la date</button>
-                <a href={pdfUrl} download={"Cession_" + (v.plate || "vehicule") + "_" + cessionDate.replace(/\//g, "-") + ".pdf"} className="btn btn-primary btn-sm">Telecharger</a>
+                <a href={pdfUrl} download={current.file + "_" + (v.plate || "vehicule") + "_" + cessionDate.replace(/\//g, "-") + ".pdf"} className="btn btn-primary btn-sm">Telecharger</a>
                 <button className="btn btn-ghost btn-sm" onClick={() => { const w = window.open(pdfUrl, "_blank"); if (w) setTimeout(() => w.print(), 800); }}>Imprimer</button>
               </>
             )}
             <button className="close-btn" onClick={onClose}>x</button>
           </div>
         </div>
+
+        {/* Onglets — les trois CERFA du dossier, tous préremplis depuis la facture */}
+        <div className="tabs" style={{ flexShrink: 0, padding: "0 16px" }}>
+          {TABS.map(t => (
+            <div key={t.key} className={`tab${tab === t.key ? " active" : ""}`} onClick={() => setTab(t.key)}>
+              {t.label} <span style={{ fontSize: 10, color: "var(--muted)" }}>{t.cerfa}</span>
+            </div>
+          ))}
+        </div>
+
         <div style={{ flex: 1, overflow: "hidden", background: "#333", display: "flex", alignItems: "center", justifyContent: "center" }}>
           {loading ? (
             <div style={{ textAlign: "center", color: "#fff", padding: 40 }}>
@@ -5417,11 +5464,12 @@ function CessionDoc({ order, dealer, vehicles, clients, onUpdateOrder, onClose }
               <div>Generation du Cerfa...</div>
             </div>
           ) : pdfUrl ? (
-            <iframe src={pdfUrl} style={{ width: "100%", height: "100%", border: "none" }} title="Cerfa 15776" />
+            <iframe src={pdfUrl} style={{ width: "100%", height: "100%", border: "none" }} title={"Cerfa " + current.cerfa} />
           ) : (
             <div style={{ textAlign: "center", color: "#fff", padding: 40 }}>
               <div style={{ fontSize: 32, marginBottom: 12 }}>Erreur</div>
-              <button className="btn btn-primary btn-sm" style={{ marginTop: 12 }} onClick={generatePdf}>Reessayer</button>
+              {error && <div style={{ fontSize: 12, marginBottom: 12, color: "#ffb4b4" }}>{error}</div>}
+              <button className="btn btn-primary btn-sm" style={{ marginTop: 12 }} onClick={() => generate(tab, true)}>Reessayer</button>
             </div>
           )}
         </div>
@@ -5727,7 +5775,8 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
   const [tab, setTabLocal] = useState("all");
   const [modal, setModal] = useState(null);
   const [print, setPrint] = useState(null);
-  const [cession, setCession] = useState(null);
+  // Commande dont on ouvre les Cerfa (cession, mandat, carte grise)
+  const [cerfaOrder, setCerfaOrder] = useState(null);
   const [payment, setPayment] = useState(null);
   // v8.61.1 — Popup avertissement bypass PDP en B2B avant PaymentModal
   const [paymentWarning, setPaymentWarning] = useState(null);
@@ -6017,8 +6066,8 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
     <div className="page">
       {modal && <OrderForm order={modal === "new" ? null : modal} vehicles={vehicles} onSave={save} onClose={() => setModal(null)} apiKey={apiKey} clients={clients} setClients={setClients} orders={orders} viewMode={viewMode} setVehiclesRaw={setVehiclesRaw} usage={usage} setUsage={setUsage} />}
       {print && <PrintDoc order={print} dealer={dealer} onClose={() => setPrint(null)} viewMode={viewMode} />}
-      {cession && <CessionDoc
-        order={cession}
+      {cerfaOrder && <CerfaDocs
+        order={cerfaOrder}
         dealer={dealer}
         vehicles={vehicles}
         clients={clients}
@@ -6026,9 +6075,9 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
           // Persiste la date du Cerfa sur l'order (cession_date / cession_heure)
           // pour qu'elle ne change pas à chaque réouverture.
           setOrders(orders.map(x => x.id === updated.id ? updated : x));
-          setCession(updated);
+          setCerfaOrder(updated);
         }}
-        onClose={() => setCession(null)}
+        onClose={() => setCerfaOrder(null)}
       />}
       {viewMode === "trial" && showDemoLimit && <DemoLimitModal type="orders" onClose={() => setShowDemoLimit(false)} />}
       {paymentWarning && <B2BPaymentWarningModal
@@ -6251,7 +6300,7 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
                     <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
                       <button className="btn btn-ghost btn-xs" onClick={() => setPrint(o)} title="Imprimer">🖨</button>
                       {o.type === "facture" && o.vehicle_data && (
-                        <button className="btn btn-ghost btn-xs" onClick={() => setCession(o)} title="Déclaration de cession" style={{ color: "var(--gold)" }}>📄 Cession</button>
+                        <button className="btn btn-ghost btn-xs" onClick={() => setCerfaOrder(o)} title="Cerfa du dossier : cession, mandat, carte grise" style={{ color: "var(--gold)" }}>📄 Cerfa</button>
                       )}
                       {/* En mode démo : facture validée = lecture seule */}
                       {(viewMode !== "trial" || o.type === "bc") && o.type === "bc" && (
