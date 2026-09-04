@@ -1387,10 +1387,16 @@ function mapOrderToInvoice(order, calc) {
       // dans le libellé du paiement. IOCAR, lui, affiche un bloc dédié avec la
       // plaque, le modèle et la valeur déduite : on transmet donc de quoi le
       // reproduire côté IOBILL.
+      // v8.152 — Année, kilométrage et VIN complètent la liste : la facture
+      // IOCAR les affiche, IOBILL ne pouvait pas puisqu'ils ne partaient pas.
+      // Le véhicule vendu transmet 14 champs, le repris n'en transmettait que 4.
       reprise: reprise > 0 ? {
         plate: sanitizeString(order.reprise_plate) || null,
         marque: sanitizeString(order.reprise_marque) || null,
         modele: sanitizeString(order.reprise_modele) || null,
+        annee: order.reprise_annee || null,
+        kilometrage: order.reprise_km || null,
+        vin: sanitizeString(order.reprise_vin) || null,
         valeur_cents: Math.round(reprise * 100)
       } : null
     },
