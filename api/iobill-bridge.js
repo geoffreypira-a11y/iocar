@@ -1126,11 +1126,16 @@ function buildReprisePayment(order, sign = 1) {
       ? `· ${[order.reprise_marque, order.reprise_modele].filter(Boolean).join(' ')}`
       : ''
   ].filter(Boolean).join(' '));
+  // Le libellé est court à dessein : l'annexe « Historique des paiements »
+  // d'IOBILL tronque la colonne Moyen à 60 caractères, préfixe du mode compris.
+  // Le détail complet (marque, modèle) part dans `reference` et dans
+  // vehicle_meta.reprise, où IOBILL peut le mettre en forme.
+  const plate = sanitizeString(order.reprise_plate) || '';
   return {
     amount_cents: Math.round(reprise * 100 * sign),
     method: 'other',
     paid_at: toIsoDate(order.date_facture || order.date_creation),
-    notes: 'Règlement en nature — reprise véhicule (IO CAR)',
+    notes: plate ? `Reprise véhicule ${plate}` : 'Reprise véhicule',
     reference: desc
   };
 }
@@ -1376,7 +1381,18 @@ function mapOrderToInvoice(order, calc) {
       puissance_fiscale: v.puissance_fiscale || null,    // CV fiscaux (ex: 5)
       options: sanitizeString(v.options) || null,
       // Garantie : issue de l'order (pas du véhicule)
-      garantie_mois: order.garantie_mois || 0
+      garantie_mois: order.garantie_mois || 0,
+      // v8.151 — Véhicule REPRIS. Depuis que la reprise est portée en règlement
+      // et non plus en ligne de facture, sa description n'apparaissait plus que
+      // dans le libellé du paiement. IOCAR, lui, affiche un bloc dédié avec la
+      // plaque, le modèle et la valeur déduite : on transmet donc de quoi le
+      // reproduire côté IOBILL.
+      reprise: reprise > 0 ? {
+        plate: sanitizeString(order.reprise_plate) || null,
+        marque: sanitizeString(order.reprise_marque) || null,
+        modele: sanitizeString(order.reprise_modele) || null,
+        valeur_cents: Math.round(reprise * 100)
+      } : null
     },
     // v8.39 — Les mentions sont stock\u00e9es au niveau company (saisies une fois
     // dans Param\u00e8tres > Mentions garage). On les enrichit juste ici si l'order
