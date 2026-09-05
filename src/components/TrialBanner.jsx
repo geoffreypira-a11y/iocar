@@ -1,4 +1,6 @@
 import React, { useState } from "react";
+import { PlanPicker } from "./PlanPicker.jsx";
+import { startCheckout as openStripeCheckout, DEFAULT_PLAN } from "../lib/plans.js";
 
 /**
  * v8.49.16 — TrialBanner IOCAR
@@ -7,19 +9,17 @@ import React, { useState } from "react";
  * Affiché en haut du Dashboard quand sub_status === "trialing".
  *   • Discret quand il reste > 3 jours
  *   • Alerte orange quand ≤ 3 jours
- *   • Cliquable → ouvre Stripe Checkout direct sur le plan mensuel
+ *   • Choix de la formule (mensuel / annuel) puis Stripe Checkout
  *
- * L'API /api/create-checkout-session existe déjà côté IOCAR et gère
- * la création de session. On lui envoie le priceId mensuel.
+ * v8.156 — Le bandeau n'envoyait que le plan mensuel : l'annuel, pourtant
+ * moins cher sur l'année, n'était atteignable qu'une fois l'essai expiré.
+ * Les formules et l'appel à /api/create-checkout-session vivent maintenant
+ * dans lib/plans.js, partagés avec les Paramètres et la page de paywall.
  */
-
-// v8.49.16 — Price IDs IOCAR (à synchroniser avec create-checkout-session.js)
-// TODO(env): idéalement passer par window.__IOCAR_PRICE_MONTHLY (injecté par Vite)
-//            au lieu de codes en dur, mais on garde la valeur cohérente avec l'API.
-const PRICE_MONTHLY = "price_1TzfDwGHGXxR2PvGfrExXJRv"; // 34,99 € HT/mois (Stripe: 41,98 TTC)
 
 export function TrialBanner({ garage }) {
   const [loading, setLoading] = useState(false);
+  const [plan, setPlan] = useState(DEFAULT_PLAN);
 
   if (!garage || garage.sub_status !== "trialing" || !garage.trial_ends_at) {
     return null;
@@ -37,25 +37,12 @@ export function TrialBanner({ garage }) {
 
   async function startCheckout() {
     setLoading(true);
-    try {
-      const r = await fetch("/api/create-checkout-session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          priceId: PRICE_MONTHLY,
-          email: garage.email || "",
-        }),
-      });
-      const j = await r.json();
-      if (j?.url) {
-        window.location.href = j.url;
-      } else {
-        alert(j?.error || "Erreur Stripe. Réessayez ou contactez le support.");
-      }
-    } catch (e) {
-      alert("Erreur réseau. Réessayez.");
+    const err = await openStripeCheckout(plan, garage.email);
+    if (err) {
+      alert(err);
+      setLoading(false);
     }
-    setLoading(false);
+    // Pas de setLoading(false) en cas de succès : la page part sur Stripe.
   }
 
   return (
@@ -83,6 +70,7 @@ export function TrialBanner({ garage }) {
           Souscrivez à IO Car pour continuer à gérer vos véhicules sans limite. IO BILL inclus.
         </div>
       </div>
+      <PlanPicker compact value={plan} onChange={setPlan} disabled={loading} />
       <button
         onClick={startCheckout}
         disabled={loading}
