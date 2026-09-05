@@ -1,15 +1,20 @@
 // ═══════════════════════════════════════════════════════════════════
 // Formules d'abonnement IO Car
 //
-// Les price IDs doivent rester alignés avec la whitelist ALLOWED_PRICES de
-// api/create-checkout-session.js : le serveur refuse tout autre identifiant.
-// Ils étaient jusqu'ici recopiés dans trois fichiers ; ils vivent ici.
+// v8.158 — Ce fichier ne décrit plus que ce qui s'affiche : libellé, prix,
+// badge. Les Price IDs Stripe vivent dans les variables d'environnement lues
+// par api/create-checkout-session.js (STRIPE_PRICE_MONTHLY,
+// STRIPE_PRICE_ANNUAL) ; le navigateur envoie une formule, le serveur choisit
+// le price. Un tarif se corrige donc dans Vercel, sans redéploiement, et rien
+// d'arbitraire ne peut atteindre Stripe.
+//
+// ⚠ Les montants ci-dessous sont ceux annoncés au client : ils doivent
+// correspondre aux prix Stripe configurés.
 // ═══════════════════════════════════════════════════════════════════
 
 export const PLANS = {
   monthly: {
     key: "monthly",
-    priceId: "price_1TzfDwGHGXxR2PvGfrExXJRv", // 34,99 € HT / mois (41,98 TTC)
     label: "Mensuel",
     price: "34,99 €",
     unit: "HT/mois",
@@ -18,8 +23,6 @@ export const PLANS = {
   },
   annual: {
     key: "annual",
-    priceId: "price_1UCQuhGHGXxR2PvGuqY4w7mJ", // 349,90 € HT / an — prix Stripe refait en v8.158,
-    // l'ancien (price_1TzfEn…) était facturé au mois malgré son libellé annuel.
     label: "Annuel",
     price: "349,90 €",
     unit: "HT/an",
@@ -44,7 +47,7 @@ export async function startCheckout(planKey, email) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        priceId: plan.priceId,
+        plan: plan.key,
         email: email || "",
         successUrl: window.location.origin + "/?subscribed=1",
         cancelUrl: window.location.origin + "/?canceled=1",

@@ -9,15 +9,25 @@ import { setCors } from './_lib/auth.js';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-// Liste des Price IDs autorisés — on whitelist par sécurité
-// Un utilisateur ne peut pas envoyer un autre price_id arbitraire
-const ALLOWED_PRICES = new Set([
-  'price_1TzfDwGHGXxR2PvGfrExXJRv',  // 41,98 € TTC / mois (34,98 HT)
-  'price_1UCQuhGHGXxR2PvGuqY4w7mJ',  // 419,88 € TTC / an (349,90 HT)
-  // L'ancien price annuel (price_1TzfEn…) est retiré : il était facturé au
-  // mois. Les abonnements déjà créés dessus continuent de vivre chez Stripe,
-  // la whitelist ne gouverne que les nouvelles souscriptions.
-]);
+// v8.158 — Les Price IDs viennent des variables d'environnement Vercel, comme
+// le price « metered » : un tarif se corrige alors dans le tableau de bord,
+// sans redéploiement, et les identifiants de test et de production peuvent
+// différer d'un environnement à l'autre — ce qu'un code en dur interdisait.
+//
+//   STRIPE_PRICE_MONTHLY  price du mensuel
+//   STRIPE_PRICE_ANNUAL   price de l'annuel
+//
+// Les valeurs par défaut ci-dessous gardent l'app fonctionnelle tant que les
+// variables ne sont pas renseignées.
+const PRICES = {
+  monthly: process.env.STRIPE_PRICE_MONTHLY || 'price_1TzfDwGHGXxR2PvGfrExXJRv',
+  annual: process.env.STRIPE_PRICE_ANNUAL || 'price_1UCQuhGHGXxR2PvGuqY4w7mJ',
+};
+
+// Le client envoie une FORMULE, jamais un price : rien d'arbitraire ne peut
+// donc atteindre Stripe. `priceId` reste accepté pour compatibilité, à
+// condition de faire partie des prix configurés.
+const ALLOWED_PRICES = new Set(Object.values(PRICES));
 
 export default async function handler(req, res) {
   setCors(res);
@@ -25,14 +35,23 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
-    const { priceId, email, successUrl, cancelUrl } = req.body || {};
+    const { plan, priceId: legacyPriceId, email, successUrl, cancelUrl } = req.body || {};
 
-    // Validation basique
-    if (!priceId || !email) {
-      return res.status(400).json({ error: 'priceId et email requis' });
+    // Formule demandée → price configuré. On accepte encore un priceId brut
+    // (anciens clients), tant qu'il fait partie des prix configurés.
+    let priceId = null;
+    if (plan) {
+      priceId = PRICES[plan] || null;
+      if (!priceId) return res.status(400).json({ error: `Formule inconnue : ${plan}` });
+    } else if (legacyPriceId) {
+      if (!ALLOWED_PRICES.has(legacyPriceId)) {
+        return res.status(400).json({ error: 'priceId non autorisé' });
+      }
+      priceId = legacyPriceId;
     }
-    if (!ALLOWED_PRICES.has(priceId)) {
-      return res.status(400).json({ error: 'priceId non autorisé' });
+
+    if (!priceId || !email) {
+      return res.status(400).json({ error: 'plan (ou priceId) et email requis' });
     }
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
       return res.status(400).json({ error: 'email invalide' });
@@ -87,6 +106,12 @@ export default async function handler(req, res) {
 
   } catch (e) {
     console.error('create-checkout-session:', e);
-    return res.status(500).json({ error: e.message || 'Erreur serveur' });
+    // Stripe renvoie « No such price » quand l'identifiant n'existe pas dans le
+    // mode de la clé utilisée : un price créé en test avec une clé live, par
+    // exemple. On le dit, plutôt que de laisser un « Erreur serveur » opaque.
+    const msg = /no such price/i.test(e?.message || '')
+      ? `Tarif introuvable chez Stripe (${e.message}). Vérifiez que le price appartient au même mode (test ou production) que la clé STRIPE_SECRET_KEY.`
+      : (e.message || 'Erreur serveur');
+    return res.status(500).json({ error: msg });
   }
 }
