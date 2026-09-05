@@ -825,6 +825,55 @@ function getQuotaStatus(usage) {
 }
 
 
+// v8.161 — Récapitulatif de consommation des recherches de plaque.
+// Le compteur vit mois par mois dans garages.api_usage ({"2026-09": 12, …}),
+// et le quota de 10 se remet à zéro chaque mois calendaire quelle que soit la
+// formule. Stripe, lui, ne facture les dépassements qu'à la fin de la période :
+// le mois pour un abonné mensuel, l'année pour un abonné annuel — d'où le
+// second cumul, sans quoi un abonné annuel ne verrait jamais ce qui court.
+function getUsageSummary(usage, dealer) {
+  const now = new Date();
+  const monthKey = now.toISOString().slice(0, 7);
+  const usedMonth = usage?.[monthKey] || 0;
+  const overMonth = Math.max(0, usedMonth - QUOTA_FREE);
+
+  // Début de la période facturée : le dernier anniversaire de la souscription
+  // pour un annuel, le mois en cours sinon.
+  let start = new Date(now.getFullYear(), now.getMonth(), 1);
+  if (dealer?.plan === "annual") {
+    const sub = dealer?.subscribed_at ? new Date(dealer.subscribed_at) : null;
+    if (sub && !isNaN(sub.getTime())) {
+      start = sub;
+      for (;;) {
+        const next = new Date(start);
+        next.setFullYear(next.getFullYear() + 1);
+        if (next > now) break;
+        start = next;
+      }
+    } else {
+      start = new Date(now.getFullYear() - 1, now.getMonth(), 1);
+    }
+  }
+
+  let overPeriod = 0;
+  const cursor = new Date(start.getFullYear(), start.getMonth(), 1);
+  while (cursor <= now) {
+    const k = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}`;
+    overPeriod += Math.max(0, (usage?.[k] || 0) - QUOTA_FREE);
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
+
+  return {
+    usedMonth,
+    overMonth,
+    montantMonth: overMonth * COST_EXTRA,
+    periodStart: start,
+    overPeriod,
+    montantPeriod: overPeriod * COST_EXTRA,
+  };
+}
+
+
 // v8.61.6 — Vérité "payé" UNIFIÉE pour une facture.
 // En B2B, le paiement arrive via le circuit SUPER PDP (fr:211/fr:212) OU est
 // marqué payé côté IOBILL : dans ces cas il n'y a AUCUN paiement local dans
@@ -7439,7 +7488,7 @@ function SettingsPage({ token, dealer, setDealer, usage, isRealAdmin }) {
       </div>
 
       {/* SECTION MON ABONNEMENT */}
-      <SubscriptionSection dealer={dealer} />
+      <SubscriptionSection dealer={dealer} usage={usage} />
 
       {/* SYSTÈME DE TICKETS */}
       <TicketSystem dealer={form} />
@@ -7454,7 +7503,7 @@ function SettingsPage({ token, dealer, setDealer, usage, isRealAdmin }) {
    - Annuler son abonnement (effectif à la fin de la période payée)
    - Voir et télécharger ses factures Stripe
 ═══════════════════════════════════════════════════════════════ */
-function SubscriptionSection({ dealer }) {
+function SubscriptionSection({ dealer, usage }) {
   const [loading, setLoading] = useState(false);
   // v8.156 — Formule choisie pour une première souscription depuis les
   // Paramètres. Une fois abonné, le changement de formule passe par le
@@ -7514,6 +7563,49 @@ function SubscriptionSection({ dealer }) {
           </div>
         )}
       </div>
+
+      {/* v8.161 — Recherches de plaque : ce qui court en plus du forfait.
+          Le quota se remet à zéro chaque mois, mais un abonné annuel n'est
+          facturé qu'au renouvellement : il doit voir le cumul de sa période. */}
+      {(() => {
+        const u = getUsageSummary(usage, dealer);
+        const annuel = dealer?.plan === "annual";
+        return (
+          <div style={{ padding: "12px 14px", background: "var(--card)", border: "1px solid var(--border2)", borderRadius: 10, marginBottom: 16 }}>
+            <div style={{ fontSize: 10, letterSpacing: 1, textTransform: "uppercase", color: "var(--muted)", marginBottom: 8 }}>
+              Recherches de plaque
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14 }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>
+                  Ce mois-ci : {u.usedMonth} / {QUOTA_FREE} gratuites
+                </div>
+                <div style={{ fontSize: 11, color: u.overMonth > 0 ? "var(--orange)" : "var(--muted)", marginTop: 3 }}>
+                  {u.overMonth > 0
+                    ? `${u.overMonth} au-delà du quota · ${u.montantMonth.toFixed(2)} € HT`
+                    : "Aucun dépassement"}
+                </div>
+              </div>
+              {annuel && (
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>
+                    Période en cours : {u.montantPeriod.toFixed(2)} € HT
+                  </div>
+                  <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 3 }}>
+                    {u.overPeriod} recherche{u.overPeriod > 1 ? "s" : ""} hors quota depuis le {u.periodStart.toLocaleDateString("fr-FR")}
+                  </div>
+                </div>
+              )}
+            </div>
+            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 10, lineHeight: 1.5 }}>
+              {QUOTA_FREE} recherches gratuites par mois, puis {COST_EXTRA.toFixed(2)} € HT l'unité.
+              {annuel
+                ? " Les dépassements s'accumulent et sont facturés en une fois au renouvellement de votre abonnement annuel."
+                : " Les dépassements sont facturés sur votre prochaine échéance mensuelle."}
+            </div>
+          </div>
+        );
+      })()}
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
         {hasStripe ? (
