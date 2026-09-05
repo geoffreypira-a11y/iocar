@@ -36,6 +36,8 @@ Dans Vercel → Project Settings → Environment Variables, ajouter :
 | `SUPABASE_SERVICE_ROLE_KEY` | `eyJ...` (clé service_role) | Dashboard Supabase → Project Settings → API → **service_role** (à garder secrète) |
 | `STRIPE_SECRET_KEY` | `sk_live_...` | Dashboard Stripe → Developers → API keys → Secret key |
 | `STRIPE_WEBHOOK_SECRET` | `whsec_...` | Voir étape 4 ci-dessous |
+| `STRIPE_PRICE_MONTHLY` | `price_...` | Dashboard Stripe → Produits → formule mensuelle (même mode que la clé secrète) |
+| `STRIPE_PRICE_ANNUAL` | `price_...` | Dashboard Stripe → Produits → formule annuelle (même mode que la clé secrète) |
 | `RAPIDAPI_KEY` | votre clé RapidAPI | Dashboard RapidAPI → mes applications (générez-en une **nouvelle**, l'ancienne est compromise) |
 | `APP_ORIGIN` | `https://votre-domaine.vercel.app` (ou votre domaine custom) | Pour CORS |
 

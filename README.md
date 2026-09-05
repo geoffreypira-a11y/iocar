@@ -22,6 +22,14 @@ Dans vercel.com → votre projet → Settings → Environment Variables :
 - `SUPABASE_SERVICE_KEY` → clé service_role de Supabase
 - `STRIPE_SECRET_KEY` → sk_live_... de Stripe
 - `STRIPE_WEBHOOK_SECRET` → whsec_... de Stripe (après création du webhook)
+- `STRIPE_PRICE_MONTHLY` → price_... de la formule mensuelle
+- `STRIPE_PRICE_ANNUAL` → price_... de la formule annuelle
+- `STRIPE_METERED_PRICE_ID` → price_... des recherches de plaque au-delà du quota
+
+Les trois `STRIPE_PRICE_*` doivent appartenir au **même mode** (test ou
+production) que `STRIPE_SECRET_KEY`, sans quoi Stripe répond « No such price ».
+Changer de tarif se fait ici, sans redéploiement ; les montants affichés dans
+l'app vivent eux dans `src/lib/plans.js` et doivent rester alignés.
 
 ### 5. Configurer le webhook Stripe
 1. stripe.com → Developers → Webhooks → Add endpoint
