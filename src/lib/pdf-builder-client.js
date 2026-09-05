@@ -345,6 +345,7 @@ export async function buildDocumentPdf({ docType, doc, lines, company }) {
       if (vm.date_mise_en_circulation) infosLeft.push(`1ère circ. : ${vm.date_mise_en_circulation}`);
       if (vm.kilometrage) infosLeft.push(`Kilométrage : ${Number(vm.kilometrage).toLocaleString("fr-FR")} km`);
       if (vm.genre) infosLeft.push(`Genre : ${vm.genre}`);
+      if (vm.livre_police) infosLeft.push(`Livre de police : ${vm.livre_police}`);
       if (vm.options) infosLeft.push(`Options : ${vm.options}`);
       if (vm.vin) infosRight.push(`VIN : ${vm.vin}`);
       if (vm.carburant) infosRight.push(`Carburant : ${vm.carburant}`);

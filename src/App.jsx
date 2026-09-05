@@ -877,6 +877,21 @@ const STATUTS_FLEET = {
   atelier:    { label: "Atelier",     cls: "badge-orange" },
 };
 
+// v8.155 — Numéro d'ordre du véhicule au livre de police, tel qu'il s'écrit sur
+// les documents : « VO#0007 ». Le registre est une table à part (livre_police),
+// on retrouve l'entrée par véhicule puis, à défaut, par plaque — mêmes clés que
+// la flotte (cf. FleetPage, badge « Absent du LP »).
+function livrePoliceRef(order, livrePolice) {
+  if (!order || !Array.isArray(livrePolice)) return "";
+  const plate = order.vehicle_plate || order.vehicle_data?.plate || "";
+  const entry = livrePolice.find(e =>
+    (order.vehicle_id && e.vehicle_id === order.vehicle_id) ||
+    (plate && e.immat && String(e.immat).toUpperCase() === String(plate).toUpperCase())
+  );
+  const num = parseInt(entry?.num_ordre, 10);
+  return Number.isFinite(num) ? `VO#${String(num).padStart(4, "0")}` : "";
+}
+
 function calcOrder(o) {
   const prixVente = parseFloat(o.prix_ht) || 0; // C'est en fait le prix de vente TTC
   const remAmt = parseFloat(o.remise_ttc) || 0;
@@ -4673,7 +4688,7 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
 /* ═══════════════════════════════════════════════════════════════
    PRINT DOCUMENT
 ═══════════════════════════════════════════════════════════════ */
-function PrintDoc({ order, dealer, onClose, viewMode }) {
+function PrintDoc({ order, dealer, onClose, viewMode, livrePolice }) {
   const c = calcOrder(order);
   const [sigVendeur, setSigVendeur] = useState(null);
   const [sigClient, setSigClient] = useState(null);
@@ -4843,6 +4858,9 @@ function PrintDoc({ order, dealer, onClose, viewMode }) {
               if (vd.date_mise_en_circulation) infosLeft.push(`1ère circ. : ${vd.date_mise_en_circulation}`);
               if (vd.kilometrage) infosLeft.push(`Kilométrage : ${Number(vd.kilometrage).toLocaleString("fr-FR")} km`);
               if (vd.genre) infosLeft.push(`Genre : ${vd.genre}`);
+              // v8.155 — Référence du véhicule au livre de police.
+              const lpRef = livrePoliceRef(order, livrePolice);
+              if (lpRef) infosLeft.push(`Livre de police : ${lpRef}`);
               const optionsStr = Array.isArray(vd.options) ? vd.options.join(", ") : (vd.options || "");
               if (optionsStr) infosLeft.push(`Options : ${optionsStr}`);
               if (vd.vin) infosRight.push(`VIN : ${vd.vin}`);
@@ -5809,7 +5827,7 @@ function PVLivraisonDoc({ entry, dealer, onSave, onClose }) {
   );
 }
 
-function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKey, usage, setUsage, clients, setClients, viewMode, token }) {
+function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKey, usage, setUsage, clients, setClients, viewMode, token, livrePolice }) {
   const [tab, setTabLocal] = useState("all");
   const [modal, setModal] = useState(null);
   const [print, setPrint] = useState(null);
@@ -6103,7 +6121,7 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
   return (
     <div className="page">
       {modal && <OrderForm order={modal === "new" ? null : modal} vehicles={vehicles} onSave={save} onClose={() => setModal(null)} apiKey={apiKey} clients={clients} setClients={setClients} orders={orders} viewMode={viewMode} setVehiclesRaw={setVehiclesRaw} usage={usage} setUsage={setUsage} />}
-      {print && <PrintDoc order={print} dealer={dealer} onClose={() => setPrint(null)} viewMode={viewMode} />}
+      {print && <PrintDoc order={print} dealer={dealer} onClose={() => setPrint(null)} viewMode={viewMode} livrePolice={livrePolice} />}
       {cerfaOrder && <CerfaDocs
         order={cerfaOrder}
         dealer={dealer}
@@ -8527,7 +8545,7 @@ const STATUTS_CLIENT = {
   inactif:     { label: "Inactif",        cls: "badge-muted",   icon: "💤" },
 };
 
-function CrmPage({ clients, setClients, orders, viewMode, dealer, setDealer, token }) {
+function CrmPage({ clients, setClients, orders, viewMode, dealer, setDealer, token, livrePolice }) {
   const [search, setSearch]         = useState("");
   const [filterStatut, setFilter]   = useState("all");
   const [modal, setModal]           = useState(null);
@@ -8590,7 +8608,7 @@ function CrmPage({ clients, setClients, orders, viewMode, dealer, setDealer, tok
 
   return (
     <div className="page">
-      {fiche && <CrmFiche client={fiche} orders={clientOrders(fiche.id)} onEdit={() => setModal(fiche)} onClose={() => setFiche(null)} onSave={save} dealer={dealer} setDealer={setDealer} viewMode={viewMode} />}
+      {fiche && <CrmFiche client={fiche} orders={clientOrders(fiche.id)} onEdit={() => setModal(fiche)} onClose={() => setFiche(null)} onSave={save} dealer={dealer} setDealer={setDealer} viewMode={viewMode} livrePolice={livrePolice} />}
       {modal && <CrmModal client={modal === "add" ? null : modal} onSave={save} onClose={() => setModal(null)} />}
       {pendingDelete && (
         <ConfirmModal
@@ -8791,7 +8809,7 @@ function CrmPage({ clients, setClients, orders, viewMode, dealer, setDealer, tok
 }
 
 /* ── Fiche détail client ── */
-function CrmFiche({ client, orders, onEdit, onClose, onSave, dealer, setDealer, viewMode }) {
+function CrmFiche({ client, orders, onEdit, onClose, onSave, dealer, setDealer, viewMode, livrePolice }) {
   const [newAnnot, setNewAnnot] = useState("");
   const [annotMode, setAnnotMode] = useState(false);
   const [pendingDeleteAnnot, setPendingDeleteAnnot] = useState(null);
@@ -8889,7 +8907,7 @@ function CrmFiche({ client, orders, onEdit, onClose, onSave, dealer, setDealer, 
       )}
       {/* Aperçu PDF du document cliqué (BC / Facture / Avoir).
           Se superpose à la fiche client — la fermeture revient à la fiche. */}
-      {print && <PrintDoc order={print} dealer={dealer} onClose={() => setPrint(null)} viewMode={viewMode} />}
+      {print && <PrintDoc order={print} dealer={dealer} onClose={() => setPrint(null)} viewMode={viewMode} livrePolice={livrePolice} />}
       <div className="modal modal-lg" style={{ display: "flex", flexDirection: "column", maxHeight: "92vh" }}>
         <div className="modal-hd" style={{ flexShrink: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -12020,8 +12038,8 @@ export default function App() {
             {!isRealDemo && viewMode === "subscriber" && <TrialBanner garage={garage} />}
             {tab === "dashboard"   && <Dashboard vehicles={activeVehicles} setVehicles={setVehiclesRaw} orders={activeOrders} setTab={setTab} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} livrePolice={livrePolice} dealer={dealer} setDealer={setDealerRaw} />}
             {tab === "fleet"       && <FleetPage vehicles={activeVehicles} setVehicles={setVehiclesRaw} orders={activeOrders} setOrders={setOrdersRaw} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} livrePolice={activeLivrePolice} setLivrePolice={setLivrePoliceRaw} viewMode={viewMode} garageId={garageId} dealer={dealer} token={token} />}
-            {tab === "orders"      && <OrdersPage orders={activeOrders} setOrders={setOrdersRaw} vehicles={activeVehicles} setVehiclesRaw={setVehiclesRaw} dealer={dealer} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} clients={activeClients} setClients={setClientsRaw} viewMode={viewMode} token={token} />}
-            {tab === "crm"         && <CrmPage clients={activeClients} setClients={setClientsRaw} orders={activeOrders} viewMode={viewMode} dealer={dealer} setDealer={setDealerRaw} token={token} />}
+            {tab === "orders"      && <OrdersPage orders={activeOrders} setOrders={setOrdersRaw} vehicles={activeVehicles} setVehiclesRaw={setVehiclesRaw} dealer={dealer} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} clients={activeClients} setClients={setClientsRaw} viewMode={viewMode} token={token} livrePolice={activeLivrePolice} />}
+            {tab === "crm"         && <CrmPage clients={activeClients} setClients={setClientsRaw} orders={activeOrders} viewMode={viewMode} dealer={dealer} setDealer={setDealerRaw} token={token} livrePolice={activeLivrePolice} />}
             {tab === "livrepolice" && (viewMode === "trial" ? (
               <div className="page" style={{ textAlign: "center", paddingTop: 80 }}>
                 <div style={{ fontSize: 48, marginBottom: 16 }}>📋</div>
