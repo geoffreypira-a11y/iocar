@@ -24,7 +24,14 @@ Dans vercel.com → votre projet → Settings → Environment Variables :
 - `STRIPE_WEBHOOK_SECRET` → whsec_... de Stripe (après création du webhook)
 - `STRIPE_PRICE_MONTHLY` → price_... de la formule mensuelle
 - `STRIPE_PRICE_ANNUAL` → price_... de la formule annuelle
-- `STRIPE_METERED_PRICE_ID` → price_... des recherches de plaque au-delà du quota
+- `STRIPE_METERED_PRICE_ID` → price_... des recherches de plaque au-delà du quota, **mensuel**
+- `STRIPE_METERED_PRICE_ANNUAL` → le même price metered, en version **annuelle**
+
+Stripe refuse un abonnement dont les lignes n'ont pas la même périodicité : le
+price metered doit donc exister en mensuel ET en annuel, chacun servi avec la
+formule correspondante. Sans le price metered d'une périodicité, l'abonnement
+part sans ligne de consommation — les dépassements de quota ne sont alors pas
+facturés à cet abonné.
 
 Les trois `STRIPE_PRICE_*` doivent appartenir au **même mode** (test ou
 production) que `STRIPE_SECRET_KEY`, sans quoi Stripe répond « No such price ».

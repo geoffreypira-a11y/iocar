@@ -38,6 +38,8 @@ Dans Vercel → Project Settings → Environment Variables, ajouter :
 | `STRIPE_WEBHOOK_SECRET` | `whsec_...` | Voir étape 4 ci-dessous |
 | `STRIPE_PRICE_MONTHLY` | `price_...` | Dashboard Stripe → Produits → formule mensuelle (même mode que la clé secrète) |
 | `STRIPE_PRICE_ANNUAL` | `price_...` | Dashboard Stripe → Produits → formule annuelle (même mode que la clé secrète) |
+| `STRIPE_METERED_PRICE_ID` | `price_...` | Recherches de plaque hors quota, périodicité **mensuelle** |
+| `STRIPE_METERED_PRICE_ANNUAL` | `price_...` | Le même, périodicité **annuelle** — Stripe interdit de mêler deux périodicités dans un abonnement |
 | `RAPIDAPI_KEY` | votre clé RapidAPI | Dashboard RapidAPI → mes applications (générez-en une **nouvelle**, l'ancienne est compromise) |
 | `APP_ORIGIN` | `https://votre-domaine.vercel.app` (ou votre domaine custom) | Pour CORS |
 

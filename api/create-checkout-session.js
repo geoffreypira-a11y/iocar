@@ -24,6 +24,24 @@ const PRICES = {
   annual: process.env.STRIPE_PRICE_ANNUAL || 'price_1UCQuhGHGXxR2PvGuqY4w7mJ',
 };
 
+// v8.159 — Le price « metered » des recherches de plaque doit avoir LA MÊME
+// périodicité que la formule : Stripe refuse un abonnement mélangeant deux
+// intervalles (« Checkout does not support multiple prices with different
+// billing intervals »). C'est ce qui faisait échouer toute souscription
+// annuelle, et sans doute pourquoi le premier « tarif annuel » avait fini
+// créé au mois.
+//
+//   STRIPE_METERED_PRICE_ID      price metered mensuel (nom historique)
+//   STRIPE_METERED_PRICE_ANNUAL  price metered annuel
+//
+// Sans price metered pour la périodicité demandée, l'abonnement part sans
+// ligne de consommation : mieux vaut une souscription qui aboutit qu'un
+// paiement impossible. Le manque est journalisé.
+const METERED_PRICES = {
+  monthly: process.env.STRIPE_METERED_PRICE_ID || null,
+  annual: process.env.STRIPE_METERED_PRICE_ANNUAL || null,
+};
+
 // Le client envoie une FORMULE, jamais un price : rien d'arbitraire ne peut
 // donc atteindre Stripe. `priceId` reste accepté pour compatibilité, à
 // condition de faire partie des prix configurés.
@@ -40,14 +58,18 @@ export default async function handler(req, res) {
     // Formule demandée → price configuré. On accepte encore un priceId brut
     // (anciens clients), tant qu'il fait partie des prix configurés.
     let priceId = null;
+    let planKey = null;
     if (plan) {
       priceId = PRICES[plan] || null;
       if (!priceId) return res.status(400).json({ error: `Formule inconnue : ${plan}` });
+      planKey = plan;
     } else if (legacyPriceId) {
       if (!ALLOWED_PRICES.has(legacyPriceId)) {
         return res.status(400).json({ error: 'priceId non autorisé' });
       }
       priceId = legacyPriceId;
+      // On retrouve la formule pour choisir le price metered de même périodicité.
+      planKey = Object.keys(PRICES).find(k => PRICES[k] === legacyPriceId) || null;
     }
 
     if (!priceId || !email) {
@@ -61,20 +83,25 @@ export default async function handler(req, res) {
     const origin = process.env.APP_ORIGIN || 'https://app.iocar.online';
 
     // ─── METERED BILLING — Recherches plaque supplémentaires ──────────────
-    // On ajoute automatiquement le price metered (0,20 € / unité) à TOUS les
-    // abonnements créés. L'abonné ne paiera que ce qu'il consomme au-delà des
-    // 10 recherches gratuites/mois (le quota est géré côté serveur dans
-    // lookup-plate.js qui envoie un usage record à Stripe via createUsageRecord).
+    // L'abonné ne paie que ce qu'il consomme au-delà des 10 recherches
+    // gratuites/mois (le quota est tenu côté serveur dans lookup-plate.js, qui
+    // envoie un usage record à Stripe).
     //
-    // Si STRIPE_METERED_PRICE_ID n'est pas défini en env, on ne l'ajoute pas
-    // (mode dégradé pour rétrocompatibilité, mais à éviter en production).
+    // v8.159 — Le price metered doit partager la périodicité de la formule,
+    // sans quoi Stripe rejette la session. On prend donc celui de la formule
+    // retenue ; à défaut, l'abonnement part sans ligne de consommation.
     const lineItems = [{ price: priceId, quantity: 1 }];
-    const meteredPriceId = process.env.STRIPE_METERED_PRICE_ID;
+    const meteredPriceId = planKey ? METERED_PRICES[planKey] : null;
     if (meteredPriceId) {
       // ⚠ Pas de "quantity" pour un price metered — Stripe exige son absence
       lineItems.push({ price: meteredPriceId });
     } else {
-      console.warn('⚠ STRIPE_METERED_PRICE_ID manquant — les recherches au-delà du quota ne seront pas facturées');
+      console.warn(
+        `⚠ Pas de price metered pour la formule « ${planKey || 'inconnue'} » — ` +
+        'les recherches au-delà du quota ne seront pas facturées à cet abonné. ' +
+        'Créez le price (même périodicité que la formule) et renseignez ' +
+        (planKey === 'annual' ? 'STRIPE_METERED_PRICE_ANNUAL' : 'STRIPE_METERED_PRICE_ID') + '.'
+      );
     }
 
     // Création de la session Checkout côté serveur
@@ -109,9 +136,12 @@ export default async function handler(req, res) {
     // Stripe renvoie « No such price » quand l'identifiant n'existe pas dans le
     // mode de la clé utilisée : un price créé en test avec une clé live, par
     // exemple. On le dit, plutôt que de laisser un « Erreur serveur » opaque.
-    const msg = /no such price/i.test(e?.message || '')
-      ? `Tarif introuvable chez Stripe (${e.message}). Vérifiez que le price appartient au même mode (test ou production) que la clé STRIPE_SECRET_KEY.`
-      : (e.message || 'Erreur serveur');
+    let msg = e.message || 'Erreur serveur';
+    if (/no such price/i.test(msg)) {
+      msg = `Tarif introuvable chez Stripe (${msg}). Vérifiez que le price appartient au même mode (test ou production) que la clé STRIPE_SECRET_KEY.`;
+    } else if (/different billing intervals/i.test(msg)) {
+      msg = 'Les deux lignes de l\'abonnement n\'ont pas la même périodicité : le price des recherches de plaque doit être mensuel pour la formule mensuelle, annuel pour la formule annuelle (STRIPE_METERED_PRICE_ID / STRIPE_METERED_PRICE_ANNUAL).';
+    }
     return res.status(500).json({ error: msg });
   }
 }
