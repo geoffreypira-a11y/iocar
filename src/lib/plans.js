@@ -18,7 +18,8 @@ export const PLANS = {
   },
   annual: {
     key: "annual",
-    priceId: "price_1TzfEnGHGXxR2PvGOrZaiAxA", // 349,90 € HT / an (419,88 TTC)
+    priceId: "price_1UCQuhGHGXxR2PvGuqY4w7mJ", // 349,90 € HT / an — prix Stripe refait en v8.158,
+    // l'ancien (price_1TzfEn…) était facturé au mois malgré son libellé annuel.
     label: "Annuel",
     price: "349,90 €",
     unit: "HT/an",

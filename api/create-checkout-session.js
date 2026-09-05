@@ -13,7 +13,10 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 // Un utilisateur ne peut pas envoyer un autre price_id arbitraire
 const ALLOWED_PRICES = new Set([
   'price_1TzfDwGHGXxR2PvGfrExXJRv',  // 41,98 € TTC / mois (34,98 HT)
-  'price_1TzfEnGHGXxR2PvGOrZaiAxA',  // 419,88 € TTC / an (349,90 HT)
+  'price_1UCQuhGHGXxR2PvGuqY4w7mJ',  // 419,88 € TTC / an (349,90 HT)
+  // L'ancien price annuel (price_1TzfEn…) est retiré : il était facturé au
+  // mois. Les abonnements déjà créés dessus continuent de vivre chez Stripe,
+  // la whitelist ne gouverne que les nouvelles souscriptions.
 ]);
 
 export default async function handler(req, res) {
