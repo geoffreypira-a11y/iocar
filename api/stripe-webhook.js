@@ -44,8 +44,13 @@ export default async function handler(req, res) {
         const email = s.customer_details?.email || s.customer_email;
         if (!email) break;
 
-        // Détection du plan par montant (24,99 € HT mensuel vs 274,89 € annuel)
-        const plan = (s.amount_total || 0) > 10000 ? 'annual' : 'monthly';
+        // v8.160 — La formule est portée par la session (metadata.plan), posée
+        // au moment du Checkout. La déduction par montant reste en secours pour
+        // les sessions créées avant, mais elle vieillit mal : son commentaire
+        // d'origine citait encore des tarifs qui n'existent plus.
+        const plan = (s.metadata?.plan === 'annual' || s.metadata?.plan === 'monthly')
+          ? s.metadata.plan
+          : ((s.amount_total || 0) > 10000 ? 'annual' : 'monthly');
 
         const { error } = await supabase
           .from('garages')
