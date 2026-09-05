@@ -167,7 +167,7 @@ export default async function handler(req, res) {
               console.error('[delete_garage cascade IOBILL] IOBILL_EXTERNAL_SECRET non configuré');
               // On continue quand même la suppression IOCAR (fire-and-forget policy)
             } else {
-              const r = await fetch(`${IOBILL_API_URL}?op=external`, {
+              const r = await fetchWithTimeout(`${IOBILL_API_URL}?op=external`, {
                 method: 'POST',
                 headers: {
                   'Content-Type': 'application/json',
@@ -519,6 +519,29 @@ export default async function handler(req, res) {
 // v8.49.17 — Helper cascade IOBILL
 // Appelle IOBILL external_toggle_active pour suspendre/réactiver la company liée.
 // Utilise le service_role (bypass RLS) — l'admin est déjà vérifié en amont.
+// v8.157 — Les cascades vers IOBILL sont appelées en synchrone (Vercel tue les
+// promesses non awaitées dès la réponse envoyée). Sans borne, une IOBILL lente
+// ou injoignable fige l'action admin : le bouton reste grisé le temps que la
+// fonction serverless expire. On plafonne donc l'appel — IOBILL se
+// resynchronisera plus tard, ce que les appelants acceptent déjà en avalant
+// l'erreur.
+const CASCADE_TIMEOUT_MS = 6000;
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = CASCADE_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (e) {
+    if (e?.name === 'AbortError') {
+      throw new Error(`IOBILL n'a pas répondu en ${timeoutMs} ms`);
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function cascadeToggleIobill(supabase, garageId, isActive) {
   // 1. Récupère iobill_company_id pour éviter un appel inutile
   const { data: g } = await supabase
@@ -535,7 +558,7 @@ async function cascadeToggleIobill(supabase, garageId, isActive) {
   if (!IOBILL_EXTERNAL_SECRET) {
     throw new Error('IOBILL_EXTERNAL_SECRET non configuré côté serveur');
   }
-  const r = await fetch(`${IOBILL_API_URL}?op=external`, {
+  const r = await fetchWithTimeout(`${IOBILL_API_URL}?op=external`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

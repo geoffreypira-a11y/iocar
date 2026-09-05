@@ -10533,13 +10533,18 @@ function AdminPage({ token }) {
     setUpdating(g.id);
     try {
       const { sub_status } = await adminCall("set_exempt", { garageId: g.id, value: !isCurrentlyExempt });
-      setGarages(garages.map(x => x.id === g.id ? {
+      setGarages(prev => prev.map(x => x.id === g.id ? {
         ...x,
         sub_status,
         is_active: true,
         trial_ends_at: sub_status === "exempt" ? null : new Date(Date.now() + 7*86400000).toISOString(),
         updated_at: new Date().toISOString(),
       } : x));
+      // v8.157 — On relit la liste derrière : l'affichage doit refléter la base,
+      // pas une projection locale de ce qu'on croit avoir écrit.
+      adminCall("list")
+        .then(({ garages: fresh }) => { if (Array.isArray(fresh)) setGarages(fresh); })
+        .catch(() => {});
     } catch(e) {
       alert("Erreur : " + e.message);
     }
