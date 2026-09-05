@@ -115,6 +115,10 @@ export default async function handler(req, res) {
       // Important pour le webhook : on retrouvera l'email côté checkout.session.completed
       metadata: {
         signup_email: email,
+        // v8.160 — La formule voyage avec la session : le webhook n'a plus à la
+        // deviner d'après le montant payé, une déduction qui se démentirait au
+        // premier changement de tarif.
+        plan: planKey || '',
       },
       // Locale FR par défaut
       locale: 'fr',
