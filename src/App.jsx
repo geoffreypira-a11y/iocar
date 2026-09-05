@@ -8,6 +8,8 @@ import DocsAdminPage from "./DocsAdminPage.jsx";
 import { loadPdfLib, parseAddress, buildIdentite } from "./lib/cerfa-common.js";
 import { fillCerfaMandat } from "./lib/cerfa-mandat.js";
 import { fillCerfaImmat, couleurKey, teinteKey, TONS, TEINTES } from "./lib/cerfa-immat.js";
+import { PLAN_LIST, DEFAULT_PLAN, startCheckout as openStripeCheckout } from "./lib/plans.js";
+import { PlanPicker } from "./components/PlanPicker.jsx";
 import IobillInvoiceSync from "./components/IobillInvoiceSync.jsx";
 
 // v8.49.16 — Système d'essai gratuit 7 jours + paywall
@@ -7454,6 +7456,10 @@ function SettingsPage({ token, dealer, setDealer, usage, isRealAdmin }) {
 ═══════════════════════════════════════════════════════════════ */
 function SubscriptionSection({ dealer }) {
   const [loading, setLoading] = useState(false);
+  // v8.156 — Formule choisie pour une première souscription depuis les
+  // Paramètres. Une fois abonné, le changement de formule passe par le
+  // portail Stripe, qui gère le prorata.
+  const [plan, setPlan] = useState(DEFAULT_PLAN);
 
   const openPortal = async () => {
     const { token } = loadSession();
@@ -7514,18 +7520,39 @@ function SubscriptionSection({ dealer }) {
           <button className="btn btn-primary" onClick={openPortal} disabled={loading}>
             {loading ? "..." : "🔧 Gérer mon abonnement"}
           </button>
-        ) : (
-          <div style={{ fontSize: 12, color: "var(--muted)", fontStyle: "italic" }}>
-            Aucun abonnement Stripe associé.
-          </div>
-        )}
+        ) : null}
       </div>
+
+      {!hasStripe && (
+        <div style={{ marginTop: 4 }}>
+          <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 10 }}>
+            Aucun abonnement en cours. Choisissez votre formule :
+          </div>
+          <PlanPicker value={plan} onChange={setPlan} disabled={loading} />
+          <button
+            className="btn btn-primary"
+            style={{ marginTop: 14 }}
+            disabled={loading}
+            onClick={async () => {
+              setLoading(true);
+              const err = await openStripeCheckout(plan, dealer?.email);
+              if (err) { alert(err); setLoading(false); }
+              // Succès : la page part sur Stripe, inutile de relâcher le loader.
+            }}
+          >
+            {loading ? "..." : "💳 Souscrire"}
+          </button>
+          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 10 }}>
+            Paiement sécurisé Stripe · résiliable à tout moment · IO BILL inclus.
+          </div>
+        </div>
+      )}
 
       {hasStripe && (
         <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 12, lineHeight: 1.6 }}>
-          Le portail vous permet de mettre à jour votre carte bancaire, télécharger vos factures
-          ou annuler votre abonnement (l'annulation prend effet à la fin de la période payée,
-          sans remboursement au prorata).
+          Le portail vous permet de passer du mensuel à l'annuel (ou l'inverse), mettre à jour
+          votre carte bancaire, télécharger vos factures ou annuler votre abonnement
+          (l'annulation prend effet à la fin de la période payée, sans remboursement au prorata).
         </div>
       )}
     </div>
@@ -9474,51 +9501,7 @@ function useSupabaseTable(token, garageId, table) {
 // Note : depuis qu'on utilise un endpoint serveur pour Checkout, la clé
 // publique Stripe n'est plus nécessaire côté front. Tout passe par
 // /api/create-checkout-session qui utilise STRIPE_SECRET_KEY côté serveur.
-const STRIPE_PLANS = {
-  monthly: {
-    priceId: "price_1TzfDwGHGXxR2PvGfrExXJRv",
-    label:   "Mensuel",
-    price:   "34,99€",
-    period:  "/ mois HT",
-    badge:   null,
-  },
-  annual: {
-    priceId: "price_1TzfEnGHGXxR2PvGOrZaiAxA",
-    label:   "Annuel",
-    price:   "349,90€",
-    period:  "/ an HT",
-    badge:   "2 mois offerts",
-  },
-};
-
-async function redirectToStripe(priceId, email) {
-  // Appel à notre endpoint serveur qui crée la session Stripe Checkout.
-  // Avantage : la STRIPE_SECRET_KEY reste 100 % côté serveur, et on est
-  // compatible avec tous les comptes Stripe (pas besoin de l'option
-  // "client-only" qui n'existe plus pour les nouveaux comptes).
-  const res = await fetch("/api/create-checkout-session", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      priceId,
-      email,
-      successUrl: window.location.origin + "/?subscribed=1",
-      cancelUrl:  window.location.origin + "/?canceled=1",
-    }),
-  });
-
-  if (!res.ok) {
-    let msg = `Erreur ${res.status}`;
-    try { const j = await res.json(); msg = j.error || msg; } catch(e) {}
-    throw new Error(msg);
-  }
-
-  const { url } = await res.json();
-  if (!url) throw new Error("URL Checkout manquante");
-
-  // Redirection vers la page Stripe Checkout hébergée
-  window.location.href = url;
-}
+// v8.156 — Formules et ouverture du Checkout : voir src/lib/plans.js.
 
 /* ═══════════════════════════════════════════════════════════════
    RESET PASSWORD SCREEN — v8.52
@@ -9929,8 +9912,8 @@ function LoginScreen({ onLogin }) {
                     Aperçu des tarifs après vos 7 jours d'essai
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                    {Object.entries(STRIPE_PLANS).map(([key, p]) => (
-                      <div key={key} style={{
+                    {PLAN_LIST.map(p => (
+                      <div key={p.key} style={{
                         padding: "10px 8px", borderRadius: 8, textAlign: "center",
                         border: "1px solid var(--border2)",
                         background: "var(--card2)",

@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { PLANS, DEFAULT_PLAN, startCheckout as openStripeCheckout } from "../../lib/plans.js";
 
 /**
  * v8.49.16 — TrialExpiredPage IOCAR
@@ -14,37 +15,18 @@ import React, { useState } from "react";
  * souscription effective (webhook Stripe met à jour sub_status=active).
  */
 
-// v8.49.16 — Price IDs IOCAR (à synchroniser avec create-checkout-session.js)
-const PRICE_MONTHLY = "price_1TzfDwGHGXxR2PvGfrExXJRv"; // 34,99 € HT/mois (Stripe: 41,98 TTC)
-const PRICE_YEARLY  = "price_1TzfEnGHGXxR2PvGOrZaiAxA"; // 349,90 € HT/an (Stripe: 419,88 TTC)
-
 export function TrialExpiredPage({ garage, onSignOut }) {
   const [loading, setLoading] = useState(false);
-  const [selectedPlan, setSelectedPlan] = useState("monthly");
+  const [selectedPlan, setSelectedPlan] = useState(DEFAULT_PLAN);
 
   async function startCheckout() {
     setLoading(true);
-    try {
-      const priceId = selectedPlan === "yearly" ? PRICE_YEARLY : PRICE_MONTHLY;
-      const r = await fetch("/api/create-checkout-session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          priceId,
-          email: garage?.email || "",
-        }),
-      });
-      const j = await r.json();
-      if (j?.url) {
-        window.location.href = j.url;
-      } else {
-        alert(j?.error || "Erreur lors de la création du checkout Stripe");
-        setLoading(false);
-      }
-    } catch (e) {
-      alert("Erreur réseau : " + (e?.message || "inconnue"));
+    const err = await openStripeCheckout(selectedPlan, garage?.email);
+    if (err) {
+      alert(err);
       setLoading(false);
     }
+    // Succès : la page part sur Stripe.
   }
 
   return (
@@ -107,19 +89,19 @@ export function TrialExpiredPage({ garage, onSignOut }) {
         {/* Sélection plan */}
         <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
           <PlanCard
-            label="Mensuel"
-            price="34,99 €"
-            unit="HT/mois"
+            label={PLANS.monthly.label}
+            price={PLANS.monthly.price}
+            unit={PLANS.monthly.unit}
             selected={selectedPlan === "monthly"}
             onClick={() => setSelectedPlan("monthly")}
           />
           <PlanCard
-            label="Annuel"
-            price="349,90 €"
-            unit="HT/an"
-            badge="2 mois offerts"
-            selected={selectedPlan === "yearly"}
-            onClick={() => setSelectedPlan("yearly")}
+            label={PLANS.annual.label}
+            price={PLANS.annual.price}
+            unit={PLANS.annual.unit}
+            badge={PLANS.annual.badge}
+            selected={selectedPlan === "annual"}
+            onClick={() => setSelectedPlan("annual")}
           />
         </div>
 
