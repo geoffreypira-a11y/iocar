@@ -1382,6 +1382,9 @@ function mapOrderToInvoice(order, calc) {
       options: sanitizeString(v.options) || null,
       // Garantie : issue de l'order (pas du véhicule)
       garantie_mois: order.garantie_mois || 0,
+      // v8.155 — Référence au livre de police (« VO#0007 »), lue sur le
+      // registre à l'ouverture de l'order.
+      livre_police: sanitizeString(order.livre_police_ref) || null,
       // v8.151 — Véhicule REPRIS. Depuis que la reprise est portée en règlement
       // et non plus en ligne de facture, sa description n'apparaissait plus que
       // dans le libellé du paiement. IOCAR, lui, affiche un bloc dédié avec la
@@ -1803,6 +1806,48 @@ function flattenOrder(row) {
   return { ...nested, ...topLevel };
 }
 
+// v8.155 — Référence du véhicule au livre de police, telle qu'elle s'écrit sur
+// les documents : « VO#0007 ». Le registre vit dans sa propre table, on le relit
+// donc ici pour que la facture IOBILL porte la même référence que la facture
+// IOCAR. On cherche par véhicule, puis à défaut par plaque — mêmes clés que la
+// flotte côté application.
+function formatLivrePoliceRef(numOrdre) {
+  const n = parseInt(numOrdre, 10);
+  return Number.isFinite(n) ? `VO#${String(n).padStart(4, '0')}` : null;
+}
+
+async function loadLivrePoliceRef(supabase, garageId, order) {
+  const vehicleId = order?.vehicle_id || order?.vehicle_data?.id || null;
+  const plate = order?.vehicle_plate || order?.vehicle_data?.plate || null;
+  if (!vehicleId && !plate) return null;
+  try {
+    let row = null;
+    if (vehicleId) {
+      const { data } = await supabase
+        .from('livre_police')
+        .select('data')
+        .eq('garage_id', garageId)
+        .eq('data->>vehicle_id', String(vehicleId))
+        .limit(1);
+      row = data && data[0];
+    }
+    if (!row && plate) {
+      const { data } = await supabase
+        .from('livre_police')
+        .select('data')
+        .eq('garage_id', garageId)
+        .eq('data->>immat', String(plate))
+        .limit(1);
+      row = data && data[0];
+    }
+    return formatLivrePoliceRef(row?.data?.num_ordre);
+  } catch (e) {
+    // Le registre est un confort d'affichage : son absence ne doit jamais
+    // empêcher une facture de partir.
+    return null;
+  }
+}
+
 // Charge + aplatit un order, avec vérif d'autorisation par garage_id
 async function loadOrder(supabase, orderId, garageId) {
   const { data: row, error } = await supabase
@@ -1812,7 +1857,9 @@ async function loadOrder(supabase, orderId, garageId) {
     .eq('garage_id', garageId)
     .single();
   if (error || !row) return { error: error || new Error('not found'), order: null };
-  return { error: null, order: flattenOrder(row) };
+  const order = flattenOrder(row);
+  order.livre_police_ref = await loadLivrePoliceRef(supabase, garageId, order);
+  return { error: null, order };
 }
 
 // v8.49.17 — Cascade suspend/réactive IOBILL depuis IOCAR admin

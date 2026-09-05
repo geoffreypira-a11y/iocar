@@ -192,7 +192,8 @@ export function orderToIobillFormat(order, garage) {
       puissance_cv: v.puissance_cv || null,
       puissance_fiscale: v.puissance_fiscale || null,
       options: v.options || null,
-      garantie_mois: garantieMois
+      garantie_mois: garantieMois,
+      livre_police: o.livre_police_ref || null
     }
   };
 
