@@ -10373,6 +10373,9 @@ function AdminPage({ token }) {
   const [garages, setGarages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch]   = useState("");
+  // v8.162 — Les essais expirés encombrent la liste sans qu'on veuille les
+  // archiver : ils sont masqués par défaut, un bouton les rappelle.
+  const [showBlockedTrials, setShowBlockedTrials] = useState(false);
   // v8.133 — Anti-autofill Chrome : le champ recherche reste readOnly tant qu'il
   // n'a pas le focus (Chrome ne peut rien y injecter), déverrouillé au clic.
   const [searchFocused, setSearchFocused] = useState(false);
@@ -10710,8 +10713,19 @@ function AdminPage({ token }) {
   // N'apporte AUCUN contrôle de sécurité — la vraie protection est en DB + RLS.
   const ADMIN_LIST = garages.filter(g => g.is_admin).map(g => g.email);
 
+  // Essai bloqué : l'essai a couru jusqu'à son terme sans souscription. Le
+  // compte reste intact — il redevient un client au premier paiement — mais il
+  // n'a rien à faire dans la vue courante.
+  const isBlockedTrial = (g) => !g._archived
+    && g.sub_status === "trialing"
+    && !!g.trial_ends_at
+    && new Date(g.trial_ends_at).getTime() <= Date.now();
+
+  const blockedTrials = garages.filter(isBlockedTrial);
+
   const filtered = garages.filter(g =>
-    !search || `${g.name} ${g.email} ${g.siret}`.toLowerCase().includes(search.toLowerCase())
+    (showBlockedTrials || !isBlockedTrial(g)) &&
+    (!search || `${g.name} ${g.email} ${g.siret}`.toLowerCase().includes(search.toLowerCase()))
   );
 
   // Exclure les comptes admin du MRR
@@ -10824,15 +10838,29 @@ function AdminPage({ token }) {
         ))}
       </div>
 
-      {/* Recherche */}
-      <input className="search-input" style={{ marginBottom: 16, width: "100%", maxWidth: 400 }}
-        type="search" name="iocar-adm-cs-nofill" autoComplete="off"
-        data-lpignore="true" data-1p-ignore data-form-type="other"
-        readOnly={!searchFocused}
-        onFocus={() => setSearchFocused(true)}
-        onBlur={() => setSearchFocused(false)}
-        placeholder="Rechercher par nom, e‑mail, SIRET..."
-        value={search} onChange={e => setSearch(e.target.value)} />
+      {/* Recherche + essais bloqués */}
+      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 16 }}>
+        <input className="search-input" style={{ width: "100%", maxWidth: 400 }}
+          type="search" name="iocar-adm-cs-nofill" autoComplete="off"
+          data-lpignore="true" data-1p-ignore data-form-type="other"
+          readOnly={!searchFocused}
+          onFocus={() => setSearchFocused(true)}
+          onBlur={() => setSearchFocused(false)}
+          placeholder="Rechercher par nom, e‑mail, SIRET..."
+          value={search} onChange={e => setSearch(e.target.value)} />
+        {blockedTrials.length > 0 && (
+          <button
+            className="btn btn-ghost btn-sm"
+            onClick={() => setShowBlockedTrials(v => !v)}
+            style={{ fontSize: 11, color: showBlockedTrials ? "var(--gold)" : "var(--muted)" }}
+            title="Essais arrivés à terme sans souscription. Les comptes restent intacts : ils redeviennent clients au premier paiement."
+          >
+            {showBlockedTrials
+              ? `🔒 Masquer les essais bloqués (${blockedTrials.length})`
+              : `🔒 ${blockedTrials.length} essai${blockedTrials.length > 1 ? "s" : ""} bloqué${blockedTrials.length > 1 ? "s" : ""} masqué${blockedTrials.length > 1 ? "s" : ""} — afficher`}
+          </button>
+        )}
+      </div>
 
       {/* Table */}
       {loading ? (
