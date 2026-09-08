@@ -1,11 +1,12 @@
 import React, { useState, useMemo } from "react";
 import { fillCerfaImmat, NATURES_DEMANDE, couleurKey, teinteKey, TONS, TEINTES } from "./lib/cerfa-immat.js";
 import { fillCerfaMandat } from "./lib/cerfa-mandat.js";
+import { fillCerfaCession } from "./lib/cerfa-cession.js";
 import { loadPdfLib, parseAddressOf, buildIdentite } from "./lib/cerfa-common.js";
 
 // ═══════════════════════════════════════════════════════════════════
 // v8.139 — Onglet "Documents administratifs" (stand-alone)
-// Génère un CERFA "à la carte" : cession 15776, mandat 13757*03 ou demande
+// Génère un CERFA "à la carte" : cession 15776*02, mandat 13757*03 ou demande
 // de certificat d'immatriculation 13750*07 — on choisit librement
 // le VENDEUR et l'ACQUÉREUR (clients CRM en lecture seule + garage +
 // fournisseurs dédiés + nouveau contact ponctuel), un véhicule (flotte
@@ -111,7 +112,7 @@ function NewContactForm({ value, onChange, showSave, saveChecked, onToggleSave }
 export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}, setDealer }) {
   const fournisseurs = useMemo(() => Array.isArray(dealer?.admin_fournisseurs) ? dealer.admin_fournisseurs : [], [dealer]);
 
-  // v8.142 — Type de document : cession (15776), mandat d'immatriculation
+  // v8.142 — Type de document : cession (15776*02), mandat d'immatriculation
   // (13757*03) ou demande de certificat d'immatriculation (13750*07).
   const [docType, setDocType] = useState("cession");
   const [natureOp, setNatureOp] = useState("Immatriculation");
@@ -264,19 +265,14 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
 
     setLoading(true);
     try {
-      // v8.139.1 — pdf-lib est chargé à la volée (cf. lib/cerfa-common).
-      const { PDFDocument } = await loadPdfLib();
-      const pdfBytes = await fetch("/cerfa_15776-01_acroform.pdf").then(r => r.arrayBuffer());
-      const pdfDoc = await PDFDocument.load(pdfBytes);
-      const form = pdfDoc.getForm();
-      const setText = (n, v) => { if (!v) return; try { form.getTextField(n).setText(String(v)); } catch (e) {} };
-      const setCheck = (n) => { try { form.getCheckBox(n).check(); } catch (e) {} };
-      const setRadio = (n, v) => { try { form.getRadioGroup(n).select(v); } catch (e) {} };
+      // v8.171 — Le 15776*02 remplace le *01 et n'est diffusé qu'à plat :
+      // le remplissage vit dans lib/cerfa-cession.js. pdf-lib reste chargé à
+      // la volée (cf. lib/cerfa-common).
+      const PDFLib = await loadPdfLib();
+      const pdfBytes = await fetch("/cerfa_1577602.pdf").then(r => r.arrayBuffer());
 
       const vA = parseAddressOf(V);
       const aA = parseAddressOf(A);
-
-      // Date de cession
       const [yy, mm, dd] = dateCession.split("-");
       const [h1, h2] = (heureCession || "").split(":");
       const dateJ = `${dd}/${mm}/${yy}`;
@@ -284,68 +280,44 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
       // Date MEC véhicule (accepte jj/mm/aaaa ou aaaa-mm-jj)
       let mecJ = "", mecM = "", mecA = "";
       const mec = veh.date_mec || "";
-      if (/\d{2}\/\d{2}\/\d{4}/.test(mec)) { const p = mec.split("/"); [mecJ, mecM, mecA] = p; }
-      else if (/\d{4}-\d{2}-\d{2}/.test(mec)) { const p = mec.split("-"); mecA = p[0]; mecM = p[1]; mecJ = p[2]; }
+      if (/\d{2}\/\d{2}\/\d{4}/.test(mec)) { const q = mec.split("/"); [mecJ, mecM, mecA] = q; }
+      else if (/\d{4}-\d{2}-\d{2}/.test(mec)) { const q = mec.split("-"); mecA = q[0]; mecM = q[1]; mecJ = q[2]; }
 
-      for (const pk of ["Page1", "Page2"]) {
-        const p = (n) => `${pk}.${n}`;
+      const filled = await fillCerfaCession(pdfBytes, PDFLib, {
+        vehicule: {
+          plate: veh.plate,
+          vin: veh.vin,
+          marque: veh.marque,
+          typeVariante: veh.finition,
+          genre: veh.genre || "VP",
+          modele: veh.modele,
+          kilometrage: veh.kilometrage
+            ? String(Number(veh.kilometrage).toLocaleString("fr-FR")).replace(/\u202f/g, " ").replace(/\u00a0/g, " ")
+            : "",
+          mec: mecJ ? { jour: mecJ, mois: mecM, annee: mecA } : null,
+          formule: veh.numero_formule || "",
+        },
+        vendeur: {
+          isMorale: V.isMorale,
+          sexe: V.civilite === "F" ? "F" : "M",
+          identite: buildIdentite(V),
+          siret: V.siret,
+          adresse: vA,
+          lieu: vA.ville,
+        },
+        acquereur: {
+          isMorale: A.isMorale,
+          sexe: A.civilite === "F" ? "F" : "M",
+          identite: buildIdentite(A),
+          siret: A.siret,
+          adresse: aA,
+          lieu: aA.ville || vA.ville,
+        },
+        dateCession: { jour: dd, mois: mm, annee: yy },
+        heureCession: { h: h1, min: h2 },
+        dateDeclaration: dateJ,
+      });
 
-        // VÉHICULE
-        setText(p("num_Immatriculation"), veh.plate);
-        setText(p("num_Identification"), veh.vin);
-        if (mecJ) { setText(p("num_DateImmatriculationJour"), mecJ); setText(p("num_DateImmatriculationMois"), mecM); setText(p("num_DateImmatriculationAnnée"), mecA); }
-        setText(p("txt_MarqueVéhicule"), veh.marque);
-        setText(p("txt_TypeVarianteVersionVéhicule"), veh.finition);
-        setText(p("txt_GenreNational"), veh.genre || "VP");
-        setText(p("txt_DénominationCommerciale"), veh.modele);
-        setText(p("num_KilométrageCompteur"), veh.kilometrage ? String(Number(veh.kilometrage).toLocaleString("fr-FR")).replace(/\u202f/g, " ").replace(/\u00a0/g, " ") : "");
-        if (veh.numero_formule) setText(p("num_Formule"), veh.numero_formule);
-        setRadio(p("Groupe_de_boutons_radio1"), "1");
-
-        // ANCIEN PROPRIÉTAIRE (VENDEUR)
-        setRadio(p("Groupe_de_boutons_radio3"), V.isMorale ? "1" : "2");
-        setText(p("txt_IdentitéVendeur"), buildIdentite(V));
-        if (V.siret) setText(p("Num_Siret"), String(V.siret).replace(/\s/g, ""));
-        setText(p("num_VoieAdresse"), vA.num);
-        setText(p("txt_ExtensionAdresse"), vA.ext);
-        setText(p("txt_TypeVoieAdresse"), vA.type);
-        setText(p("txt_NomVoie"), vA.nom);
-        setText(p("num_CodePostalAdresse"), vA.cp);
-        setText(p("txt_CommuneAdresse"), vA.ville);
-        setRadio(p("Groupe_de_boutons_radio4"), "1");  // Céder
-        setText(p("num_DateVenteJour"), dd);
-        setText(p("num_DateVenteMois"), mm);
-        setText(p("num_DateVenteAnnée"), yy);
-        setText(p("num_HoraireVente1"), h1);
-        setText(p("num_HoraireVente2"), h2);
-        setCheck(p("ckb_ValidationDéclaration1"));
-        setCheck(p("ckb_ValidationDéclaration2"));
-        setText(p("txt_LieuDéclaration1"), vA.ville);
-        setText(p("num_DateDéclaration"), dateJ);
-
-        // NOUVEAU PROPRIÉTAIRE (ACQUÉREUR)
-        if (A.isMorale) {
-          setRadio(p("Groupe_de_boutons_radio5"), "1");
-        } else {
-          setRadio(p("Groupe_de_boutons_radio5"), "2");
-          if (A.civilite === "M") setRadio(p("Groupe_de_boutons_radio6"), "1");
-          if (A.civilite === "F") setRadio(p("Groupe_de_boutons_radio6"), "2");
-        }
-        setText(p("txt_IdentitéAcheteur"), buildIdentite(A));
-        if (A.siret) setText(p("num_SiretAcheteur"), String(A.siret).replace(/\s/g, ""));
-        setText(p("num_VoieAdresseAcheteur"), aA.num);
-        setText(p("txt_ExtensionAdresseAcheteur"), aA.ext);
-        setText(p("txt_TypeVoieAdresseAcheteur"), aA.type);
-        setText(p("txt_NomVoieAdresseAcheteur"), aA.nom);
-        setText(p("num_CodePostalAdresseAcheteur"), aA.cp);
-        setText(p("txt_CommuneAdresseAcheteur"), aA.ville);
-        setCheck(p("ckb_ValidationDéclarationA1"));
-        setCheck(p("ckb_ValidationDéclarationA2"));
-        setText(p("txt_LieuDéclaration2"), aA.ville || vA.ville);
-        setText(p("txt_dateDéclaration"), dateJ);
-      }
-
-      const filled = await pdfDoc.save();
       const blob = new Blob([filled], { type: "application/pdf" });
       setPdfUrl(URL.createObjectURL(blob));
 
@@ -444,7 +416,7 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
     <div style={{ maxWidth: 900, margin: "0 auto" }}>
       <div className="page-title">Documents administratifs</div>
       <p style={{ color: "var(--muted)", fontSize: 13, marginTop: -6, marginBottom: 16 }}>
-        Générez un CERFA à la carte — cession (15776), mandat d'immatriculation (13757*03)
+        Générez un CERFA à la carte — cession (15776*02), mandat d'immatriculation (13757*03)
         ou demande de certificat d'immatriculation (13750*07).
         Cet onglet lit vos données mais n'écrit rien ailleurs.
       </p>
@@ -452,7 +424,7 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
       {/* Sélecteur de type de document */}
       <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
         <button className={"btn " + (docType === "cession" ? "btn-primary" : "btn-ghost")} onClick={() => { setDocType("cession"); setPdfUrl(null); }}>
-          📄 Cession (15776)
+          📄 Cession (15776*02)
         </button>
         <button className={"btn " + (docType === "mandat" ? "btn-primary" : "btn-ghost")} onClick={() => { setDocType("mandat"); setPdfUrl(null); }}>
           🖊 Mandat d'immatriculation (13757)
@@ -612,12 +584,12 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
               <button className="btn btn-primary btn-sm" onClick={() => window.open(pdfUrl, "_blank")}>
                 ↗ Ouvrir en plein écran
               </button>
-              <a className="btn btn-ghost btn-sm" href={pdfUrl} download={docType === "mandat" ? "mandat-immatriculation-13757.pdf" : docType === "immat" ? "demande-immatriculation-13750.pdf" : "cerfa-cession-15776.pdf"} style={{ textDecoration: "none" }}>
+              <a className="btn btn-ghost btn-sm" href={pdfUrl} download={docType === "mandat" ? "mandat-immatriculation-13757.pdf" : docType === "immat" ? "demande-immatriculation-13750.pdf" : "cerfa-cession-15776-02.pdf"} style={{ textDecoration: "none" }}>
                 ⬇ Télécharger
               </a>
             </div>
             <div style={{ height: 620, overflow: "hidden", borderRadius: 8 }}>
-              <iframe src={pdfUrl} style={{ width: "100%", height: "100%", border: "none" }} title={docType === "mandat" ? "Mandat 13757" : docType === "immat" ? "CERFA 13750" : "CERFA 15776"} />
+              <iframe src={pdfUrl} style={{ width: "100%", height: "100%", border: "none" }} title={docType === "mandat" ? "Mandat 13757" : docType === "immat" ? "CERFA 13750" : "CERFA 15776*02"} />
             </div>
           </div>
         )}

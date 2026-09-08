@@ -19,6 +19,19 @@ export async function loadPdfLib() {
   return window.PDFLib;
 }
 
+// v8.171 — Les gabarits plats (13750*07, 15776*02) sont encodés en WinAnsi :
+// un caractère hors de ce jeu ferait échouer pdf-lib au dessin. On
+// translittère plutôt que d'échouer sur un nom d'entreprise exotique.
+export function winAnsi(str) {
+  return String(str == null ? "" : str)
+    .replace(/[œ]/g, "oe").replace(/[Œ]/g, "OE")
+    .replace(/[æ]/g, "ae").replace(/[Æ]/g, "AE")
+    .replace(/[‘’]/g, "'").replace(/[“”]/g, '"')
+    .replace(/[–—]/g, "-").replace(/[  ]/g, " ")
+    // eslint-disable-next-line no-control-regex
+    .replace(/[^\x20-\xFF]/g, "");
+}
+
 // Découpe une adresse libre en composants attendus par les CERFA.
 // v8.138 — Ville robuste (corrige "Fait à" vide sur le CERFA) :
 //  1) ville APRÈS le CP sur la même ligne  → "13000 Marseille"

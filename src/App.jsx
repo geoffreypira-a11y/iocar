@@ -7,6 +7,7 @@ import IobillBridgeCard from "./components/IobillBridgeCard.jsx";
 import DocsAdminPage from "./DocsAdminPage.jsx";
 import { loadPdfLib, parseAddressOf, buildIdentite, splitPostalAddress, joinPostalAddress } from "./lib/cerfa-common.js";
 import { fillCerfaMandat } from "./lib/cerfa-mandat.js";
+import { fillCerfaCession } from "./lib/cerfa-cession.js";
 import { fillCerfaImmat, couleurKey, teinteKey, TONS, TEINTES } from "./lib/cerfa-immat.js";
 import { PLAN_LIST, DEFAULT_PLAN, startCheckout as openStripeCheckout } from "./lib/plans.js";
 import { PlanPicker } from "./components/PlanPicker.jsx";
@@ -5421,7 +5422,7 @@ function PrintDoc({ order, dealer, onClose, viewMode, livrePolice }) {
 /* ═══════════════════════════════════════════════════════════════
    CERFA DU DOSSIER (depuis une facture / un bon de commande)
    Trois documents préremplis avec les données véhicule + client + garage :
-     • cession 15776       — le garage cède le véhicule au client
+     • cession 15776*02    — le garage cède le véhicule au client
      • mandat 13757*03     — le client mandate le garage pour les démarches
      • carte grise 13750*07 — demande de certificat au nom du client
 ═══════════════════════════════════════════════════════════════ */
@@ -5491,123 +5492,56 @@ function CerfaDocs({ order, dealer, vehicles, clients, onUpdateOrder, onClose })
 
   const setUrl = (key, url) => setUrls(prev => ({ ...prev, [key]: url }));
 
-  // ── CERFA 15776 — déclaration de cession (garage → client) ──
+  // ── CERFA 15776*02 — déclaration de cession (garage → client) ──
+  // v8.171 — Le *02 remplace le *01 et n'est diffusé qu'à plat : le remplissage
+  // vit dans lib/cerfa-cession.js, qui écrit aux coordonnées du gabarit.
   const generateCession = async () => {
-    const { PDFDocument } = await loadPdfLib();
-    const pdfBytes = await fetch("/cerfa_15776-01_acroform.pdf").then(r => r.arrayBuffer());
-    const pdfDoc = await PDFDocument.load(pdfBytes);
-    const form = pdfDoc.getForm();
-
-    const setText = (name, value) => {
-      if (!value) return;
-      try { form.getTextField(name).setText(String(value)); }
-      catch(e) { console.warn("Champ:", name, e.message); }
-    };
-    const setCheck = (name) => {
-      try { form.getCheckBox(name).check(); }
-      catch(e) { console.warn("Check:", name, e.message); }
-    };
-    const setRadio = (name, value) => {
-      try { form.getRadioGroup(name).select(value); }
-      catch(e) { console.warn("Radio:", name, e.message); }
-    };
-
+    const PDFLib = await loadPdfLib();
+    const pdfBytes = await fetch("/cerfa_1577602.pdf").then(r => r.arrayBuffer());
     const dA = parseAddressOf(garageParty);
     const cA = parseAddressOf(clientParty);
-    // ⚠ On utilise la date FIGÉE depuis le state — pas today() — pour que la date
-    // ne change pas à chaque réouverture du document après l'impression.
-    const dateJ = cessionDate;
-    const [dj, dm, da] = dateJ.includes("/") ? dateJ.split("/") : ["","",""];
-    const heure = cessionHeure;
-    const [h1, h2] = heure.split(":");
-    const dateMEC = v.date_mise_en_circulation || "";
-    const mecP = dateMEC.includes("/") ? dateMEC.split("/") : [];
+    // ⚠ Date FIGÉE depuis le state — pas today() — pour que le document ne
+    // change pas à chaque réouverture après impression.
+    const [dj, dm, da] = cessionDate.includes("/") ? cessionDate.split("/") : ["", "", ""];
+    const [h1, h2] = (cessionHeure || "").split(":");
+    const mecP = (v.date_mise_en_circulation || "").split("/");
 
-    for (const pk of ["Page1", "Page2"]) {
-      const p = (n) => `${pk}.${n}`;
-
-      // VÉHICULE
-      setText(p("num_Immatriculation"), v.plate);
-      setText(p("num_Identification"), v.vin);
-      if (mecP.length === 3) {
-        setText(p("num_DateImmatriculationJour"), mecP[0]);
-        setText(p("num_DateImmatriculationMois"), mecP[1]);
-        setText(p("num_DateImmatriculationAnnée"), mecP[2]);
-      } else { setText(p("num_DateImmatriculationJour"), dateMEC); }
-      setText(p("txt_MarqueVéhicule"), v.marque);
-      setText(p("txt_TypeVarianteVersionVéhicule"), v.finition);
-      setText(p("txt_GenreNational"), v.genre || "VP");
-      setText(p("txt_DénominationCommerciale"), v.modele);
-      setText(p("num_KilométrageCompteur"), v.kilometrage ? String(Number(v.kilometrage).toLocaleString("fr-FR")).replace(/\u202f/g, " ").replace(/\u00a0/g, " ") : "");
-
-      // Numéro de formule du certificat d'immatriculation (préfixé par "20" sur le Cerfa)
-      if (v.numero_formule) setText(p("num_Formule"), v.numero_formule);
-
-      // Certificat immatriculation : OUI
-      setRadio(p("Groupe_de_boutons_radio1"), "1");
-
-      // ANCIEN PROPRIÉTAIRE
-      setRadio(p("Groupe_de_boutons_radio3"), "1");  // Personne morale
-      setText(p("txt_IdentitéVendeur"), dealer?.name);
-      setText(p("Num_Siret"), dealer?.siret);
-      setText(p("num_VoieAdresse"), dA.num);
-      setText(p("txt_ExtensionAdresse"), dA.ext);
-      setText(p("txt_TypeVoieAdresse"), dA.type);
-      setText(p("txt_NomVoie"), dA.nom);
-      setText(p("num_CodePostalAdresse"), dA.cp);
-      setText(p("txt_CommuneAdresse"), dA.ville);
-      setRadio(p("Groupe_de_boutons_radio4"), "1");  // Céder
-      setText(p("num_DateVenteJour"), dj);
-      setText(p("num_DateVenteMois"), dm);
-      setText(p("num_DateVenteAnnée"), da);
-      setText(p("num_HoraireVente1"), h1);
-      setText(p("num_HoraireVente2"), h2);
-      setCheck(p("ckb_ValidationDéclaration1"));
-      setCheck(p("ckb_ValidationDéclaration2"));
-      setText(p("txt_LieuDéclaration1"), dA.ville);
-      setText(p("num_DateDéclaration"), dateJ);
-
-      // NOUVEAU PROPRIÉTAIRE
-      // v8.59.2 — Détection Personne physique vs morale :
-      //   - client.type === "company" OU client.siren → Personne morale (radio5=1)
-      //   - Sinon → Personne physique (radio5=2) + civilité (radio6=1/2)
-      // Le CERFA officiel exige :
-      //   - Radio5 valeur "1" = Personne morale
-      //   - Radio5 valeur "2" = Personne physique
-      //   - Champ NOM/PRÉNOM ou RAISON SOCIALE en un seul champ txt_IdentitéAcheteur
-      //   - N° SIRET dans num_SiretAcheteur (obligatoire pour société, optionnel particulier)
-      // (isCompanyClient est calculé une fois pour les trois documents, plus haut)
-      if (isCompanyClient) {
-        // Personne morale — pas de civilité, raison sociale seule dans identité
-        setRadio(p("Groupe_de_boutons_radio5"), "1");
-      } else {
-        // Personne physique — civilité obligatoire (M ou F)
-        setRadio(p("Groupe_de_boutons_radio5"), "2");
-        if (client.civilite === "M") setRadio(p("Groupe_de_boutons_radio6"), "1");
-        if (client.civilite === "F") setRadio(p("Groupe_de_boutons_radio6"), "2");
-      }
-      // v8.48.7 — Ordre Cerfa officiel : "NOM Prénom" (nom en majuscules d'abord)
-      // v8.59.2 — Pour société : raison sociale seule. Même règle que le mandat
-      // et la demande de carte grise, d'où la brique partagée buildIdentite().
-      const identiteAcheteur = buildIdentite(clientParty);
-      setText(p("txt_IdentitéAcheteur"), identiteAcheteur);
-      // v8.59.2 — SIRET obligatoire pour société, préservé pour particulier si renseigné
-      if (client.siren) setText(p("num_SiretAcheteur"), String(client.siren).replace(/\s/g, ""));
-      setText(p("num_VoieAdresseAcheteur"), cA.num);
-      setText(p("txt_ExtensionAdresseAcheteur"), cA.ext);
-      setText(p("txt_TypeVoieAdresseAcheteur"), cA.type);
-      setText(p("txt_NomVoieAdresseAcheteur"), cA.nom);
-      setText(p("num_CodePostalAdresseAcheteur"), cA.cp);
-      setText(p("txt_CommuneAdresseAcheteur"), cA.ville);
-      setCheck(p("ckb_ValidationDéclarationA1"));
-      setCheck(p("ckb_ValidationDéclarationA2"));
-      setText(p("txt_LieuDéclaration2"), dA.ville);
-      setText(p("txt_dateDéclaration"), dateJ);
-    }
-
-
-    return pdfDoc.save();
+    return fillCerfaCession(pdfBytes, PDFLib, {
+      vehicule: {
+        plate: v.plate,
+        vin: v.vin,
+        marque: v.marque,
+        typeVariante: v.finition,
+        genre: v.genre || "VP",
+        modele: v.modele,
+        kilometrage: v.kilometrage
+          ? String(Number(v.kilometrage).toLocaleString("fr-FR")).replace(/\u202f/g, " ").replace(/\u00a0/g, " ")
+          : "",
+        mec: mecP.length === 3 ? { jour: mecP[0], mois: mecP[1], annee: mecP[2] } : null,
+        formule: v.numero_formule || "",
+      },
+      // Le garage cède : il est toujours l'ancien propriétaire, personne morale.
+      vendeur: {
+        isMorale: true,
+        identite: dealer?.name,
+        siret: dealer?.siret,
+        adresse: dA,
+        lieu: dA.ville,
+      },
+      acquereur: {
+        isMorale: isCompanyClient,
+        sexe: client.civilite === "F" ? "F" : "M",
+        identite: buildIdentite(clientParty),
+        siret: client.siren,
+        adresse: cA,
+        lieu: dA.ville,
+      },
+      dateCession: { jour: dj, mois: dm, annee: da },
+      heureCession: { h: h1, min: h2 },
+      dateDeclaration: cessionDate,
+    });
   };
+
 
   // ── CERFA 13757*03 — mandat d'immatriculation (client → garage) ──
   const generateMandat = async () => {
@@ -5708,7 +5642,7 @@ function CerfaDocs({ order, dealer, vehicles, clients, onUpdateOrder, onClose })
   };
 
   const TABS = [
-    { key: "cession", label: "Cession", cerfa: "15776", file: "Cession" },
+    { key: "cession", label: "Cession", cerfa: "15776*02", file: "Cession" },
     { key: "mandat",  label: "Mandat",  cerfa: "13757", file: "Mandat" },
     { key: "immat",   label: "Carte grise", cerfa: "13750", file: "Carte-grise" },
   ];
