@@ -29,8 +29,8 @@ const CELLS = {
   mecJour:      { x0: 440.76, pas: 11.34, n:  2, y: 722.0 },
   mecMois:      { x0: 466.44, pas: 11.34, n:  2, y: 722.0 },
   mecAnnee:     { x0: 492.12, pas: 11.34, n:  4, y: 722.0 },
-  // Le n° de formule commence par « 2 0 » déjà imprimé : on n'écrit que
-  // les 9 cases suivantes.
+  // Les deux premières cases portent « 2 0 », imprimé sur le gabarit : le
+  // peigne en compte 11, on n'écrit que dans les 9 libres.
   formule:      { x0: 170.66, pas: 14.17, n:  9, y: 643.9 },
   certifJour:   { x0: 222.52, pas: 11.34, n:  2, y: 622.3 },
   certifMois:   { x0: 248.19, pas: 11.34, n:  2, y: 622.3 },
@@ -168,7 +168,12 @@ export async function fillCerfaCession(pdfBytes, PDFLib, data) {
     txt("kilometrage", v.kilometrage);
 
     // Présence du certificat : n° de formule, ou motif d'absence.
-    if (v.formule) { coche("certifOui"); cases("formule", String(v.formule).replace(/^20/, "")); }
+    // Le gabarit imprime déjà « 2 0 » dans les deux premières cases, et la
+    // Flotte le présente pareil : son champ affiche « 20 » en préfixe fixe et
+    // ne stocke que les 9 caractères suivants. La valeur s'écrit donc telle
+    // quelle, dans les 9 cases libres — surtout pas amputée d'un « 20 » qui
+    // n'y est pas (un n° de formule « 20AB12345 » y perdrait son début).
+    if (v.formule) { coche("certifOui"); cases("formule", v.formule); }
     else if (v.dateCertificat) {
       coche("certifOui");
       cases("certifJour", v.dateCertificat.jour);
@@ -178,7 +183,7 @@ export async function fillCerfaCession(pdfBytes, PDFLib, data) {
 
     // ── Ancien propriétaire ──
     coche(A.isMorale ? "vMorale" : "vPhysique");
-    if (!A.isMorale && A.sexe) coche(A.sexe === "F" ? "vSexeF" : "vSexeM");
+    if (!A.isMorale && (A.sexe === "M" || A.sexe === "F")) coche(A.sexe === "F" ? "vSexeF" : "vSexeM");
     txt("identiteV", A.identite);
     cases("siretV", A.siret);
     txt("voieV", A.adresse?.num);
@@ -208,7 +213,7 @@ export async function fillCerfaCession(pdfBytes, PDFLib, data) {
 
     // ── Nouveau propriétaire ──
     coche(B.isMorale ? "aMorale" : "aPhysique");
-    if (!B.isMorale && B.sexe) coche(B.sexe === "F" ? "aSexeF" : "aSexeM");
+    if (!B.isMorale && (B.sexe === "M" || B.sexe === "F")) coche(B.sexe === "F" ? "aSexeF" : "aSexeM");
     txt("identiteA", B.identite);
     cases("siretA", B.siret);
     if (B.naissance) {
