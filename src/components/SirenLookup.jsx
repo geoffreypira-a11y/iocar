@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { cleanSiren, isSirenSearchable, lookupEntreprise } from "../lib/siren.js";
+import { cleanSiren, isSirenSearchable, lookupEntreprise, tvaIntraFR } from "../lib/siren.js";
 
 /**
  * Champ « SIRET (14) ou SIREN (9) » avec son bouton de recherche.
@@ -69,6 +69,41 @@ export function SirenLookup({ value, onChange, onResult, label = "SIRET (14) ou 
           ⚠️ {cleanSiren(value).length} chiffre{cleanSiren(value).length > 1 ? "s" : ""} — il en faut 9 (SIREN) ou 14 (SIRET)
         </div>
       )}
+    </div>
+  );
+}
+
+
+/**
+ * v8.167 — Mention sous un champ « N° TVA intracommunautaire » rempli
+ * automatiquement.
+ *
+ * La clé de contrôle se déduit du SIREN par la formule DGFiP, mais rien ne
+ * garantit que l'administration a bien attribué ce numéro-là : elle peut
+ * retenir une clé non standard, et une entreprise peut ne pas être assujettie
+ * du tout. Or ce numéro finit sur la facture puis, via IOBILL, dans le fichier
+ * transmis à l'administration. Il doit donc être contrôlé avant validation.
+ *
+ * La mention ne s'affiche que tant que la valeur est bien celle calculée : dès
+ * que l'utilisateur saisit un autre numéro, elle disparaît.
+ */
+export function TvaIntraNote({ siren, value }) {
+  const calcule = tvaIntraFR(siren);
+  const saisi = String(value || "").replace(/\s/g, "").toUpperCase();
+  if (!calcule || saisi !== calcule) return null;
+  return (
+    <div style={{ fontSize: 11, marginTop: 4, color: "var(--orange)", lineHeight: 1.45 }}>
+      ⚠️ Numéro calculé depuis le SIREN, non vérifié auprès de l'administration.
+      Veuillez vérifier s'il est conforme avant de valider — il figure sur la
+      facture et dans le fichier transmis.{" "}
+      <a
+        href="https://ec.europa.eu/taxation_customs/vies/"
+        target="_blank"
+        rel="noreferrer"
+        style={{ color: "var(--gold)", textDecoration: "underline" }}
+      >
+        Vérifier sur VIES ↗
+      </a>
     </div>
   );
 }
