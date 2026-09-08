@@ -5530,7 +5530,9 @@ function CerfaDocs({ order, dealer, vehicles, clients, onUpdateOrder, onClose })
       },
       acquereur: {
         isMorale: isCompanyClient,
-        sexe: client.civilite === "F" ? "F" : "M",
+        // Ni M ni F si la civilité n'est pas connue : le CERFA reste
+        // vierge plutôt que de porter une mention inventée.
+        sexe: client.civilite || "",
         identite: buildIdentite(clientParty),
         siret: client.siren,
         adresse: cA,

@@ -299,7 +299,7 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
         },
         vendeur: {
           isMorale: V.isMorale,
-          sexe: V.civilite === "F" ? "F" : "M",
+          sexe: V.civilite || "",
           identite: buildIdentite(V),
           siret: V.siret,
           adresse: vA,
@@ -307,7 +307,7 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
         },
         acquereur: {
           isMorale: A.isMorale,
-          sexe: A.civilite === "F" ? "F" : "M",
+          sexe: A.civilite || "",
           identite: buildIdentite(A),
           siret: A.siret,
           adresse: aA,
