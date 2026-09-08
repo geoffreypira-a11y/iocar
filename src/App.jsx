@@ -4663,7 +4663,7 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
               ? [
                   ["HT", fmtDec(c.ht)],
                   ["TVA " + (c.tvaPct || 20) + "%", fmtDec(c.tvaAmt)],
-                  c.remAmt > 0 ? ["Remise", "- " + fmtDec(c.remAmt)] : null,
+                  c.remAmt > 0 ? ["Remise déduite", fmtDec(c.remAmt)] : null,
                   ["Total TTC", fmtDec(c.ttc)],
                   c.debourTotal > 0 ? ["Débours (CG)", fmtDec(c.debourTotal)] : null,
                   c.debourTotal > 0 ? ["Total à payer", fmtDec(c.grandTotal)] : null,
@@ -5036,18 +5036,27 @@ function PrintDoc({ order, dealer, onClose, viewMode, livrePolice }) {
               <div className="pdoc-totals-box">
                 {c.avecTva ? (
                   <>
+                    {/* v8.163 — La remise est déjà déduite du prix des lignes
+                        ci-dessus : elle se lit AVANT le montant HT, sinon le
+                        document invite à la soustraire une seconde fois. */}
+                    {c.remAmt > 0 && <>
+                      <div className="pdoc-trow"><span>Sous-total TTC avant remise</span><span>{fmtDec(c.baseTotal + c.remAmt)}</span></div>
+                      <div className="pdoc-trow" style={{ color: "#c79528" }}><span>Remise accordée</span><span>- {fmtDec(c.remAmt)}</span></div>
+                    </>}
                     <div className="pdoc-trow"><span>Montant HT</span><span>{fmtDec(c.ht)}</span></div>
                     <div className="pdoc-trow"><span>TVA {c.tvaPct || 20}%</span><span>{fmtDec(c.tvaAmt)}</span></div>
-                    {c.remAmt > 0 && <div className="pdoc-trow" style={{ color: "#e5973c" }}><span>Remise</span><span>- {fmtDec(c.remAmt)}</span></div>}
                     <div className="pdoc-trow big"><span>TOTAL TTC</span><span>{fmtDec(c.ttc)}</span></div>
                   </>
                 ) : (
                   <>
                     {/* v8.48.9 — Régime marge : véhicule sans TVA + frais avec TVA sur taux normal */}
+                    {c.remAmt > 0 && <>
+                      <div className="pdoc-trow"><span>Sous-total TTC avant remise</span><span>{fmtDec(c.baseTotal + c.remAmt)}</span></div>
+                      <div className="pdoc-trow" style={{ color: "#c79528" }}><span>Remise accordée</span><span>- {fmtDec(c.remAmt)}</span></div>
+                    </>}
                     <div className="pdoc-trow"><span>Montant HT</span><span>{fmtDec(c.ht)}</span></div>
                     {c.tvaAmt > 0 && <div className="pdoc-trow"><span>TVA {c.tvaPct || 20}% (frais uniquement)</span><span>{fmtDec(c.tvaAmt)}</span></div>}
                     <div className="pdoc-trow" style={{ fontSize: 10, color: "#aaa" }}><span>Véhicule hors TVA</span><span>Art. 297A CGI</span></div>
-                    {c.remAmt > 0 && <div className="pdoc-trow" style={{ color: "#e5973c" }}><span>Remise</span><span>- {fmtDec(c.remAmt)}</span></div>}
                     <div className="pdoc-trow big"><span>TOTAL TTC</span><span>{fmtDec(c.ttc)}</span></div>
                   </>
                 )}
