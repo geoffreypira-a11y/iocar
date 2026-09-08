@@ -2893,6 +2893,14 @@ function VehicleFiche({ v, dealer, onClose }) {
                 <div className="fiche-price-label">Prix de vente</div>
                 <div className="fiche-price-val">{fmt(v.prix_vente)}</div>
                 <div style={{ fontSize: 11, color: "#6b6a7a", marginTop: 4 }}>TTC · Extension de garantie possible</div>
+                {/* v8.165 — Véhicule en TVA normale : le HT intéresse l'acheteur
+                    professionnel, qui récupère la TVA. En régime de marge la TVA
+                    n'est pas mentionnable (art. 297 E), donc rien ne s'affiche. */}
+                {v.vat_regime !== "margin_297a" && parseFloat(v.prix_vente) > 0 && (
+                  <div style={{ fontSize: 11, color: "#6b6a7a", marginTop: 2 }}>
+                    soit {fmtDec(parseFloat(v.prix_vente) / 1.2)} HT · TVA récupérable
+                  </div>
+                )}
               </div>
               <div style={{ textAlign: "right", fontSize: 11, color: "#6b6a7a" }}>
                 <div style={{ fontWeight: 700, fontSize: 14, color: "#f0ede8" }}>{dealer?.name || "AUTO DEALER"}</div>
