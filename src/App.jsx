@@ -5,7 +5,7 @@ import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recha
 // v8.37 — Pont IO BILL (composants UI)
 import IobillBridgeCard from "./components/IobillBridgeCard.jsx";
 import DocsAdminPage from "./DocsAdminPage.jsx";
-import { loadPdfLib, parseAddress, buildIdentite } from "./lib/cerfa-common.js";
+import { loadPdfLib, parseAddress, buildIdentite, splitPostalAddress, joinPostalAddress } from "./lib/cerfa-common.js";
 import { fillCerfaMandat } from "./lib/cerfa-mandat.js";
 import { fillCerfaImmat, couleurKey, teinteKey, TONS, TEINTES } from "./lib/cerfa-immat.js";
 import { PLAN_LIST, DEFAULT_PLAN, startCheckout as openStripeCheckout } from "./lib/plans.js";
@@ -7137,6 +7137,22 @@ function SettingsPage({ token, dealer, setDealer, usage, isRealAdmin }) {
   const [showKey, setShowKey] = useState(false);
   const fileRef = useRef();
 
+  // v8.168 — L'adresse reste UNE colonne en base (`address`), mais se saisit en
+  // trois morceaux. Le format enregistré devient celui que tout le reste attend
+  // déjà — voie sur ses lignes, « CP COMMUNE » sur la dernière :
+  //   • les CERFA n'ont plus « 12100 Millau » collé dans le nom de la voie ;
+  //   • le pont IOBILL, qui cherche le code postal en début de ligne, transmet
+  //     enfin une ville et un code postal au lieu de deux champs vides.
+  // Aucune colonne ajoutée, donc aucune migration : rien à casser côté base.
+  const [addr, setAddr] = useState(() => splitPostalAddress(dealer?.address));
+  // On ne réécrit `address` que lorsque l'abonné touche à l'un des trois champs.
+  // Une adresse existante n'est jamais reformatée dans son dos.
+  const setAddrPart = (k, v) => setAddr(prev => {
+    const next = { ...prev, [k]: v };
+    setForm(f => ({ ...f, address: joinPostalAddress(next) }));
+    return next;
+  });
+
   const monthKey = new Date().toISOString().slice(0, 7);
   const usedThisMonth = usage?.[monthKey] || 0;
 
@@ -7551,14 +7567,44 @@ function SettingsPage({ token, dealer, setDealer, usage, isRealAdmin }) {
         <div className="card card-pad">
           <div style={{ fontFamily: "Syne", fontSize: 14, fontWeight: 700, letterSpacing: 1, color: "var(--gold)", textTransform: "uppercase", marginBottom: 16 }}>Informations concession</div>
           <div className="form-grid">
-            {[["name", "Nom de la concession"], ["address", "Adresse"], ["phone", "Téléphone"], ["email", "Email"], ["siret", "SIRET"], ["tva_num", "N° TVA intracommunautaire"]].map(([k, l]) => (
+            <div className="form-group full">
+              <label className="form-label">Nom de la concession</label>
+              <input className="form-input" value={form.name || ""} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
+            </div>
+
+            {/* v8.168 — Adresse en trois champs : les CERFA et le pont IOBILL
+                ont besoin du code postal et de la commune séparés de la voie. */}
+            <div className="form-group full">
+              <label className="form-label">Adresse — n° et voie</label>
+              <textarea className="form-input" rows={2}
+                value={addr.rue}
+                onChange={e => setAddrPart("rue", e.target.value)}
+                placeholder="809 avenue du Languedoc" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Code postal</label>
+              <input className="form-input" value={addr.cp}
+                onChange={e => setAddrPart("cp", e.target.value.replace(/\D/g, "").slice(0, 5))}
+                placeholder="12100" style={{ fontFamily: "DM Mono" }} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Commune</label>
+              <input className="form-input" value={addr.ville}
+                onChange={e => setAddrPart("ville", e.target.value)}
+                placeholder="Millau" />
+            </div>
+            {(!addr.cp || !addr.ville) && (
+              <div className="form-group full" style={{ marginTop: -4 }}>
+                <div style={{ fontSize: 11, color: "var(--orange)", lineHeight: 1.45 }}>
+                  ⚠️ Code postal et commune sont repris sur les CERFA et transmis à IO Bill sur vos factures. Complétez-les pour que l'adresse de la concession y figure entièrement.
+                </div>
+              </div>
+            )}
+
+            {[["phone", "Téléphone"], ["email", "Email"], ["siret", "SIRET"], ["tva_num", "N° TVA intracommunautaire"]].map(([k, l]) => (
               <div className="form-group full" key={k}>
                 <label className="form-label">{l}</label>
-                {k === "address" ? (
-                  <textarea className="form-input" rows={2} value={form[k] || ""} onChange={e => setForm(f => ({ ...f, [k]: e.target.value }))} />
-                ) : (
-                  <input className="form-input" value={form[k] || ""} onChange={e => setForm(f => ({ ...f, [k]: e.target.value }))} />
-                )}
+                <input className="form-input" value={form[k] || ""} onChange={e => setForm(f => ({ ...f, [k]: e.target.value }))} />
               </div>
             ))}
 
