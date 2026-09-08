@@ -1385,6 +1385,11 @@ function mapOrderToInvoice(order, calc) {
       // v8.155 — Référence au livre de police (« VO#0007 »), lue sur le
       // registre à l'ouverture de l'order.
       livre_police: sanitizeString(order.livre_police_ref) || null,
+      // v8.164 — Remise commerciale, pour que la facture IOBILL la montre comme
+      // la facture IOCAR. Elle est déjà déduite du prix des lignes : c'est un
+      // élément d'affichage, la base taxable étant nette de remise — le XML
+      // Factur-X n'a donc rien à en dire.
+      remise_ttc_cents: Math.round(Math.abs(Number(order.remise_ttc) || 0) * 100) || null,
       // v8.151 — Véhicule REPRIS. Depuis que la reprise est portée en règlement
       // et non plus en ligne de facture, sa description n'apparaissait plus que
       // dans le libellé du paiement. IOCAR, lui, affiche un bloc dédié avec la
