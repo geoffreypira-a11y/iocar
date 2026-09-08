@@ -12,7 +12,7 @@
 // verticaux), puis contrôlées sur un rendu du document rempli.
 // ═══════════════════════════════════════════════════════════════════
 
-import { splitDate, winAnsi } from "./cerfa-common.js";
+import { splitDate, winAnsi, formuleComplete } from "./cerfa-common.js";
 
 // Cases à cocher de l'en-tête « Veuillez cocher la case correspondante ».
 export const NATURES_DEMANDE = [
@@ -163,7 +163,9 @@ export async function fillCerfaImmat(pdfBytes, PDFLib, data) {
   // ── Cadre VÉHICULE ──
   const v = data.vehicule || {};
   text("immatriculation", v.plate);
-  text("numeroFormule", v.numero_formule);
+  // v8.172 — Contrairement au 15776, ce gabarit n'imprime pas le « 20 » :
+  // la ligne est libre, le numéro doit donc y figurer en entier.
+  text("numeroFormule", formuleComplete(v.numero_formule));
   text("marque", v.marque);
   text("denomination", v.modele);
   text("typeVariante", v.finition);

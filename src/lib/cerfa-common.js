@@ -135,6 +135,36 @@ export function joinPostalAddress({ rue, cp, ville }) {
   return [voie, bas].filter(Boolean).join("\n");
 }
 
+// v8.172 — N° de formule du certificat d'immatriculation.
+//
+// Il s'écrit « 2024 AB 12345 » sur la carte grise, mais les deux premiers
+// chiffres sont invariants : le CERFA 15776 les imprime déjà dans les deux
+// premières cases de son peigne, et la Flotte fait pareil avec un préfixe
+// « 20 » posé à côté du champ. On ne stocke donc que les 9 caractères qui
+// suivent — 2 chiffres d'année, 2 lettres, 5 chiffres.
+//
+// La saisie est tolérante : espaces, tirets et minuscules acceptés, et un
+// numéro tapé en entier (11 caractères commençant par « 20 ») voit son
+// préfixe retiré plutôt que d'être tronqué par la fin.
+export function cleanFormule(value) {
+  const s = String(value || "").replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+  const sansPrefixe = s.length === 11 && s.startsWith("20") ? s.slice(2) : s;
+  return sansPrefixe.slice(0, 9);
+}
+
+// Regroupement 2-2-5, comme sur la carte grise, pour la relecture à l'écran.
+export function formatFormule(value) {
+  const s = cleanFormule(value);
+  return [s.slice(0, 2), s.slice(2, 4), s.slice(4)].filter(Boolean).join(" ");
+}
+
+// Numéro complet, pour les documents qui n'impriment pas le « 20 » eux-mêmes
+// (le 13750*07 ne l'a que sur une ligne libre). Vide si rien n'est saisi.
+export function formuleComplete(value) {
+  const s = cleanFormule(value);
+  return s ? "20" + s : "";
+}
+
 // Identité telle que l'attendent les CERFA : raison sociale pour une personne
 // morale, « NOM Prénom » (nom en majuscules d'abord) pour une personne physique.
 export function buildIdentite(p) {

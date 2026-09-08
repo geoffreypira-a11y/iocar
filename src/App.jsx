@@ -5,7 +5,7 @@ import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recha
 // v8.37 — Pont IO BILL (composants UI)
 import IobillBridgeCard from "./components/IobillBridgeCard.jsx";
 import DocsAdminPage from "./DocsAdminPage.jsx";
-import { loadPdfLib, parseAddressOf, buildIdentite, splitPostalAddress, joinPostalAddress } from "./lib/cerfa-common.js";
+import { loadPdfLib, parseAddressOf, buildIdentite, splitPostalAddress, joinPostalAddress, cleanFormule, formatFormule } from "./lib/cerfa-common.js";
 import { fillCerfaMandat } from "./lib/cerfa-mandat.js";
 import { fillCerfaCession } from "./lib/cerfa-cession.js";
 import { fillCerfaImmat, couleurKey, teinteKey, TONS, TEINTES } from "./lib/cerfa-immat.js";
@@ -2898,7 +2898,15 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
                 <label className="form-label" style={{ color: "var(--gold)" }}>N° de formule</label>
                 <div style={{ display: "flex", alignItems: "center", gap: 0 }}>
                   <span style={{ background: "var(--card2)", border: "1px solid var(--border)", borderRight: "none", borderRadius: "6px 0 0 6px", padding: "8px 10px", fontSize: 14, color: "var(--muted)", fontFamily: "DM Mono", letterSpacing: 1 }}>20</span>
-                  <input className="form-input" style={{ borderRadius: "0 6px 6px 0", fontFamily: "DM Mono", letterSpacing: 1 }} maxLength={9} value={form.numero_formule || ""} onChange={e => set("numero_formule", e.target.value)} placeholder="24 AB 12345" />
+                  {/* v8.172 — Le placeholder invite à taper des espaces alors que
+                      maxLength={9} les comptait : « 24 AB 12345 » se retrouvait
+                      coupé à « 24 AB 123 ». On accepte désormais espaces, tirets
+                      et minuscules, on n'en garde que les 9 caractères utiles et
+                      on les réaffiche groupés comme sur la carte grise. */}
+                  <input className="form-input" style={{ borderRadius: "0 6px 6px 0", fontFamily: "DM Mono", letterSpacing: 1 }}
+                    value={formatFormule(form.numero_formule)}
+                    onChange={e => set("numero_formule", cleanFormule(e.target.value))}
+                    placeholder="24 AB 12345" />
                 </div>
               </div>
             <div className="form-group">
