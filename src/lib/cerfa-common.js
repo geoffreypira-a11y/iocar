@@ -165,6 +165,26 @@ export function formuleComplete(value) {
   return s ? "20" + s : "";
 }
 
+// v8.173 — Nom du fichier téléchargé pour un CERFA : type de document,
+// immatriculation et partie concernée, pour retrouver la pièce dans un dossier
+// sans avoir à l'ouvrir. Les accents et la ponctuation sautent — un nom de
+// fichier voyage entre macOS, Windows et les pièces jointes — et chaque
+// morceau est borné pour ne pas produire un nom à rallonge.
+export function nomFichierCerfa(...morceaux) {
+  const propres = morceaux
+    .map(m => String(m || "")
+      // Les ligatures ne se décomposent pas en NFD : « Sætre » deviendrait
+      // « S-tre ». On les translittère avant de retirer les accents.
+      .replace(/œ/g, "oe").replace(/Œ/g, "OE")
+      .replace(/æ/g, "ae").replace(/Æ/g, "AE").replace(/ß/g, "ss")
+      .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^A-Za-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 40))
+    .filter(Boolean);
+  return (propres.join("_") || "cerfa") + ".pdf";
+}
+
 // Identité telle que l'attendent les CERFA : raison sociale pour une personne
 // morale, « NOM Prénom » (nom en majuscules d'abord) pour une personne physique.
 export function buildIdentite(p) {

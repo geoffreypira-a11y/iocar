@@ -5,7 +5,7 @@ import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recha
 // v8.37 — Pont IO BILL (composants UI)
 import IobillBridgeCard from "./components/IobillBridgeCard.jsx";
 import DocsAdminPage from "./DocsAdminPage.jsx";
-import { loadPdfLib, parseAddressOf, buildIdentite, splitPostalAddress, joinPostalAddress, cleanFormule, formatFormule } from "./lib/cerfa-common.js";
+import { loadPdfLib, parseAddressOf, buildIdentite, splitPostalAddress, joinPostalAddress, cleanFormule, formatFormule, nomFichierCerfa } from "./lib/cerfa-common.js";
 import { fillCerfaMandat } from "./lib/cerfa-mandat.js";
 import { fillCerfaCession } from "./lib/cerfa-cession.js";
 import { fillCerfaImmat, couleurKey, teinteKey, TONS, TEINTES } from "./lib/cerfa-immat.js";
@@ -5678,7 +5678,11 @@ function CerfaDocs({ order, dealer, vehicles, clients, onUpdateOrder, onClose })
                   title="Remplacer par la date du jour"
                   style={{ fontSize: 11 }}
                 >🔄 Mettre à jour la date</button>
-                <a href={pdfUrl} download={current.file + "_" + (v.plate || "vehicule") + "_" + cessionDate.replace(/\//g, "-") + ".pdf"} className="btn btn-primary btn-sm">Telecharger</a>
+                {/* v8.173 — Le nom du fichier porte l'immatriculation ET le client :
+                    un CERFA téléchargé se retrouve dans un dossier sans l'ouvrir. */}
+                <a href={pdfUrl}
+                  download={nomFichierCerfa(current.file, v.plate || "vehicule", buildIdentite(clientParty), cessionDate)}
+                  className="btn btn-primary btn-sm">Telecharger</a>
                 <button className="btn btn-ghost btn-sm" onClick={() => { const w = window.open(pdfUrl, "_blank"); if (w) setTimeout(() => w.print(), 800); }}>Imprimer</button>
               </>
             )}
