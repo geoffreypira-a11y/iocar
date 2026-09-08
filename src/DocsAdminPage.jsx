@@ -148,12 +148,23 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
   const [pdfUrl, setPdfUrl] = useState(null);
   const [error, setError] = useState(null);
 
+  // v8.170 — Le CRM range la raison sociale d'une société dans la colonne `nom`
+  // (historique : c'est elle qu'affiche la liste des contacts). resolveParty ne
+  // regardait que legal_name / name, absents d'un client CRM : une société
+  // choisie comme vendeur ressortait donc sans identité et le CERFA refusait de
+  // se générer — « Le vendeur est incomplet (nom / raison sociale) ».
+  const crmMorale = (c) => c.type === "company" || !!(c.siren && String(c.siren).trim());
+  const crmIdentite = (c) => c.legal_name || c.raison_sociale || c.name || c.nom || "";
+
   // ── Options des menus déroulants (clients CRM en lecture seule + garage + fournisseurs + nouveau) ──
   function partyOptions() {
     const opts = [{ value: "garage", label: "🏠 Moi-même (le garage)" }];
     for (const c of clients) {
-      const nm = c.legal_name || c.name || [c.prenom, c.nom].filter(Boolean).join(" ") || "Client";
-      opts.push({ value: "c:" + c.id, label: "👤 " + nm });
+      const morale = crmMorale(c);
+      const nm = morale
+        ? crmIdentite(c)
+        : ([c.prenom, c.nom].filter(Boolean).join(" ") || crmIdentite(c));
+      opts.push({ value: "c:" + c.id, label: (morale ? "🏢 " : "👤 ") + (nm || "Client") });
     }
     for (const f of fournisseurs) {
       const nm = f.type === "professionnel" ? (f.raison || f.nom) : [f.nom, f.prenom].filter(Boolean).join(" ");
@@ -174,11 +185,14 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
     }
     if (sel && sel.startsWith("c:")) {
       const c = clients.find(x => String(x.id) === sel.slice(2)) || {};
-      const isMorale = c.type === "company" || !!(c.siren && String(c.siren).trim());
+      const isMorale = crmMorale(c);
       return {
         isMorale,
-        identite: c.legal_name || c.name || "",
-        nom: c.nom || "", prenom: c.prenom || "",
+        identite: crmIdentite(c),
+        // Pour une société, `nom` porte la raison sociale : la recopier dans
+        // les champs nom/prénom écrirait « TRICATEL » en nom de personne.
+        nom: isMorale ? "" : (c.nom || ""),
+        prenom: isMorale ? "" : (c.prenom || ""),
         siret: c.siren || "", adresse: c.address || c.adresse || "",
         // v8.169 — Le CRM saisit déjà CP et commune à part : ils font foi.
         code_postal: c.code_postal || "", ville: c.ville || "",
