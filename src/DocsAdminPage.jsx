@@ -2,7 +2,7 @@ import React, { useState, useMemo } from "react";
 import { fillCerfaImmat, NATURES_DEMANDE, couleurKey, teinteKey, TONS, TEINTES } from "./lib/cerfa-immat.js";
 import { fillCerfaMandat } from "./lib/cerfa-mandat.js";
 import { fillCerfaCession } from "./lib/cerfa-cession.js";
-import { loadPdfLib, parseAddressOf, buildIdentite } from "./lib/cerfa-common.js";
+import { loadPdfLib, parseAddressOf, buildIdentite, cleanFormule, formatFormule } from "./lib/cerfa-common.js";
 
 // ═══════════════════════════════════════════════════════════════════
 // v8.139 — Onglet "Documents administratifs" (stand-alone)
@@ -530,7 +530,16 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
               {[["plate", "Immatriculation *"], ["vin", "N° VIN"], ["marque", "Marque"], ["modele", "Modèle"], ["finition", "Type/Variante/Version"], ["genre", "Genre national"], ["date_mec", "Date 1ère MEC (jj/mm/aaaa)"], ["kilometrage", "Kilométrage"], ["numero_formule", "N° de formule"]].map(([k, l]) => (
                 <div className="form-group" key={k}>
                   <label className="form-label">{l}</label>
-                  <input className="form-input" value={manualVeh[k]} onChange={e => setManualVeh(mv => ({ ...mv, [k]: e.target.value }))} />
+                  {/* v8.172 — Même tolérance que dans la Flotte pour le n° de
+                      formule : ici le préfixe « 20 » n'est pas affiché, donc on
+                      accepte aussi le numéro tapé en entier et on le normalise. */}
+                  <input className="form-input"
+                    value={k === "numero_formule" ? formatFormule(manualVeh[k]) : manualVeh[k]}
+                    onChange={e => setManualVeh(mv => ({
+                      ...mv,
+                      [k]: k === "numero_formule" ? cleanFormule(e.target.value) : e.target.value,
+                    }))}
+                    placeholder={k === "numero_formule" ? "24 AB 12345 (le 20 initial est facultatif)" : undefined} />
                 </div>
               ))}
             </div>
