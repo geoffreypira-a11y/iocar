@@ -53,6 +53,53 @@ export function parseAddress(addr) {
   return { num, ext, type, nom, cp, ville };
 }
 
+// v8.168 — Découpe une adresse libre en voie / code postal / commune, et
+// recompose au format canonique de l'application :
+//
+//     809 avenue du Languedoc
+//     12100 Millau
+//
+// C'est ce format que tout le reste attend déjà : parseAddress() ci-dessus
+// pour les CERFA, parseGarageAddress() du pont IOBILL (qui cherche le code
+// postal en DÉBUT de ligne), et l'affichage des factures. Une adresse tapée
+// d'un seul tenant laissait « 12100 Millau » dans le nom de la voie du CERFA
+// et partait à IOBILL sans code postal ni commune.
+export function splitPostalAddress(addr) {
+  const lines = String(addr || "").split("\n").map(l => l.trim()).filter(Boolean);
+  const others = (skip) => lines.filter((_, j) => j !== skip).join("\n");
+
+  // 1) Ligne « 12100 MILLAU » isolée — le format déjà canonique. La commune ne
+  //    doit pas contenir d'autre code postal, sinon « 10000 route de Nîmes
+  //    13000 Marseille » se lirait comme le CP 10000 suivi d'une commune.
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^(\d{5})\s+(.+)$/);
+    if (m && !/\d{5}/.test(m[2])) return { rue: others(i), cp: m[1], ville: m[2].trim() };
+  }
+
+  const last = lines[lines.length - 1] || "";
+  const head = (reste) => [...lines.slice(0, -1), reste.trim()].filter(Boolean).join("\n");
+
+  // 2) « … 12100 Millau » en fin de ligne. Quantificateur gourmand : sur une
+  //    voie qui commence par cinq chiffres (« 10000 route de X 13000 Nîmes »),
+  //    c'est bien le dernier groupe qui est retenu comme code postal.
+  const m2 = last.match(/^(.*)[\s,]+(\d{5})\s+(.+)$/);
+  if (m2 && !/^\d+$/.test(m2[3].trim())) {
+    return { rue: head(m2[1]), cp: m2[2], ville: m2[3].trim() };
+  }
+
+  // 3) Code postal seul en fin de ligne, commune non saisie.
+  const m3 = last.match(/^(.*)[\s,]+(\d{5})$/);
+  if (m3) return { rue: head(m3[1]), cp: m3[2], ville: "" };
+
+  return { rue: lines.join("\n"), cp: "", ville: "" };
+}
+
+export function joinPostalAddress({ rue, cp, ville }) {
+  const voie = String(rue || "").trim();
+  const bas = [String(cp || "").trim(), String(ville || "").trim()].filter(Boolean).join(" ");
+  return [voie, bas].filter(Boolean).join("\n");
+}
+
 // Identité telle que l'attendent les CERFA : raison sociale pour une personne
 // morale, « NOM Prénom » (nom en majuscules d'abord) pour une personne physique.
 export function buildIdentite(p) {
