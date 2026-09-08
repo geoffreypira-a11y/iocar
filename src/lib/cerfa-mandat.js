@@ -6,7 +6,7 @@
 // de remplir.
 // ═══════════════════════════════════════════════════════════════════
 
-import { parseAddress, buildIdentite, splitDate } from "./cerfa-common.js";
+import { parseAddressOf, buildIdentite, splitDate } from "./cerfa-common.js";
 
 /**
  * Remplit le mandat 13757*03 et renvoie les octets du PDF.
@@ -14,7 +14,8 @@ import { parseAddress, buildIdentite, splitDate } from "./cerfa-common.js";
  * @param {Uint8Array|ArrayBuffer} pdfBytes  gabarit /cerfa_1375703.pdf
  * @param {object} PDFLib                    module pdf-lib
  * @param {object} data
- *   - mandant     partie qui donne mandat  (isMorale, identite, nom, prenom, siret, adresse)
+ *   - mandant     partie qui donne mandat  (isMorale, identite, nom, prenom, siret,
+ *                 adresse, et si saisis à part code_postal / ville)
  *   - mandataire  partie qui fait les démarches
  *   - vehicule    { plate, marque, vin }
  *   - nature      nature de l'opération (« Immatriculation », …)
@@ -37,7 +38,9 @@ export async function fillCerfaMandat(pdfBytes, PDFLib, data) {
   const M1 = data.mandant || {};
   const M2 = data.mandataire || {};
   const veh = data.vehicule || {};
-  const mA = parseAddress(M1.adresse);
+  // v8.169 — parseAddressOf : si le code postal et la commune du mandant ont
+  // été saisis dans leurs propres champs, ce sont eux qui font foi.
+  const mA = parseAddressOf(M1);
   const d = splitDate(data.date) || { jour: "", mois: "", annee: "" };
 
   // Mandant

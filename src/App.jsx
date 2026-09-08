@@ -5,7 +5,7 @@ import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recha
 // v8.37 — Pont IO BILL (composants UI)
 import IobillBridgeCard from "./components/IobillBridgeCard.jsx";
 import DocsAdminPage from "./DocsAdminPage.jsx";
-import { loadPdfLib, parseAddress, buildIdentite, splitPostalAddress, joinPostalAddress } from "./lib/cerfa-common.js";
+import { loadPdfLib, parseAddressOf, buildIdentite, splitPostalAddress, joinPostalAddress } from "./lib/cerfa-common.js";
 import { fillCerfaMandat } from "./lib/cerfa-mandat.js";
 import { fillCerfaImmat, couleurKey, teinteKey, TONS, TEINTES } from "./lib/cerfa-immat.js";
 import { PLAN_LIST, DEFAULT_PLAN, startCheckout as openStripeCheckout } from "./lib/plans.js";
@@ -5476,6 +5476,9 @@ function CerfaDocs({ order, dealer, vehicles, clients, onUpdateOrder, onClose })
     identite: isCompanyClient ? (client.nom || client.name || "") : (client.name || ""),
     nom: client.nom || "", prenom: client.prenom || "",
     siret: client.siren || "", adresse: client.address || "",
+    // v8.169 — Le client CRM a son code postal et sa commune dans leurs propres
+    // champs : on les transmet pour qu'ils ne soient pas redéduits de la ligne.
+    code_postal: client.code_postal || "", ville: client.ville || "",
     civilite: client.civilite || "", tel: client.phone || "", email: client.email || "",
   };
   const garageParty = {
@@ -5483,8 +5486,8 @@ function CerfaDocs({ order, dealer, vehicles, clients, onUpdateOrder, onClose })
     siret: dealer?.siret || "", adresse: dealer?.address || "", civilite: "",
     tel: dealer?.phone || "", email: dealer?.email || "",
   };
-  const villeGarage = parseAddress(dealer?.address || "").ville;
-  const villeClient = parseAddress(client.address || "").ville;
+  const villeGarage = parseAddressOf(garageParty).ville;
+  const villeClient = parseAddressOf(clientParty).ville;
 
   const setUrl = (key, url) => setUrls(prev => ({ ...prev, [key]: url }));
 
@@ -5509,8 +5512,8 @@ function CerfaDocs({ order, dealer, vehicles, clients, onUpdateOrder, onClose })
       catch(e) { console.warn("Radio:", name, e.message); }
     };
 
-    const dA = parseAddress(dealer?.address || "");
-    const cA = parseAddress(client.address || "");
+    const dA = parseAddressOf(garageParty);
+    const cA = parseAddressOf(clientParty);
     // ⚠ On utilise la date FIGÉE depuis le state — pas today() — pour que la date
     // ne change pas à chaque réouverture du document après l'impression.
     const dateJ = cessionDate;
@@ -5643,7 +5646,7 @@ function CerfaDocs({ order, dealer, vehicles, clients, onUpdateOrder, onClose })
         siret: clientParty.siret,
         tel: clientParty.tel,
         email: clientParty.email,
-        adresse: parseAddress(clientParty.adresse),
+        adresse: parseAddressOf(clientParty),
       },
     });
   };
