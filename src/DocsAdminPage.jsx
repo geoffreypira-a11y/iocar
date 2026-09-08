@@ -2,7 +2,7 @@ import React, { useState, useMemo } from "react";
 import { fillCerfaImmat, NATURES_DEMANDE, couleurKey, teinteKey, TONS, TEINTES } from "./lib/cerfa-immat.js";
 import { fillCerfaMandat } from "./lib/cerfa-mandat.js";
 import { fillCerfaCession } from "./lib/cerfa-cession.js";
-import { loadPdfLib, parseAddressOf, buildIdentite, cleanFormule, formatFormule } from "./lib/cerfa-common.js";
+import { loadPdfLib, parseAddressOf, buildIdentite, cleanFormule, formatFormule, nomFichierCerfa } from "./lib/cerfa-common.js";
 
 // ═══════════════════════════════════════════════════════════════════
 // v8.139 — Onglet "Documents administratifs" (stand-alone)
@@ -147,6 +147,9 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
 
   const [loading, setLoading] = useState(false);
   const [pdfUrl, setPdfUrl] = useState(null);
+  // v8.173 — Nom du fichier téléchargé, figé à la génération : les menus
+  // peuvent changer ensuite, le document produit, lui, ne change plus.
+  const [pdfName, setPdfName] = useState("cerfa.pdf");
   const [error, setError] = useState(null);
 
   // v8.170 — Le CRM range la raison sociale d'une société dans la colonne `nom`
@@ -239,6 +242,15 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
     };
   }
 
+  // v8.173 — Le nom qui aide à retrouver une pièce est celui de l'AUTRE
+  // partie : le garage figure sur tous ses documents, il n'y distingue rien.
+  // On prend donc la première des deux qui n'est pas « Moi-même ».
+  function nomTiers(sel1, p1, sel2, p2) {
+    if (sel1 !== "garage") return buildIdentite(p1);
+    if (sel2 !== "garage") return buildIdentite(p2);
+    return buildIdentite(p1);
+  }
+
   // ── Enregistre un "nouveau" comme fournisseur dédié (jamais dans le CRM) ──
   function maybeSaveFournisseur(newForm, doSave) {
     if (!doSave) return;
@@ -320,6 +332,7 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
 
       const blob = new Blob([filled], { type: "application/pdf" });
       setPdfUrl(URL.createObjectURL(blob));
+      setPdfName(nomFichierCerfa("Cession-15776-02", veh.plate, nomTiers(acquereurSel, A, vendeurSel, V), dateCession));
 
       // Écriture éventuelle : enregistrer les "nouveau" comme fournisseurs (si coché).
       if (vendeurSel === "nouveau") maybeSaveFournisseur(newVendeur, saveVendeurFourn);
@@ -355,6 +368,7 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
       });
       const blob = new Blob([filled], { type: "application/pdf" });
       setPdfUrl(URL.createObjectURL(blob));
+      setPdfName(nomFichierCerfa("Mandat-13757-03", veh.plate, nomTiers(vendeurSel, M1, acquereurSel, M2), dateCession));
 
       if (vendeurSel === "nouveau") maybeSaveFournisseur(newVendeur, saveVendeurFourn);
       if (acquereurSel === "nouveau") maybeSaveFournisseur(newAcquereur, saveAcquereurFourn);
@@ -401,6 +415,7 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
       });
       const blob = new Blob([filled], { type: "application/pdf" });
       setPdfUrl(URL.createObjectURL(blob));
+      setPdfName(nomFichierCerfa("Carte-grise-13750-07", veh.plate, nomTiers(acquereurSel, T, vendeurSel, resolveParty(vendeurSel, newVendeur)), dateCession));
 
       if (acquereurSel === "nouveau") maybeSaveFournisseur(newAcquereur, saveAcquereurFourn);
     } catch (e) {
@@ -593,7 +608,7 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
               <button className="btn btn-primary btn-sm" onClick={() => window.open(pdfUrl, "_blank")}>
                 ↗ Ouvrir en plein écran
               </button>
-              <a className="btn btn-ghost btn-sm" href={pdfUrl} download={docType === "mandat" ? "mandat-immatriculation-13757-03.pdf" : docType === "immat" ? "demande-immatriculation-13750-07.pdf" : "cerfa-cession-15776-02.pdf"} style={{ textDecoration: "none" }}>
+              <a className="btn btn-ghost btn-sm" href={pdfUrl} download={pdfName} style={{ textDecoration: "none" }}>
                 ⬇ Télécharger
               </a>
             </div>
