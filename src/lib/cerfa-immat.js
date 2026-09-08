@@ -12,7 +12,7 @@
 // verticaux), puis contrôlées sur un rendu du document rempli.
 // ═══════════════════════════════════════════════════════════════════
 
-import { splitDate } from "./cerfa-common.js";
+import { splitDate, winAnsi } from "./cerfa-common.js";
 
 // Cases à cocher de l'en-tête « Veuillez cocher la case correspondante ».
 export const NATURES_DEMANDE = [
@@ -116,16 +116,6 @@ const CHECK = {
   morale: [365.5, 538.9],
 };
 
-// Helvetica standard n'encode que WinAnsi : on retire ce qui n'y entre pas
-// (le PDF échouerait à l'enregistrement sur un caractère hors jeu).
-function winAnsi(str) {
-  return String(str == null ? "" : str)
-    .replace(/[œ]/g, "oe").replace(/[Œ]/g, "OE")
-    .replace(/[æ]/g, "ae").replace(/[Æ]/g, "AE")
-    .replace(/[‘’]/g, "'").replace(/[“”]/g, '"')
-    .replace(/[–—]/g, "-").replace(/[  ]/g, " ")
-    .replace(/[^\x20-\xFF]/g, "");
-}
 
 /**
  * Remplit le CERFA 13750*07 et renvoie les octets du PDF.
