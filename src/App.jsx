@@ -10,6 +10,7 @@ import { fillCerfaMandat } from "./lib/cerfa-mandat.js";
 import { fillCerfaImmat, couleurKey, teinteKey, TONS, TEINTES } from "./lib/cerfa-immat.js";
 import { PLAN_LIST, DEFAULT_PLAN, startCheckout as openStripeCheckout } from "./lib/plans.js";
 import { PlanPicker } from "./components/PlanPicker.jsx";
+import { SirenLookup } from "./components/SirenLookup.jsx";
 import IobillInvoiceSync from "./components/IobillInvoiceSync.jsx";
 
 // v8.49.16 — Système d'essai gratuit 7 jours + paywall
@@ -800,6 +801,11 @@ function daysSince(dateStr) {
 // formulaire véhicule, reprise dans facture). Une seule source de vérité.
 const QUOTA_FREE = 10;            // recherches gratuites par mois
 const COST_EXTRA = 0.20;          // € HT par recherche au-delà du quota
+
+// Pièces d'identité acceptées pour identifier un vendeur au Livre de Police
+// (art. R.321-3 du Code pénal). Partagé entre la Flotte, qui saisit le
+// fournisseur, et le registre lui-même, qui le relit.
+const PIECES = ["CNI", "Passeport", "Permis de conduire", "Carte de séjour", "Extrait Kbis"];
 
 // Renvoie l'état du quota pour un usage donné :
 //   { used, remaining, isFree, payantes, montantHT, color, text }
@@ -2441,6 +2447,23 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   // v8.138 — Setter pour l'objet fournisseur (à qui on a acheté le véhicule).
   const setFourn = (k, val) => setForm(f => ({ ...f, fournisseur: { ...(f.fournisseur || {}), [k]: val } }));
+  const fournType = form.fournisseur?.type || "particulier";
+  const fournPro = fournType === "professionnel";
+  // v8.166 — Annuaire des entreprises : le SIRET suffit à identifier un
+  // fournisseur professionnel au registre. On pose la raison sociale et le
+  // n° de TVA, on ne comble que les champs d'adresse restés vides.
+  const applyFournSiren = (d) => setForm(f => {
+    const fo = f.fournisseur || {};
+    return { ...f, fournisseur: {
+      ...fo,
+      nom: d.raison_sociale || fo.nom || "",
+      siret: d.siret || fo.siret || "",
+      tva_intra: fo.tva_intra || d.tva_intra || "",
+      adresse: fo.adresse || d.adresse || "",
+      code_postal: fo.code_postal || d.code_postal || "",
+      ville: fo.ville || d.ville || "",
+    } };
+  });
 
   // ─── QUOTA MENSUEL ────────────────────────────────────────────
   // Utilise les constantes globales (QUOTA_FREE, COST_EXTRA) et le helper getQuotaStatus.
@@ -2676,7 +2699,12 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
           </div>
 
           {/* v8.138 — Fournisseur : à qui le véhicule a été acheté. Préremplit le
-              vendeur dans le Livre de Police (traçabilité anti-recel). */}
+              vendeur dans le Livre de Police (traçabilité anti-recel).
+              v8.166 — Le bloc ne demandait que type / nom / adresse, ce qui
+              laissait toujours l'entrée du registre incomplète : la pièce
+              d'identité du cédant est exigée (art. R.321-3 du Code pénal) et
+              elle n'était saisissable que plus tard, dans le Livre de Police.
+              On la demande donc ici, au moment où le véhicule entre. */}
           <div style={{ marginBottom: 16, padding: 14, borderRadius: 10, background: "rgba(212,168,67,.05)", border: "1px solid var(--border2)" }}>
             <div style={{ fontSize: 10, letterSpacing: 2, textTransform: "uppercase", color: "var(--gold)", fontWeight: 700, marginBottom: 10 }}>
               Fournisseur — à qui vous avez acheté le véhicule <span style={{ color: "var(--muted)", fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>(préremplit le Livre de Police)</span>
@@ -2684,25 +2712,88 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
             <div className="form-grid">
               <div className="form-group">
                 <label className="form-label">Type</label>
-                <select className="form-input" value={form.fournisseur?.type || "particulier"} onChange={e => setFourn("type", e.target.value)}>
+                <select className="form-input" value={fournType} onChange={e => setFourn("type", e.target.value)}>
                   <option value="particulier">Particulier</option>
                   <option value="professionnel">Professionnel</option>
                 </select>
               </div>
               <div className="form-group">
-                <label className="form-label">{form.fournisseur?.type === "professionnel" ? "Raison sociale" : "Nom"}</label>
-                <input className="form-input" value={form.fournisseur?.nom || ""} onChange={e => setFourn("nom", e.target.value)} />
+                <label className="form-label">{fournPro ? "Raison sociale" : "Nom"}</label>
+                <input className="form-input" value={form.fournisseur?.nom || ""} onChange={e => setFourn("nom", e.target.value)} placeholder={fournPro ? "ex : Garage Martin SARL" : "ex : Dupont"} />
               </div>
-              {form.fournisseur?.type !== "professionnel" && (
+              {!fournPro && (
                 <div className="form-group">
                   <label className="form-label">Prénom</label>
-                  <input className="form-input" value={form.fournisseur?.prenom || ""} onChange={e => setFourn("prenom", e.target.value)} />
+                  <input className="form-input" value={form.fournisseur?.prenom || ""} onChange={e => setFourn("prenom", e.target.value)} placeholder="ex : Jean" />
                 </div>
               )}
+
+              {/* Professionnel : l'annuaire des entreprises remplit raison
+                  sociale, adresse et n° de TVA depuis le seul SIRET. */}
+              {fournPro && (
+                <>
+                  <SirenLookup
+                    value={form.fournisseur?.siret || ""}
+                    onChange={v => setFourn("siret", v)}
+                    onResult={applyFournSiren}
+                  />
+                  <div className="form-group">
+                    <label className="form-label">N° TVA intracom.</label>
+                    <input className="form-input" value={form.fournisseur?.tva_intra || ""} onChange={e => setFourn("tva_intra", e.target.value.toUpperCase())} placeholder="FR..." style={{ fontFamily: "DM Mono" }} />
+                  </div>
+                </>
+              )}
+
               <div className="form-group full">
                 <label className="form-label">Adresse</label>
-                <input className="form-input" value={form.fournisseur?.adresse || ""} onChange={e => setFourn("adresse", e.target.value)} placeholder="12 rue de la Paix, 13000 Marseille" />
+                <input className="form-input" value={form.fournisseur?.adresse || ""} onChange={e => setFourn("adresse", e.target.value)} placeholder="12 rue de la Paix" />
               </div>
+              <div className="form-group">
+                <label className="form-label">Code postal</label>
+                <input className="form-input" value={form.fournisseur?.code_postal || ""} onChange={e => setFourn("code_postal", e.target.value)} placeholder="13001" />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Ville</label>
+                <input className="form-input" value={form.fournisseur?.ville || ""} onChange={e => setFourn("ville", e.target.value)} placeholder="Marseille" />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Téléphone</label>
+                <input className="form-input" value={form.fournisseur?.phone || ""} onChange={e => setFourn("phone", e.target.value)} placeholder="06 12 34 56 78" />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Email</label>
+                <input className="form-input" type="email" value={form.fournisseur?.email || ""} onChange={e => setFourn("email", e.target.value)} placeholder="contact@exemple.fr" />
+              </div>
+
+              {/* Pièce d'identité du cédant — ce qui manquait au registre. */}
+              <div className="form-group">
+                <label className="form-label">{fournPro ? "Pièce justificative" : "Type pièce d'identité"}</label>
+                <select className="form-input" value={form.fournisseur?.piece_type || (fournPro ? "Extrait Kbis" : "CNI")} onChange={e => setFourn("piece_type", e.target.value)}>
+                  {PIECES.map(x => <option key={x}>{x}</option>)}
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="form-label">N° de pièce</label>
+                <input className="form-input" value={form.fournisseur?.piece_id || ""} onChange={e => setFourn("piece_id", e.target.value)} placeholder="N° figurant sur la pièce" />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Date de délivrance</label>
+                <input className="form-input" value={form.fournisseur?.piece_date || ""} onChange={e => setFourn("piece_date", e.target.value)} placeholder="jj/mm/aaaa" />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Autorité de délivrance</label>
+                <input className="form-input" value={form.fournisseur?.piece_autorite || ""} onChange={e => setFourn("piece_autorite", e.target.value)} placeholder="ex : Préfecture du Rhône" />
+              </div>
+
+              <div className="form-group full">
+                <label className="form-label">Mode de règlement</label>
+                <select className="form-input" value={form.fournisseur?.mode_reglement || "Virement"} onChange={e => setFourn("mode_reglement", e.target.value)}>
+                  {["Virement", "Chèque", "Espèces", "Financement", "Reprise (compensation)"].map(x => <option key={x}>{x}</option>)}
+                </select>
+              </div>
+            </div>
+            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 8, lineHeight: 1.5 }}>
+              Le Livre de Police doit identifier la personne qui vous a cédé le véhicule et la pièce présentée (art. R.321-3 du Code pénal). Ce que vous saisissez ici remplit l'entrée du registre, il n'y a plus rien à recompléter ensuite.
             </div>
           </div>
 
@@ -2960,16 +3051,33 @@ function FleetPage({ vehicles, setVehicles, orders, setOrders, apiKey, usage, se
           // Sert à préremplir le vendeur du LP pour un achat NORMAL (hors reprise).
           const fournisseur = (!repriseClient && v.fournisseur && (v.fournisseur.nom || v.fournisseur.prenom))
             ? v.fournisseur : null;
+          // v8.166 — Le registre garde l'adresse sur une ligne ; la Flotte la
+          // saisit maintenant en rue / CP / ville, on la recompose.
+          const fournisseurAdresse = fournisseur
+            ? [fournisseur.adresse, [fournisseur.code_postal, fournisseur.ville].filter(Boolean).join(" ")]
+                .filter(Boolean).join(", ")
+            : "";
+          // Le registre considère une entrée complète quand le vendeur est
+          // nommé, sa pièce d'identité relevée et le prix d'achat connu.
+          const fournisseurComplet = !!(fournisseur && fournisseur.nom && fournisseur.piece_id
+            && v.origine !== "reprise" && (parseFloat(v.prix_achat) > 0));
           const vendeurDefaults = repriseClient ? {
             vendeur_type: repriseClient.type || "particulier",
             vendeur_nom: repriseClient.nom || repriseClient.name || "",       // "name" pour rétrocompat
             vendeur_prenom: repriseClient.prenom || "",
             vendeur_adresse: repriseClient.adresse || repriseClient.address || "", // "address" pour rétrocompat
           } : fournisseur ? {
-            vendeur_type: fournisseur.type || "particulier",
+            // v8.166 — La Flotte dit « professionnel », le registre dit « pro » :
+            // sans cette traduction l'entrée s'affichait « Particulier » alors
+            // qu'elle venait d'une société.
+            vendeur_type: fournisseur.type === "professionnel" ? "pro" : (fournisseur.type || "particulier"),
             vendeur_nom: fournisseur.nom || "",
             vendeur_prenom: fournisseur.prenom || "",
-            vendeur_adresse: fournisseur.adresse || "",
+            vendeur_adresse: fournisseurAdresse,
+            vendeur_siret: fournisseur.siret || "",
+            vendeur_tva_intra: fournisseur.tva_intra || "",
+            vendeur_phone: fournisseur.phone || "",
+            vendeur_email: fournisseur.email || "",
           } : {
             vendeur_type: "particulier",
             vendeur_nom: "",
@@ -2999,8 +3107,16 @@ function FleetPage({ vehicles, setVehicles, orders, setOrders, apiKey, usage, se
               ? (parseFloat(v.valeur_reprise) || 0)
               : (v.prix_achat || ""),
             ...vendeurDefaults,
-            vendeur_piece_type: "CNI", vendeur_piece_id: "", vendeur_piece_date: "", vendeur_piece_autorite: "",
-            mode_reglement: v.origine === "reprise" ? "Reprise (compensation)" : "Virement",
+            // v8.166 — La pièce d'identité du cédant se saisit désormais dans la
+            // Flotte : quand elle est là, l'entrée naît complète au lieu d'être
+            // signalée à recompléter.
+            vendeur_piece_type: fournisseur?.piece_type || "CNI",
+            vendeur_piece_id: fournisseur?.piece_id || "",
+            vendeur_piece_date: fournisseur?.piece_date || "",
+            vendeur_piece_autorite: fournisseur?.piece_autorite || "",
+            mode_reglement: v.origine === "reprise"
+              ? "Reprise (compensation)"
+              : (fournisseur?.mode_reglement || "Virement"),
             date_sortie: "", acheteur_nom: "", acheteur_adresse: "",
             // Champs CNI acheteur — OPTIONNELS (n'entrent pas dans isComplete).
             // Bonne pratique mais pas exigée par l'art. R.321-3 du Code pénal.
@@ -3012,8 +3128,13 @@ function FleetPage({ vehicles, setVehicles, orders, setOrders, apiKey, usage, se
                     : "client";
                   return `Véhicule repris lors de la vente ${v.origine_ref || ""} · Cédé par ${cedeur} · Pièce d'identité à compléter`.trim();
                 })()
-              : "Entrée créée automatiquement depuis la flotte — à compléter",
-            _incomplete: true,
+              : (fournisseurComplet
+                  ? "Entrée créée automatiquement depuis la flotte"
+                  : "Entrée créée automatiquement depuis la flotte — à compléter"),
+            // v8.166 — Même critère qu'à l'enregistrement manuel d'une entrée
+            // (vendeur nommé + pièce d'identité + prix d'achat) : une saisie
+            // complète en Flotte ne doit plus revenir dans « à compléter ».
+            _incomplete: !fournisseurComplet,
           };
           lpCopy.push(newEntry);
           updated = true;
@@ -3819,8 +3940,6 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
     raison_sociale: "", siren: "", vat_number: "", contact_person: "",
     adresse: "", code_postal: "", ville: "", pays: "France"
   });
-  // v8.61.1 — State pour le bouton "Récupérer via SIREN" (API INSEE)
-  const [sirenLookupLoading, setSirenLookupLoading] = useState(false);
   // ── Reprise véhicule : recherche par plaque ──────────────
   const [repriseSearching, setRepriseSearching] = useState(false);
 
@@ -3867,42 +3986,19 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
   };
 
   // v8.61.1 — Récupération auto raison sociale + adresse via SIREN.
-  // API publique gratuite recherche-entreprises.api.gouv.fr (data.gouv.fr,
-  // pas de clé requise, ~7 req/s en burst). Rempli les champs disponibles
-  // sans écraser ce que l'utilisateur a déjà tapé (sauf raison sociale).
-  const lookupSirenInfo = async () => {
-    const sirenClean = (newClientForm.siren || "").replace(/\s/g, "");
-    if (sirenClean.length !== 9) {
-      alert("Saisissez un SIREN à 9 chiffres avant la recherche");
-      return;
-    }
-    setSirenLookupLoading(true);
-    try {
-      const r = await fetch(`https://recherche-entreprises.api.gouv.fr/search?q=${sirenClean}&per_page=1`);
-      if (!r.ok) throw new Error(`API INSEE HTTP ${r.status}`);
-      const j = await r.json();
-      const ent = j.results?.[0];
-      if (!ent) {
-        alert(`Aucune entreprise trouvée pour le SIREN ${sirenClean}`);
-        return;
-      }
-      // Champs disponibles : nom_complet (raison sociale), siege.adresse,
-      // siege.code_postal, siege.libelle_commune
-      const siege = ent.siege || {};
-      setNewClientForm(f => ({
-        ...f,
-        raison_sociale: ent.nom_complet || ent.nom_raison_sociale || f.raison_sociale,
-        // On ne remplace que si les champs sont vides côté utilisateur
-        adresse: f.adresse || siege.adresse || "",
-        code_postal: f.code_postal || siege.code_postal || "",
-        ville: f.ville || siege.libelle_commune || "",
-      }));
-    } catch (e) {
-      alert(`Impossible de récupérer les infos SIREN : ${e.message}`);
-    } finally {
-      setSirenLookupLoading(false);
-    }
-  };
+  // v8.166 — La recherche elle-même vit dans lib/siren.js et le champ dans
+  // components/SirenLookup.jsx, partagés avec le CRM et la Flotte. Ici on ne
+  // décide plus que du remplissage : la raison sociale vient du registre, le
+  // reste ne comble que les champs restés vides.
+  const applySirenResult = (d) => setNewClientForm(f => ({
+    ...f,
+    raison_sociale: d.raison_sociale || f.raison_sociale,
+    vat_number: f.vat_number || d.tva_intra || "",
+    adresse: f.adresse || d.adresse || "",
+    code_postal: f.code_postal || d.code_postal || "",
+    ville: f.ville || d.ville || "",
+    pays: f.pays || d.pays || "France",
+  }));
 
   const createAndSelectClient = () => {
     // v8.61.1 — Validation adaptée au type : société → raison_sociale requise ;
@@ -3910,10 +4006,11 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
     const isCompany = newClientForm.type === "societe";
     if (isCompany) {
       if (!newClientForm.raison_sociale.trim()) return alert("La raison sociale est requise");
-      // SIREN optionnel mais si présent, doit faire 9 chiffres
-      const sirenClean = (newClientForm.siren || "").replace(/\s/g, "");
-      if (sirenClean && sirenClean.length !== 9) {
-        return alert("Le SIREN doit contenir 9 chiffres (ou être vide)");
+      // v8.166 — SIREN optionnel ; s'il est saisi, 9 (SIREN) ou 14 (SIRET),
+      // comme partout ailleurs dans l'application.
+      const sirenClean = (newClientForm.siren || "").replace(/\D/g, "");
+      if (sirenClean && sirenClean.length !== 9 && sirenClean.length !== 14) {
+        return alert("SIREN (9 chiffres) ou SIRET (14 chiffres) attendu — ou laissez vide");
       }
     } else {
       if (!newClientForm.nom.trim()) return alert("Le nom est requis");
@@ -4151,24 +4248,13 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
                         onChange={e => setNewClientForm(f => ({ ...f, raison_sociale: e.target.value }))}
                         placeholder="Ex : Burger Queen SARL" />
                     </div>
-                    <div className="form-group" style={{ gridColumn: "1/-1" }}>
-                      <label className="form-label">SIREN (9 chiffres) — permet la recherche automatique</label>
-                      <div style={{ display: "flex", gap: 6 }}>
-                        <input className="form-input" style={{ flex: 1, fontFamily: "DM Mono" }}
-                          value={newClientForm.siren}
-                          onChange={e => setNewClientForm(f => ({ ...f, siren: e.target.value.replace(/[^\d]/g, "").slice(0, 9) }))}
-                          placeholder="123456789" />
-                        <button type="button" className="btn btn-primary btn-sm"
-                          onClick={lookupSirenInfo}
-                          disabled={sirenLookupLoading || (newClientForm.siren || "").replace(/\s/g, "").length !== 9}
-                          style={{ whiteSpace: "nowrap" }}>
-                          {sirenLookupLoading ? "⏳..." : "🔍 Récupérer"}
-                        </button>
-                      </div>
-                      {newClientForm.siren && newClientForm.siren.replace(/\s/g, "").length !== 9 && (
-                        <div style={{ fontSize: 10, color: "var(--orange)", marginTop: 4 }}>⚠️ 9 chiffres requis</div>
-                      )}
-                    </div>
+                    <SirenLookup
+                      full
+                      label="SIREN (9) ou SIRET (14) — permet la recherche automatique"
+                      value={newClientForm.siren}
+                      onChange={v => setNewClientForm(f => ({ ...f, siren: v }))}
+                      onResult={applySirenResult}
+                    />
                     <div className="form-group">
                       <label className="form-label">N° TVA intracom</label>
                       <input className="form-input" value={newClientForm.vat_number}
@@ -7700,7 +7786,7 @@ function printRegistre(entries, dealer) {
       <td class="km">${e.kilometrage ? esc(e.kilometrage) + " km" : "—"}</td>
       <td>
         <div><strong>${esc(e.vendeur_nom || "")} ${esc(e.vendeur_prenom || "")}</strong></div>
-        <div class="vehmeta">${esc(e.vendeur_type === "pro" ? "Pro" : "Particulier")}${e.vendeur_piece_id ? " · " + esc(e.vendeur_piece_type || "CNI") + " " + esc(e.vendeur_piece_id) : ""}</div>
+        <div class="vehmeta">${esc(e.vendeur_type === "pro" ? "Pro" : "Particulier")}${e.vendeur_siret ? " · SIRET " + esc(e.vendeur_siret) : ""}${e.vendeur_piece_id ? " · " + esc(e.vendeur_piece_type || "CNI") + " " + esc(e.vendeur_piece_id) : ""}</div>
       </td>
       <td class="prix">${e.prix_achat ? Number(e.prix_achat).toLocaleString("fr-FR") + " €" : "—"}</td>
       <td>${esc(e.date_sortie || "—")}</td>
@@ -7832,6 +7918,7 @@ function LivreDePolice({ vehicles, livrePolice, setLivrePolice, dealer, setDeale
     vendeur_prenom: "Prénom vendeur",
     vendeur_adresse: "Adresse vendeur",
     vendeur_type: "Type vendeur",
+    vendeur_siret: "SIRET vendeur",
     vendeur_piece_type: "Type de pièce",
     vendeur_piece_id: "N° pièce d'identité",
     vendeur_piece_date: "Date de pièce",
@@ -8360,7 +8447,6 @@ function LivrePoliceModal({ entry, nextNum, vehicles, onSave, onClose }) {
     }));
   };
 
-  const PIECES = ["CNI", "Passeport", "Permis de conduire", "Carte de séjour", "Extrait Kbis"];
   const REGLEMENTS = ["Virement", "Chèque", "Espèces", "Financement", "Reprise (compensation)"];
 
   return (
@@ -8456,6 +8542,22 @@ function LivrePoliceModal({ entry, nextNum, vehicles, onSave, onClose }) {
                 <label className="form-label">Prénom</label>
                 <input className="form-input" value={form.vendeur_prenom||""} onChange={e => set("vendeur_prenom", e.target.value)} placeholder="ex: Jean" />
               </div>
+            )}
+            {/* v8.166 — Vendeur professionnel : le SIRET l'identifie au registre
+                et l'annuaire des entreprises remplit le reste. */}
+            {form.vendeur_type === "pro" && (
+              <SirenLookup
+                value={form.vendeur_siret || ""}
+                onChange={v => set("vendeur_siret", v)}
+                onResult={d => setForm(f => ({
+                  ...f,
+                  vendeur_nom: d.raison_sociale || f.vendeur_nom || "",
+                  vendeur_siret: d.siret || f.vendeur_siret || "",
+                  vendeur_tva_intra: f.vendeur_tva_intra || d.tva_intra || "",
+                  vendeur_adresse: f.vendeur_adresse
+                    || [d.adresse, [d.code_postal, d.ville].filter(Boolean).join(" ")].filter(Boolean).join(", "),
+                }))}
+              />
             )}
             <div className="form-group full">
               <label className="form-label">Adresse</label>
@@ -9293,6 +9395,20 @@ function CrmModal({ client, onSave, onClose }) {
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const isCompany = form.type === "company";
 
+  // v8.166 — Résultat de l'annuaire des entreprises : la raison sociale et le
+  // n° de TVA viennent du registre, on les pose ; l'adresse ne remplace que
+  // des champs vides, pour ne jamais effacer une saisie de l'utilisateur
+  // (siège social ≠ adresse de correspondance).
+  const applySirenResult = (d) => setForm(f => ({
+    ...f,
+    nom: d.raison_sociale || f.nom,
+    tva_intra: f.tva_intra || d.tva_intra || "",
+    adresse: f.adresse || d.adresse || "",
+    code_postal: f.code_postal || d.code_postal || "",
+    ville: f.ville || d.ville || "",
+    pays: f.pays || d.pays || "France",
+  }));
+
   // Toggle : nettoie les champs de l'autre type quand on switche pour éviter
   // les états hybrides (Tricatel mixte comme la semaine dernière).
   function setType(newType) {
@@ -9343,10 +9459,14 @@ function CrmModal({ client, onSave, onClose }) {
                   <label className="form-label">Personne contact</label>
                   <input className="form-input" value={form.personne_contact || ""} onChange={e => set("personne_contact", e.target.value)} placeholder="Interlocuteur" />
                 </div>
-                <div className="form-group">
-                  <label className="form-label">SIRET (14) ou SIREN (9)</label>
-                  <input className="form-input" value={form.siren || ""} onChange={e => set("siren", e.target.value)} placeholder="9 ou 14 chiffres" />
-                </div>
+                {/* v8.166 — Même recherche annuaire que dans le formulaire de
+                    facture : saisir le SIREN suffit à remplir raison sociale,
+                    adresse et n° de TVA. */}
+                <SirenLookup
+                  value={form.siren || ""}
+                  onChange={v => set("siren", v)}
+                  onResult={applySirenResult}
+                />
                 <div className="form-group">
                   <label className="form-label">N° TVA intracom.</label>
                   <input className="form-input" value={form.tva_intra || ""} onChange={e => set("tva_intra", e.target.value.toUpperCase())} placeholder="FR..." />
