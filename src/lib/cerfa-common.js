@@ -77,7 +77,10 @@ export function splitPostalAddress(addr) {
   }
 
   const last = lines[lines.length - 1] || "";
-  const head = (reste) => [...lines.slice(0, -1), reste.trim()].filter(Boolean).join("\n");
+  // Une virgule séparait souvent la voie du code postal (« 12 rue de la Paix,
+  // 13000 Marseille ») : elle n'a plus lieu d'être une fois la coupure faite.
+  const head = (reste) => [...lines.slice(0, -1), reste.trim().replace(/[\s,;]+$/, "")]
+    .filter(Boolean).join("\n");
 
   // 2) « … 12100 Millau » en fin de ligne. Quantificateur gourmand : sur une
   //    voie qui commence par cinq chiffres (« 10000 route de X 13000 Nîmes »),
@@ -92,6 +95,25 @@ export function splitPostalAddress(addr) {
   if (m3) return { rue: head(m3[1]), cp: m3[2], ville: "" };
 
   return { rue: lines.join("\n"), cp: "", ville: "" };
+}
+
+// Adresse d'une partie du CERFA (garage, client, fournisseur, contact saisi à
+// la volée) : quand le code postal et la commune sont saisis dans leurs propres
+// champs, ils font foi, et on ne garde de la ligne libre que la voie — sinon un
+// « 13000 Marseille » resté en bout de ligne repartirait dans « nom de la voie ».
+// Sans ces champs, on retombe exactement sur parseAddress().
+export function parseAddressOf(p) {
+  const cp = String(p?.code_postal || "").trim();
+  const ville = String(p?.ville || "").trim();
+  const libre = String(p?.adresse ?? p?.address ?? "");
+  if (!cp && !ville) return parseAddress(libre);
+  const decoupe = splitPostalAddress(libre);
+  const base = parseAddress(decoupe.rue || libre);
+  return {
+    ...base,
+    cp: cp || decoupe.cp || base.cp,
+    ville: ville || decoupe.ville || base.ville,
+  };
 }
 
 export function joinPostalAddress({ rue, cp, ville }) {

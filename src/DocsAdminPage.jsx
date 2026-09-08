@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { fillCerfaImmat, NATURES_DEMANDE, couleurKey, teinteKey, TONS, TEINTES } from "./lib/cerfa-immat.js";
 import { fillCerfaMandat } from "./lib/cerfa-mandat.js";
-import { loadPdfLib, parseAddress, buildIdentite } from "./lib/cerfa-common.js";
+import { loadPdfLib, parseAddressOf, buildIdentite } from "./lib/cerfa-common.js";
 
 // ═══════════════════════════════════════════════════════════════════
 // v8.139 — Onglet "Documents administratifs" (stand-alone)
@@ -26,7 +26,7 @@ const uid = () => (crypto.randomUUID ? crypto.randomUUID()
 
 // Construit "NOM Prénom" (particulier) ou "RAISON SOCIALE" (société).
 
-const emptyContact = { type: "particulier", nom: "", prenom: "", raison: "", adresse: "", siret: "", civilite: "M", tel: "", email: "" };
+const emptyContact = { type: "particulier", nom: "", prenom: "", raison: "", adresse: "", code_postal: "", ville: "", siret: "", civilite: "M", tel: "", email: "" };
 const emptyVeh = { plate: "", vin: "", marque: "", modele: "", finition: "", genre: "VP", date_mec: "", kilometrage: "", numero_formule: "" };
 
 // Formulaire d'un contact "Nouveau…" (au niveau module → référence stable,
@@ -72,9 +72,22 @@ function NewContactForm({ value, onChange, showSave, saveChecked, onToggleSave }
             </div>
           </>
         )}
+        {/* v8.169 — Voie, code postal et commune ont chacun leur case sur les
+            CERFA : les saisir séparément évite qu'un « 13000 Marseille » resté
+            en bout de ligne reparte dans le nom de la voie. */}
         <div className="form-group full">
-          <label className="form-label">Adresse</label>
-          <input className="form-input" value={value.adresse} onChange={e => onChange({ ...value, adresse: e.target.value })} placeholder="12 rue de la Paix, 13000 Marseille" />
+          <label className="form-label">Adresse — n° et voie</label>
+          <input className="form-input" value={value.adresse} onChange={e => onChange({ ...value, adresse: e.target.value })} placeholder="12 rue de la Paix" />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Code postal</label>
+          <input className="form-input" value={value.code_postal || ""}
+            onChange={e => onChange({ ...value, code_postal: e.target.value.replace(/\D/g, "").slice(0, 5) })}
+            placeholder="13000" style={{ fontFamily: "DM Mono" }} />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Commune</label>
+          <input className="form-input" value={value.ville || ""} onChange={e => onChange({ ...value, ville: e.target.value })} placeholder="Marseille" />
         </div>
         <div className="form-group">
           <label className="form-label">Téléphone</label>
@@ -108,7 +121,7 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
   // à l'écran dans l'aperçu ne reviendrait pas dans le fichier).
   const [couleurImmat, setCouleurImmat] = useState("");
   const [teinteImmat, setTeinteImmat] = useState("");
-  const [lieuMandat, setLieuMandat] = useState(() => parseAddress(dealer?.address || "").ville);
+  const [lieuMandat, setLieuMandat] = useState(() => parseAddressOf({ adresse: dealer?.address }).ville);
 
   // Sélections : "garage" | "c:<id>" | "f:<id>" | "nouveau"
   const [vendeurSel, setVendeurSel] = useState("garage");     // par défaut : garage en vendeur…
@@ -153,6 +166,8 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
   // ── Résout une sélection en partie normalisée pour le CERFA ──
   function resolveParty(sel, newForm) {
     if (sel === "garage") {
+      // L'adresse de la concession est déjà au format « voie \n CP COMMUNE »
+      // (Paramètres) : parseAddressOf la lit sans champ séparé supplémentaire.
       return { isMorale: true, identite: dealer?.name || "", nom: "", prenom: "",
                siret: dealer?.siret || "", adresse: dealer?.address || "", civilite: "",
                tel: dealer?.phone || "", email: dealer?.email || "" };
@@ -165,6 +180,8 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
         identite: c.legal_name || c.name || "",
         nom: c.nom || "", prenom: c.prenom || "",
         siret: c.siren || "", adresse: c.address || c.adresse || "",
+        // v8.169 — Le CRM saisit déjà CP et commune à part : ils font foi.
+        code_postal: c.code_postal || "", ville: c.ville || "",
         civilite: c.civilite || "",
         tel: c.phone || "", email: c.email || "",
       };
@@ -177,6 +194,7 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
         identite: isMorale ? (f.raison || f.nom || "") : "",
         nom: f.nom || "", prenom: f.prenom || "",
         siret: f.siret || "", adresse: f.adresse || "",
+        code_postal: f.code_postal || "", ville: f.ville || "",
         civilite: f.civilite || "",
         tel: f.tel || "", email: f.email || "",
       };
@@ -188,6 +206,7 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
       identite: isMorale ? (newForm.raison || newForm.nom || "") : "",
       nom: newForm.nom || "", prenom: newForm.prenom || "",
       siret: newForm.siret || "", adresse: newForm.adresse || "",
+      code_postal: newForm.code_postal || "", ville: newForm.ville || "",
       civilite: newForm.civilite || "",
       tel: newForm.tel || "", email: newForm.email || "",
     };
@@ -213,6 +232,7 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
       id: uid(),
       type: newForm.type, nom: newForm.nom, prenom: newForm.prenom,
       raison: newForm.raison, adresse: newForm.adresse, siret: newForm.siret,
+      code_postal: newForm.code_postal || "", ville: newForm.ville || "",
       civilite: newForm.civilite, tel: newForm.tel || "", email: newForm.email || "",
     };
     const next = [...fournisseurs, f];
@@ -239,8 +259,8 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
       const setCheck = (n) => { try { form.getCheckBox(n).check(); } catch (e) {} };
       const setRadio = (n, v) => { try { form.getRadioGroup(n).select(v); } catch (e) {} };
 
-      const vA = parseAddress(V.adresse);
-      const aA = parseAddress(A.adresse);
+      const vA = parseAddressOf(V);
+      const aA = parseAddressOf(A);
 
       // Date de cession
       const [yy, mm, dd] = dateCession.split("-");
@@ -374,7 +394,7 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
     try {
       const PDFLib = await loadPdfLib();
       const pdfBytes = await fetch("/cerfa_1375007.pdf").then(r => r.arrayBuffer());
-      const adr = parseAddress(T.adresse);
+      const adr = parseAddressOf(T);
       const filled = await fillCerfaImmat(pdfBytes, PDFLib, {
         nature: natureImmat,
         couleur: couleurImmat,
