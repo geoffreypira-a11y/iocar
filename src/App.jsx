@@ -10,7 +10,7 @@ import { fillCerfaMandat } from "./lib/cerfa-mandat.js";
 import { fillCerfaImmat, couleurKey, teinteKey, TONS, TEINTES } from "./lib/cerfa-immat.js";
 import { PLAN_LIST, DEFAULT_PLAN, startCheckout as openStripeCheckout } from "./lib/plans.js";
 import { PlanPicker } from "./components/PlanPicker.jsx";
-import { SirenLookup } from "./components/SirenLookup.jsx";
+import { SirenLookup, TvaIntraNote } from "./components/SirenLookup.jsx";
 import IobillInvoiceSync from "./components/IobillInvoiceSync.jsx";
 
 // v8.49.16 — Système d'essai gratuit 7 jours + paywall
@@ -806,6 +806,26 @@ const COST_EXTRA = 0.20;          // € HT par recherche au-delà du quota
 // (art. R.321-3 du Code pénal). Partagé entre la Flotte, qui saisit le
 // fournisseur, et le registre lui-même, qui le relit.
 const PIECES = ["CNI", "Passeport", "Permis de conduire", "Carte de séjour", "Extrait Kbis"];
+
+// ─── PRIX D'ACHAT : TTC DÉBOURSÉ vs COÛT RÉELLEMENT SUPPORTÉ ──
+// v8.167 — Un véhicule en TVA normale est acheté à un professionnel : la TVA
+// figurant sur sa facture est déductible, donc le garage ne supporte que le HT.
+// En TVA sur marge (art. 297 A) rien n'est récupérable : le coût est le montant
+// payé. C'est le coût réel qui a un sens au Livre de Police et dans une marge.
+const TVA_VEHICULE = 1.2;
+const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+const isTvaNormale = (v) => (v?.vat_regime || "normal") !== "margin_297a";
+
+// Coût d'acquisition réel d'un véhicule (HT en TVA normale, TTC en marge).
+// Retombe sur le TTC / 1,2 quand le HT n'a pas été saisi — les véhicules
+// enregistrés avant cette version n'ont pas le champ.
+function prixAchatReel(v) {
+  const ttc = parseFloat(v?.prix_achat) || 0;
+  if (ttc <= 0) return 0;
+  if (!isTvaNormale(v)) return ttc;
+  const ht = parseFloat(v?.prix_achat_ht) || 0;
+  return ht > 0 ? ht : round2(ttc / TVA_VEHICULE);
+}
 
 // Renvoie l'état du quota pour un usage donné :
 //   { used, remaining, isFree, payantes, montantHT, color, text }
@@ -2447,6 +2467,23 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   // v8.138 — Setter pour l'objet fournisseur (à qui on a acheté le véhicule).
   const setFourn = (k, val) => setForm(f => ({ ...f, fournisseur: { ...(f.fournisseur || {}), [k]: val } }));
+  // v8.167 — Prix d'achat en TVA normale : la facture du vendeur pro porte un
+  // HT, une TVA et un TTC. Le garage décaisse le TTC mais ne supporte que le
+  // HT. On laisse saisir l'un ou l'autre et on tient les deux à jour ;
+  // `prix_achat` reste le TTC, c'est lui la sortie de trésorerie.
+  const setPrixAchatTtc = (val) => setForm(f => {
+    const ttc = parseFloat(val);
+    return { ...f, prix_achat: val, prix_achat_ht: ttc > 0 ? String(round2(ttc / TVA_VEHICULE)) : "" };
+  });
+  const setPrixAchatHt = (val) => setForm(f => {
+    const ht = parseFloat(val);
+    return { ...f, prix_achat_ht: val, prix_achat: ht > 0 ? String(round2(ht * TVA_VEHICULE)) : "" };
+  });
+  // Le HT affiché : celui saisi, sinon déduit du TTC (véhicules d'avant v8.167).
+  const prixAchatHtAffiche = form.prix_achat_ht !== undefined && form.prix_achat_ht !== ""
+    ? form.prix_achat_ht
+    : (parseFloat(form.prix_achat) > 0 ? String(round2(parseFloat(form.prix_achat) / TVA_VEHICULE)) : "");
+
   const fournType = form.fournisseur?.type || "particulier";
   const fournPro = fournType === "professionnel";
   // v8.166 — Annuaire des entreprises : le SIRET suffit à identifier un
@@ -2509,6 +2546,11 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
       id: form.id || uid(),
       plate: (form.plate || "").toUpperCase().replace(/\s/g, ""),
       prix_achat: form.includeTreso ? (parseFloat(form.prix_achat) || 0) : 0,
+      // v8.167 — Le HT n'a de sens qu'en TVA normale ; en marge il vaut 0 pour
+      // que prixAchatReel() retienne bien le montant payé.
+      prix_achat_ht: form.includeTreso && isTvaNormale(form)
+        ? (parseFloat(prixAchatHtAffiche) || 0)
+        : 0,
       prix_vente: parseFloat(form.prix_vente) || 0,   // toujours sauvegardé
       kilometrage: parseInt(form.kilometrage) || 0,
       options: form.options ? String(form.options).split(",").map(s => s.trim()).filter(Boolean) : [],
@@ -2602,7 +2644,14 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
               width: 44, height: 24, borderRadius: 12, cursor: "pointer",
               background: form.vat_regime === "margin_297a" ? "rgba(229,151,60,.6)" : "var(--gold)",
               border: "1px solid var(--border2)", position: "relative", transition: "background .2s", flexShrink: 0
-            }} onClick={() => set("vat_regime", form.vat_regime === "margin_297a" ? "normal" : "margin_297a")}>
+            }} onClick={() => setForm(f => {
+              const next = f.vat_regime === "margin_297a" ? "normal" : "margin_297a";
+              const ttc = parseFloat(f.prix_achat) || 0;
+              // v8.167 — En repassant en TVA normale on recalcule le HT depuis le
+              // TTC saisi ; en marge il n'y a plus de HT à afficher.
+              return { ...f, vat_regime: next,
+                prix_achat_ht: next === "margin_297a" || ttc <= 0 ? "" : String(round2(ttc / TVA_VEHICULE)) };
+            })}>
               <div style={{
                 width: 18, height: 18, borderRadius: "50%", background: "#fff",
                 position: "absolute", top: 2,
@@ -2638,13 +2687,25 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
               const marge = parseFloat(form.prix_vente) - coutTotal;
               return (
                 <div style={{ textAlign: "center", padding: "8px 14px", background: "var(--card2)", borderRadius: 8, border: "1px solid var(--border2)" }}>
-                  <div style={{ fontSize: 10, letterSpacing: 1.5, textTransform: "uppercase", color: "var(--muted)", marginBottom: 4 }}>Marge prévue</div>
+                  <div style={{ fontSize: 10, letterSpacing: 1.5, textTransform: "uppercase", color: "var(--muted)", marginBottom: 4 }}>Marge prévue{isTvaNormale(form) ? " TTC" : ""}</div>
                   <div style={{ fontSize: 20, fontWeight: 800, fontFamily: "Syne", color: marge >= 0 ? "var(--green)" : "var(--red)" }}>
                     {marge.toLocaleString("fr-FR", { style: "currency", currency: "EUR", maximumFractionDigits: 0 })}
                   </div>
                   {totalDocs > 0 && (
                     <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 4 }}>
                       Achat {fmt(parseFloat(form.prix_achat))} + Frais {fmt(totalDocs)} = Coût total {fmt(coutTotal)}
+                    </div>
+                  )}
+                  {/* v8.167 — En TVA normale, la TVA est déductible à l'achat et
+                      due à la vente : ce qui reste au garage sur le véhicule est
+                      la marge HT. On l'ajoute à côté de la marge TTC plutôt que
+                      de remplacer un chiffre que l'abonné a l'habitude de lire.
+                      Hors frais : leur TVA dépend de chaque poste (la carte
+                      grise, par exemple, est un débours non récupérable). */}
+                  {isTvaNormale(form) && (
+                    <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 4 }}>
+                      Sur le véhicule seul : {fmt(parseFloat(form.prix_vente) / TVA_VEHICULE)} HT − {fmt(prixAchatReel(form))} HT
+                      = <strong style={{ color: "var(--muted2)" }}>{fmt(parseFloat(form.prix_vente) / TVA_VEHICULE - prixAchatReel(form))} HT</strong>
                     </div>
                   )}
                 </div>
@@ -2683,17 +2744,41 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
                 <div style={{ fontSize: 20 }}>💸</div>
                 <div style={{ flex: 1, minWidth: 160 }}>
                   <div style={{ fontSize: 10, letterSpacing: 2, textTransform: "uppercase", color: "var(--red)", fontWeight: 700, marginBottom: 6 }}>
-                    Sortie trésorerie — Prix d'achat
+                    Sortie trésorerie — Prix d'achat{isTvaNormale(form) ? " TTC" : ""}
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <input className="form-input" type="number" placeholder="0"
                       value={form.prix_achat || ""}
-                      onChange={e => set("prix_achat", e.target.value)}
+                      onChange={e => isTvaNormale(form) ? setPrixAchatTtc(e.target.value) : set("prix_achat", e.target.value)}
                       style={{ fontSize: 22, fontWeight: 700, fontFamily: "Syne", color: "var(--red)", maxWidth: 180 }}
                     />
                     <span style={{ fontSize: 18, color: "var(--muted)" }}>€</span>
                   </div>
                 </div>
+                {/* v8.167 — TVA normale : la TVA d'achat est déductible, le coût
+                    réel du véhicule est donc le HT. C'est lui qui part au Livre
+                    de Police. Les deux champs restent synchronisés : saisissez
+                    celui que porte la facture du vendeur. */}
+                {isTvaNormale(form) && (
+                  <div style={{ flex: 1, minWidth: 160 }}>
+                    <div style={{ fontSize: 10, letterSpacing: 2, textTransform: "uppercase", color: "var(--muted2)", fontWeight: 700, marginBottom: 6 }}>
+                      dont Prix d'achat HT
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <input className="form-input" type="number" placeholder="0"
+                        value={prixAchatHtAffiche}
+                        onChange={e => setPrixAchatHt(e.target.value)}
+                        style={{ fontSize: 22, fontWeight: 700, fontFamily: "Syne", color: "var(--muted2)", maxWidth: 180 }}
+                      />
+                      <span style={{ fontSize: 18, color: "var(--muted)" }}>€</span>
+                    </div>
+                    {parseFloat(form.prix_achat) > 0 && (
+                      <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
+                        TVA récupérable {fmtDec(parseFloat(form.prix_achat) - (parseFloat(prixAchatHtAffiche) || 0))} · coût réel retenu au Livre de Police
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -2740,6 +2825,7 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
                   <div className="form-group">
                     <label className="form-label">N° TVA intracom.</label>
                     <input className="form-input" value={form.fournisseur?.tva_intra || ""} onChange={e => setFourn("tva_intra", e.target.value.toUpperCase())} placeholder="FR..." style={{ fontFamily: "DM Mono" }} />
+                    <TvaIntraNote siren={form.fournisseur?.siret} value={form.fournisseur?.tva_intra} />
                   </div>
                 </>
               )}
@@ -3102,10 +3188,17 @@ function FleetPage({ vehicles, setVehicles, orders, setOrders, apiKey, usage, se
             kilometrage: v.kilometrage || "",
             pays_origine: "France",
             // Pour une reprise : prix_achat = valeur de reprise (référence comptable interne).
-            // Pour un véhicule normal : prix_achat saisi par l'abonné.
+            // v8.167 — Pour un véhicule acheté : le registre retient ce que le
+            // garage a réellement supporté, donc le HT en TVA normale (la TVA
+            // d'achat est déductible) et le montant payé en TVA sur marge.
             prix_achat: v.origine === "reprise"
               ? (parseFloat(v.valeur_reprise) || 0)
-              : (v.prix_achat || ""),
+              : (prixAchatReel(v) || ""),
+            // Base du prix ci-dessus. Marqueur explicite : les entrées créées
+            // avant v8.167 ne l'ont pas et restent lues en TTC, leur historique
+            // ne doit pas changer rétroactivement.
+            prix_achat_base: v.origine !== "reprise" && isTvaNormale(v) ? "HT" : "TTC",
+            prix_achat_ttc: v.origine === "reprise" ? "" : (v.prix_achat || ""),
             ...vendeurDefaults,
             // v8.166 — La pièce d'identité du cédant se saisit désormais dans la
             // Flotte : quand elle est là, l'entrée naît complète au lieu d'être
@@ -3164,10 +3257,11 @@ function FleetPage({ vehicles, setVehicles, orders, setOrders, apiKey, usage, se
         // Trouve le véhicule correspondant
         const v = vehicles.find(x => x.id === e.vehicle_id || (x.plate && e.immat && x.plate === e.immat));
         if (!v) return e;
-        const vPrix = parseFloat(v.prix_achat) || 0;
+        const vPrix = prixAchatReel(v);
         if (vPrix <= 0) return e;
         changed = true;
-        return { ...e, prix_achat: v.prix_achat };
+        // v8.167 — Même base qu'à la création : coût réellement supporté.
+        return { ...e, prix_achat: vPrix, prix_achat_base: isTvaNormale(v) ? "HT" : "TTC", prix_achat_ttc: v.prix_achat || "" };
       });
       return changed ? next : lp;
     });
@@ -3229,7 +3323,10 @@ function FleetPage({ vehicles, setVehicles, orders, setOrders, apiKey, usage, se
                 //           on le synchronise pour permettre le calcul de marge.
                 prix_achat: (parseFloat(e.prix_achat) > 0)
                   ? e.prix_achat
-                  : (parseFloat(v.prix_achat) || e.prix_achat || ""),
+                  : (prixAchatReel(v) || e.prix_achat || ""),
+                prix_achat_base: (parseFloat(e.prix_achat) > 0)
+                  ? (e.prix_achat_base || "TTC")
+                  : (isTvaNormale(v) ? "HT" : "TTC"),
                 // v8.37 — On remplit prix_vente avec le total TTC final si vide
                 // (si déjà rempli manuellement, on respecte la valeur saisie)
                 prix_vente: e.prix_vente || prixVenteFinal,
@@ -4260,6 +4357,7 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
                       <input className="form-input" value={newClientForm.vat_number}
                         onChange={e => setNewClientForm(f => ({ ...f, vat_number: e.target.value.toUpperCase() }))}
                         placeholder="FR12345678901" style={{ fontFamily: "DM Mono" }} />
+                      <TvaIntraNote siren={newClientForm.siren} value={newClientForm.vat_number} />
                     </div>
                     <div className="form-group">
                       <label className="form-label">Personne contact</label>
@@ -7788,7 +7886,7 @@ function printRegistre(entries, dealer) {
         <div><strong>${esc(e.vendeur_nom || "")} ${esc(e.vendeur_prenom || "")}</strong></div>
         <div class="vehmeta">${esc(e.vendeur_type === "pro" ? "Pro" : "Particulier")}${e.vendeur_siret ? " · SIRET " + esc(e.vendeur_siret) : ""}${e.vendeur_piece_id ? " · " + esc(e.vendeur_piece_type || "CNI") + " " + esc(e.vendeur_piece_id) : ""}</div>
       </td>
-      <td class="prix">${e.prix_achat ? Number(e.prix_achat).toLocaleString("fr-FR") + " €" : "—"}</td>
+      <td class="prix">${e.prix_achat ? Number(e.prix_achat).toLocaleString("fr-FR") + " €" + (e.prix_achat_base === "HT" ? " HT" : "") : "—"}</td>
       <td>${esc(e.date_sortie || "—")}</td>
       <td>${esc(e.acheteur_nom || "—")}</td>
     </tr>
@@ -8325,11 +8423,19 @@ function LivreDePolice({ vehicles, livrePolice, setLivrePolice, dealer, setDeale
                   //   - Véhicule en stock (pas de date_sortie) → prix d'achat
                   //   - Véhicule livré → marge = prix_vente - prix_achat
                   const prixA = parseFloat(e.prix_achat) || 0;
-                  const prixV = parseFloat(e.prix_vente) || 0;
+                  // v8.167 — Un prix d'achat en HT (TVA normale) ne se compare
+                  // pas à un prix de vente TTC : on ramène la vente au HT pour
+                  // que la marge affichée reste celle qui revient au garage.
+                  // Les entrées d'avant v8.167 n'ont pas le marqueur et restent
+                  // lues en TTC des deux côtés, comme avant.
+                  const baseHT = e.prix_achat_base === "HT";
+                  const prixVBrut = parseFloat(e.prix_vente) || 0;
+                  const prixV = baseHT ? round2(prixVBrut / TVA_VEHICULE) : prixVBrut;
+                  const suffixe = baseHT ? " HT" : "";
                   if (!e.date_sortie) {
                     // En stock : affiche prix achat en rouge
                     return prixA > 0
-                      ? <span style={{ color: "var(--red)" }}>{fmt(prixA)}</span>
+                      ? <span style={{ color: "var(--red)" }}>{fmt(prixA)}{suffixe}</span>
                       : <span style={{ color: "var(--muted)" }}>—</span>;
                   }
                   // Livré : affiche la marge
@@ -8338,17 +8444,17 @@ function LivreDePolice({ vehicles, livrePolice, setLivrePolice, dealer, setDeale
                     return (
                       <>
                         <span style={{ color: marge >= 0 ? "var(--green)" : "var(--red)", fontWeight: 700 }}>
-                          {marge >= 0 ? "+" : ""}{fmt(marge)}
+                          {marge >= 0 ? "+" : ""}{fmt(marge)}{suffixe}
                         </span>
                         <div style={{ fontSize: 9, color: "var(--muted)", marginTop: 2 }}>
-                          {fmt(prixV)} − {fmt(prixA)}
+                          {fmt(prixV)} − {fmt(prixA)}{suffixe}
                         </div>
                       </>
                     );
                   }
                   // Fallback : au moins un des 2 est vide
                   return prixA > 0
-                    ? <span style={{ color: "var(--red)" }}>{fmt(prixA)}</span>
+                    ? <span style={{ color: "var(--red)" }}>{fmt(prixA)}{suffixe}</span>
                     : <span style={{ color: "var(--muted)" }}>—</span>;
                 })()}</td>
                 <td style={{ fontSize: 12, color: e.date_sortie ? "var(--green)" : "var(--muted)" }}>
@@ -8582,8 +8688,15 @@ function LivrePoliceModal({ entry, nextNum, vehicles, onSave, onClose }) {
               <input className="form-input" value={form.vendeur_piece_autorite||""} onChange={e => set("vendeur_piece_autorite", e.target.value)} placeholder="ex: Préfecture du Rhône" />
             </div>
             <div className="form-group">
-              <label className="form-label">Prix d'achat (€)</label>
+              {/* v8.167 — Sur un véhicule en TVA normale le registre retient le
+                  HT : la TVA d'achat est déductible, elle n'est pas un coût. */}
+              <label className="form-label">Prix d'achat {form.prix_achat_base === "HT" ? "HT " : ""}(€)</label>
               <input className="form-input" type="number" value={form.prix_achat||""} onChange={e => set("prix_achat", e.target.value)} />
+              {form.prix_achat_base === "HT" && parseFloat(form.prix_achat_ttc) > 0 && (
+                <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
+                  Réglé {fmtDec(parseFloat(form.prix_achat_ttc))} TTC · TVA déductible
+                </div>
+              )}
             </div>
             {/* v8.83 — Prix de vente éditable : véhicule seul (hors frais / carte
                 grise / reprise). C'est la base de la marge 297A (vente − achat)
@@ -9470,6 +9583,7 @@ function CrmModal({ client, onSave, onClose }) {
                 <div className="form-group">
                   <label className="form-label">N° TVA intracom.</label>
                   <input className="form-input" value={form.tva_intra || ""} onChange={e => set("tva_intra", e.target.value.toUpperCase())} placeholder="FR..." />
+                  <TvaIntraNote siren={form.siren} value={form.tva_intra} />
                 </div>
               </>
             ) : (
