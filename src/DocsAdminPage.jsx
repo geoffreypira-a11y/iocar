@@ -427,10 +427,10 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
           📄 Cession (15776*02)
         </button>
         <button className={"btn " + (docType === "mandat" ? "btn-primary" : "btn-ghost")} onClick={() => { setDocType("mandat"); setPdfUrl(null); }}>
-          🖊 Mandat d'immatriculation (13757)
+          🖊 Mandat d'immatriculation (13757*03)
         </button>
         <button className={"btn " + (docType === "immat" ? "btn-primary" : "btn-ghost")} onClick={() => { setDocType("immat"); setPdfUrl(null); }}>
-          🪪 Demande de carte grise (13750)
+          🪪 Demande de carte grise (13750*07)
         </button>
       </div>
 
@@ -593,12 +593,12 @@ export default function DocsAdminPage({ vehicles = [], clients = [], dealer = {}
               <button className="btn btn-primary btn-sm" onClick={() => window.open(pdfUrl, "_blank")}>
                 ↗ Ouvrir en plein écran
               </button>
-              <a className="btn btn-ghost btn-sm" href={pdfUrl} download={docType === "mandat" ? "mandat-immatriculation-13757.pdf" : docType === "immat" ? "demande-immatriculation-13750.pdf" : "cerfa-cession-15776-02.pdf"} style={{ textDecoration: "none" }}>
+              <a className="btn btn-ghost btn-sm" href={pdfUrl} download={docType === "mandat" ? "mandat-immatriculation-13757-03.pdf" : docType === "immat" ? "demande-immatriculation-13750-07.pdf" : "cerfa-cession-15776-02.pdf"} style={{ textDecoration: "none" }}>
                 ⬇ Télécharger
               </a>
             </div>
             <div style={{ height: 620, overflow: "hidden", borderRadius: 8 }}>
-              <iframe src={pdfUrl} style={{ width: "100%", height: "100%", border: "none" }} title={docType === "mandat" ? "Mandat 13757" : docType === "immat" ? "CERFA 13750" : "CERFA 15776*02"} />
+              <iframe src={pdfUrl} style={{ width: "100%", height: "100%", border: "none" }} title={docType === "mandat" ? "Mandat 13757*03" : docType === "immat" ? "CERFA 13750*07" : "CERFA 15776*02"} />
             </div>
           </div>
         )}

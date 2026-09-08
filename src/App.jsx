@@ -5653,8 +5653,8 @@ function CerfaDocs({ order, dealer, vehicles, clients, onUpdateOrder, onClose })
 
   const TABS = [
     { key: "cession", label: "Cession", cerfa: "15776*02", file: "Cession" },
-    { key: "mandat",  label: "Mandat",  cerfa: "13757", file: "Mandat" },
-    { key: "immat",   label: "Carte grise", cerfa: "13750", file: "Carte-grise" },
+    { key: "mandat",  label: "Mandat",  cerfa: "13757*03", file: "Mandat" },
+    { key: "immat",   label: "Carte grise", cerfa: "13750*07", file: "Carte-grise" },
   ];
   const current = TABS.find(t => t.key === tab);
   const pdfUrl = urls[tab];
