@@ -56,12 +56,14 @@ export default function IobillBridgeCard({ token, garage, onUpdate }) {
     return { ok: true, data: j };
   }
 
-  async function doLink(password) {
+  async function doLink(password, reparer = false) {
     setBusy(true); setErr(""); setMsg("");
-    const r = await callBridge("link", password ? { password } : {});
+    const corps = password ? { password } : {};
+    if (reparer) corps.repair = true;   // rejoue la liaison même si elle semble complète
+    const r = await callBridge("link", corps);
     setBusy(false);
     if (!r.ok) { setErr(r.error); return false; }
-    setMsg(aReparer ? "✅ Liaison IO BILL réparée !" : "✅ Compte IO BILL activé !");
+    setMsg(reparer || aReparer ? "✅ Liaison IO BILL réparée !" : "✅ Compte IO BILL activé !");
     setAReparer(false);
     if (onUpdate) onUpdate({
       iobill_company_id: r.data.iobill_company_id,
@@ -215,7 +217,7 @@ export default function IobillBridgeCard({ token, garage, onUpdate }) {
             la synchronisation et l'envoi des factures échouent. La réparation
             rejoue la liaison, sans rien perdre de vos données.
           </div>
-          <button style={styles.btn} onClick={() => doLink(null)} disabled={busy}>
+          <button style={styles.btn} onClick={() => doLink(null, true)} disabled={busy}>
             {busy ? "Réparation..." : "🔧 Réparer la liaison"}
           </button>
         </div>
@@ -236,7 +238,26 @@ export default function IobillBridgeCard({ token, garage, onUpdate }) {
         </a>
       </div>
 
-      {err && <div style={styles.err}>❌ {err}</div>}
+      {/* v8.177 — Une action qui échoue alors que le compte est présenté comme
+          lié, c'est presque toujours une liaison morte : la société a été
+          supprimée ou suspendue côté IO BILL, et IO CAR n'a aucun moyen de le
+          deviner — il a bien son identifiant et sa clé, ils ne désignent plus
+          rien. On propose donc la réparation à côté de l'erreur, quelle qu'elle
+          soit, plutôt que de laisser l'abonné devant un « Échec » sans issue. */}
+      {err && (
+        <div style={styles.err}>
+          ❌ {err}
+          <div style={{ marginTop: 10 }}>
+            <button style={styles.btn} onClick={() => doLink(null, true)} disabled={busy}>
+              {busy ? "Réparation..." : "🔧 Réparer la liaison"}
+            </button>
+            <div style={{ fontSize: 11, color: "var(--muted2)", marginTop: 6, lineHeight: 1.5 }}>
+              Rétablit le lien avec IO BILL. Votre société y est réutilisée si elle
+              existe encore, recréée sinon. Vos données IO CAR ne sont pas touchées.
+            </div>
+          </div>
+        </div>
+      )}
       {msg && <div style={styles.ok}>{msg}</div>}
 
       <div style={{ marginTop: 12, fontSize: 11, color: "var(--muted)" }}>
