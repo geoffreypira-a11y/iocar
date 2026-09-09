@@ -4886,19 +4886,25 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
               {(() => {
                 const rows = [];
                 if (c.remAmt > 0) {
-                  rows.push(["Sous-total HT", fmtDec(c.htBrut), {}]);
+                  rows.push([c.avecTva ? "Sous-total HT" : "Sous-total", fmtDec(c.htBrut), {}]);
                   rows.push([
                     c.avecTva ? `Remise accordée (soit ${fmtDec(c.remAmt)} TTC)` : "Remise accordée",
                     fmtDec(-c.remAmtHt),
                     { color: "var(--gold)" },
                   ]);
                 }
-                rows.push([c.remAmt > 0 ? "Total HT net" : "Montant HT", fmtDec(c.ht), {}]);
+                // v8.179 — En régime marge on ne dit pas « HT » : la TVA du
+                // véhicule n'est pas mentionnable (art. 297 E CGI).
+                rows.push([
+                  c.avecTva ? (c.remAmt > 0 ? "Total HT net" : "Montant HT")
+                            : (c.remAmt > 0 ? "Net après remise" : "Sous-total"),
+                  fmtDec(c.ht), {},
+                ]);
                 if (c.avecTva) {
                   rows.push([`TVA ${c.tvaPct || 20}%`, fmtDec(c.tvaAmt), {}]);
                 } else {
                   if (c.tvaAmt > 0) rows.push([`TVA ${c.tvaPct || 20}% (frais uniquement)`, fmtDec(c.tvaAmt), {}]);
-                  rows.push(["Véhicule vendu hors TVA (TVA sur la marge)", "Art. 297 A CGI", { muted: true }]);
+                  rows.push(["TVA sur la marge — non récupérable par l'acquéreur", "Art. 297 A CGI", { muted: true }]);
                 }
                 rows.push(["Total TTC", fmtDec(c.ttc), { big: true }]);
                 if (c.debourTotal > 0) {
@@ -5304,19 +5310,23 @@ function PrintDoc({ order, dealer, onClose, viewMode, livrePolice }) {
                 ) : (
                   <>
                     {/* v8.48.9 — Régime marge : véhicule sans TVA + frais avec TVA sur taux normal
-                        v8.178 — Même cascade qu'au régime normal. Ici la remise
-                        porte sur un véhicule sans TVA visible : son montant HT
-                        est son montant TTC, inutile de le rappeler deux fois. */}
+                        v8.179 — Même cascade qu'au régime normal, mais SANS le
+                        mot « HT ». Le véhicule est vendu à un prix unique dont
+                        la TVA ne peut pas être mentionnée (art. 297 E CGI) :
+                        l'appeler « HT » laisserait croire à l'acquéreur qu'une
+                        TVA vient s'y ajouter, ou qu'il pourrait la déduire.
+                        Seuls les frais sont un vrai HT, et leur ligne le dit. */}
                     {c.remAmt > 0 && <>
-                      <div className="pdoc-trow"><span>Sous-total HT</span><span>{fmtDec(c.htBrut)}</span></div>
+                      <div className="pdoc-trow"><span>Sous-total</span><span>{fmtDec(c.htBrut)}</span></div>
                       <div className="pdoc-trow" style={{ color: "#c79528" }}><span>Remise accordée</span><span>{fmtDec(-c.remAmtHt)}</span></div>
                     </>}
-                    <div className="pdoc-trow"><span>{c.remAmt > 0 ? "Total HT net" : "Montant HT"}</span><span>{fmtDec(c.ht)}</span></div>
+                    <div className="pdoc-trow"><span>{c.remAmt > 0 ? "Net après remise" : "Sous-total"}</span><span>{fmtDec(c.ht)}</span></div>
                     {c.tvaAmt > 0 && <div className="pdoc-trow"><span>TVA {c.tvaPct || 20}% (frais uniquement)</span><span>{fmtDec(c.tvaAmt)}</span></div>}
-                    {/* v8.178 — Le gris clair d'origine ne survivait ni à
-                        l'écran ni à l'impression : la mention qui justifie
-                        l'absence de TVA sur le véhicule doit se lire. */}
-                    <div className="pdoc-trow" style={{ fontSize: 10, color: "#5a5a66" }}><span>Véhicule vendu hors TVA (TVA sur la marge)</span><span>Art. 297 A CGI</span></div>
+                    {/* v8.178 — Le gris clair d'origine ne survivait ni à l'écran
+                        ni à l'impression. v8.179 — Version courte : la case ne
+                        fait que 260 px, la mention complète est en bande sous
+                        les totaux. */}
+                    <div className="pdoc-trow" style={{ fontSize: 10, color: "#5a5a66" }}><span>TVA sur la marge</span><span>Art. 297 A CGI</span></div>
                     <div className="pdoc-trow big"><span>TOTAL TTC</span><span>{fmtDec(c.ttc)}</span></div>
                   </>
                 )}
@@ -5366,6 +5376,22 @@ function PrintDoc({ order, dealer, onClose, viewMode, livrePolice }) {
                 </>}
               </div>
             </div>
+
+            {/* v8.179 — Mention du régime de la marge, en bande pleine largeur.
+                Elle ne tenait pas dans la case des totaux (260 px) et c'est
+                pourtant elle qui rend la facture opposable : l'acquéreur doit
+                savoir qu'aucune TVA n'est mentionnée (art. 297 E CGI) et qu'il
+                ne peut donc pas la déduire. « Régime particulier — Biens
+                d'occasion » est le libellé prévu par la directive TVA
+                (2006/112/CE, art. 226 point 14), repris par l'art. 242 nonies A
+                du CGI. */}
+            {order.avec_tva === false && (
+              <div className="pdoc-section" style={{ marginTop: 12, padding: "8px 14px", background: "#f9f8f5", borderRadius: 6, fontSize: 10, color: "#555", border: "1px solid #e8e8e8", lineHeight: 1.6 }}>
+                <strong>Régime particulier — Biens d'occasion.</strong> Véhicule soumis à la TVA sur la marge
+                (art. 297 A du CGI) : la TVA n'est pas mentionnée sur la présente facture et n'est pas
+                récupérable par l'acquéreur (art. 297 E du CGI).
+              </div>
+            )}
 
             {/* Garantie véhicule */}
             {garantieLabel(order.garantie_mois) && (
