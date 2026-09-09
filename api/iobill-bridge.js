@@ -590,8 +590,21 @@ async function handleMarkInvoicePaid(garage, supabase, body, res) {
   if (ordErr || !order) {
     return res.status(404).json({ error: 'Order introuvable ou non autorisé' });
   }
-  if (order.type !== 'facture' && order.type !== 'avoir') {
-    return res.status(400).json({ error: 'Seules les factures peuvent être marquées payées' });
+  // v8.182 — Les avoirs sont exclus, comme le disait déjà le message d'erreur.
+  // Le garde-fou les laissait passer, et les deux issues étaient fausses :
+  //   • déjà poussé  → update_invoice_status cherchait l'avoir dans `invoices`,
+  //                    où il n'est pas (il vit dans `credit_notes`) ;
+  //   • pas encore   → push_invoice avec mapOrderToInvoice, dont les montants
+  //                    sont multipliés par sign = -1, créait une FACTURE à
+  //                    lignes négatives — le rejet PDP BR-27 que la v8.150
+  //                    avait corrigé pour la reprise.
+  // Un avoir se pousse par push_credit_note, et par lui seul.
+  if (order.type !== 'facture') {
+    return res.status(400).json({
+      error: order.type === 'avoir'
+        ? 'Un avoir ne se marque pas payé : utilisez push_credit_note.'
+        : 'Seules les factures peuvent être marquées payées'
+    });
   }
 
   // Vérif paiement (sécurité)
@@ -1691,13 +1704,59 @@ function mapOrderToCreditNote(order, calc, overrideStatus = null) {
     ? sanitizeString(`Avoir sur ${order.facture_origine}${vehicleLabel ? ' — ' + vehicleLabel : ''}${vehiclePlate ? ' (' + vehiclePlate + ')' : ''}`)
     : sanitizeString(`Avoir${vehicleLabel ? ' — ' + vehicleLabel : ''}`);
 
+  // v8.182 — Un avoir reprend la TVA de la vente qu'il annule : il lui faut donc
+  // la MÊME ventilation, pas un montant global.
+  //
+  // Une ligne unique au taux `avecTva ? tva_pct : 0` perdait tout en régime
+  // marge : le véhicule y est bien à 0 % (art. 297 E), mais les frais de mise à
+  // disposition restent taxables au taux normal — leur TVA n'était jamais
+  // reprise. On reconstruit donc les lignes comme mapOrderToInvoice le fait
+  // pour la facture, en valeurs absolues (le signe est porté par le statut
+  // credit_note côté IOBILL).
+  const remAmt = Math.abs(Number(order.remise_ttc) || 0);
+  const vehiculeTtc = Math.max(0, ttcAmount - remAmt);
+  const fraisMD = Math.abs(Number(order.frais_mise_dispo) || 0);
+  const tauxFrais = Number(order.tva_pct) || 20;
+
   const lines = [{
     description: description1,
     quantity: 1,
-    unit_price_ht_cents: Math.round(ttcToHt(ttcAmount) * 100),
-    vat_rate: tvaPct,
+    unit_price_ht_cents: Math.round(ttcToHt(vehiculeTtc) * 100),
+    vat_rate: avecTva ? tvaPct : 0,
     discount_pct: 0
   }];
+  if (fraisMD > 0) {
+    lines.push({
+      description: 'Frais de mise à disposition',
+      quantity: 1,
+      unit_price_ht_cents: Math.round(fraisMD / (1 + tauxFrais / 100) * 100),
+      vat_rate: tauxFrais,
+      discount_pct: 0
+    });
+  }
+
+  // v8.182 — TVA SUR MARGE à reprendre (art. 297 A). Elle n'est jamais visible
+  // sur le document (art. 297 E) mais elle est due, et elle figure dans la
+  // déclaration IOBILL. Annuler la vente doit donc l'annuler aussi — sans ces
+  // montants, la TVA sur marge d'une vente annulée restait due à jamais.
+  //
+  //   avoir TOTAL   : l'avoir a conservé la structure de la facture, la marge
+  //                   se recalcule donc à l'identique (vente après remise − achat).
+  //   avoir PARTIEL : baisser le prix de vente réduit la marge d'autant, dans la
+  //                   limite de la marge d'origine figée à la création.
+  let purchase_price_cents = 0, marge_cents = 0, tva_marge_cents = 0;
+  if (!avecTva) {
+    const prixAchat = Number(v.prix_achat) || 0;
+    const margeOrigine = Number(order.avoir_marge_origine);
+    const margeReprise = order.avoir_partiel
+      ? Math.min(ttcAmount, Number.isFinite(margeOrigine) ? margeOrigine : 0)
+      : vehiculeTtc - prixAchat;
+    if (margeReprise > 0) {
+      purchase_price_cents = Math.round(prixAchat * 100);
+      marge_cents = Math.round(margeReprise * 100);
+      tva_marge_cents = Math.round((margeReprise * 20 / 120) * 100);
+    }
+  }
 
   // Client — v8.44 ajout external_id pour matching fiable
   const cli = order.client || {};
@@ -1743,7 +1802,14 @@ function mapOrderToCreditNote(order, calc, overrideStatus = null) {
     source_invoice_number: order.facture_origine || null, // ⚠ requis côté IOBILL
     reason: sanitizeString(order.motif_avoir) || sanitizeString(order.notes) || null,
     client: clientPayload,
-    lines
+    lines,
+    // v8.182 — Régime, pour que le PDF de l'avoir porte la mention art. 297 A
+    // comme celui de la facture : `credit_notes` ne stockait aucun régime, la
+    // mention y était donc toujours absente.
+    vat_regime: avecTva ? 'standard' : 'margin_297a',
+    purchase_price_cents,
+    marge_cents,
+    tva_marge_cents
   };
 }
 

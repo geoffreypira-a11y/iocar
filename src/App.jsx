@@ -5295,11 +5295,20 @@ function PrintDoc({ order, dealer, onClose, viewMode, livrePolice }) {
                     donc exactement le « Sous-total HT » des totaux. */}
                 <tr>
                   <td style={{ fontSize: 11 }}>
-                    VENTE VÉHICULE - {(() => {
+                    {/* v8.182 — Sur un AVOIR, « VENTE VÉHICULE » était un
+                        contresens : le document annule la vente, il ne la
+                        constate pas. Même libellé que celui transmis à IOBILL
+                        (mapOrderToCreditNote), pour que les deux documents se
+                        lisent pareil. */}
+                    {(() => {
                       const vd = order.vehicle_data || {};
                       const vehLabel = [vd.marque, vd.modele, vd.finition].filter(Boolean).join(" ") || (order.vehicle_label || "Véhicule");
                       const plate = vd.plate || order.vehicle_plate || "";
-                      return plate ? `${vehLabel} (${plate})` : vehLabel;
+                      const designation = plate ? `${vehLabel} (${plate})` : vehLabel;
+                      if (order.type !== "avoir") return `VENTE VÉHICULE - ${designation}`;
+                      return order.facture_origine
+                        ? `Avoir sur ${order.facture_origine} — ${designation}`
+                        : `Avoir — ${designation}`;
                     })()}
                   </td>
                   <td style={{ textAlign: "center", fontSize: 11 }}>1</td>
@@ -6544,10 +6553,21 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
               facture_origine: o.ref,
               paiements: [],
               statut: null,
-              prix_ht: String(Number(avoirChoice.totalTtc).toFixed(2)),
-              frais_mise_dispo: "0",
+              // v8.182 — Un avoir TOTAL est la facture au signe près, débours
+              // exclus : on conserve donc sa structure — prix véhicule, remise
+              // et frais — au lieu de tout écraser dans un montant global.
+              //
+              // C'est ce qui permet de reprendre la BONNE TVA. Écrasée en une
+              // ligne unique, la ventilation était perdue : en régime marge le
+              // tout passait à 0 %, et les 30 € de TVA des frais — bien réels,
+              // les frais restant taxables — n'étaient jamais repris.
+              //
+              // Seule la carte grise est mise à zéro : elle n'est pas remboursée.
+              prix_ht: String(Number(o.prix_ht || 0).toFixed(2)),
+              frais_mise_dispo: String(Number(o.frais_mise_dispo || 0).toFixed(2)),
               carte_grise: "0",
-              remise_ttc: "0",
+              remise_ttc: String(Number(o.remise_ttc || 0).toFixed(2)),
+              avoir_partiel: false,
               reprise_active: false,
               reprise_valeur: 0,
               acompte_ttc: 0,  // ⚠ Un avoir n'a pas d'acompte signature
@@ -6585,10 +6605,22 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
               facture_origine: o.ref,
               paiements: [],
               statut: null,
+              // v8.182 — Avoir PARTIEL : le montant saisi vient en réduction du
+              // prix du véhicule. Une seule ligne, donc, au régime de la vente.
+              // (Un avoir total, lui, reproduit la structure de la facture.)
               prix_ht: String(Number(montant).toFixed(2)),
               frais_mise_dispo: "0",
               carte_grise: "0",
               remise_ttc: "0",
+              avoir_partiel: true,
+              // En régime marge, baisser le prix de vente réduit la marge — donc
+              // la TVA sur marge due. La marge d'origine n'est plus déductible
+              // de l'avoir seul (son prix a été remplacé par le montant saisi) :
+              // on la fige ici, elle servira de plafond à la reprise.
+              avoir_marge_origine: String(Math.max(0,
+                (Number(o.prix_ht || 0) - Number(o.remise_ttc || 0))
+                - (Number(o.vehicle_data?.prix_achat) || 0)
+              ).toFixed(2)),
               reprise_active: false,
               reprise_valeur: 0,
               acompte_ttc: 0,  // ⚠ Un avoir n'a pas d'acompte signature
@@ -6724,7 +6756,16 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
                         return <button className="btn btn-ghost btn-xs" title="Créer un avoir" onClick={() => {
                           // v8.49.11 — Un avoir rembourse ce que le client a payé
                           // (grandTotal), y compris les débours refacturés.
-                          const totalTtc = calcOrder(o).grandTotal;
+                          // v8.182 — Non : la carte grise n'est PAS remboursée.
+                          // Une fois faite, l'argent est parti au Trésor Public
+                          // et le véhicule est immatriculé au nom du client.
+                          // L'avoir porte donc sur le TTC seul. Y verser les
+                          // débours les rendait taxables (art. 267 II 2° CGI) :
+                          // l'avoir reprenait une TVA jamais collectée.
+                          // Le cas d'une annulation AVANT la carte grise se
+                          // règle hors facture — un débours restitué n'a ni
+                          // base taxable ni ligne de facture.
+                          const totalTtc = calcOrder(o).ttc;
                           setAvoirChoice({ order: o, totalTtc });
                         }}>↩️</button>;
                       })()}
