@@ -29,7 +29,7 @@ raison.**
 
 | # | Point | Constat |
 |---|---|---|
-| ✅ | **Montant payé par le client** | `TOTAL TTC` et `TOTAL À PAYER` : **0 écart sur 1 795 140 ventes simulées**. Le client ne paiera jamais un centime de plus ou de moins que le prix négocié. |
+| ✅ | **Montant payé par le client** | `TOTAL TTC` et `TOTAL À PAYER` : **0 écart sur 1 795 140 ventes simulées** aux montants ronds. (Nuance apportée après coup : sur des montants au centime — frais à 99,99 € par exemple — le TTC pouvait lui aussi diverger d'un centime. Voir F1, dont le correctif supprime ce cas.) |
 | ✅ | **Base taxable nette de remise** | Le pont envoie la ligne véhicule déjà remisée : la base imposable est nette des réductions (art. 267 II 1° CGI). La remise ne figure pas dans le XML, elle n'a pas à y figurer. |
 | ✅ | **Régime de la marge en Factur-X** | `CategoryCode` = `E`, `ExemptionReasonCode` = `VATEX-EU-F`, texte « Régime particulier - Biens d'occasion (art. 297 A du CGI) ». C'est exactement le codage attendu par EN 16931. |
 | ✅ | **Mention marge lisible** | Présente sur le PDF IO BILL comme sur le document IO CAR depuis la PR #37, dans des termes équivalents. |
@@ -201,3 +201,92 @@ touche les deux applications (champ, document, payload, XML).
   côtés, mais le cycle d'annulation n'a pas été rejoué).
 - La TVA sur marge globalisée (la marge est calculée vente par vente).
 - Les ventes intracommunautaires et l'autoliquidation.
+
+---
+
+## 5. Suites données (9 septembre 2026)
+
+Décisions prises avec l'exploitant et corrections apportées le jour même.
+
+### F1 + F2 — corrigés
+
+`calcOrder` calcule désormais ses totaux **ligne par ligne, en centimes**,
+exactement comme `mapOrderToInvoice` puis `computeTotalsFromLines`. La remise HT
+et le prix brut du véhicule sont **déduits** de ces mêmes montants au lieu d'être
+recalculés à part, ce qui garantit que les soustractions imprimées tombent
+juste.
+
+Revérifié sur **2 824 380 ventes simulées** (régimes normal et marge, taux 20 /
+10 / 5,5 %, prix ronds et au centime) :
+
+| Propriété | Résultat |
+|---|---|
+| colonne « Total HT » = Sous-total HT | ✅ 0 échec |
+| Sous-total HT − Remise = Total HT net | ✅ 0 échec |
+| HT + TVA = TOTAL TTC (BR-CO-15) | ✅ 0 échec |
+| **IO CAR == IO BILL** (HT, TVA, TTC) | ✅ **0 échec** |
+
+**Contrepartie assumée.** Puisque le `TOTAL TTC` vaut maintenant HT + TVA (comme
+l'impose BR-CO-15 et comme le calcule IO BILL), il peut s'écarter d'**un centime
+au maximum** du prix négocié + frais. Mesuré :
+
+| Saisie | Fréquence de l'écart |
+|---|---|
+| **TVA 20 %, montants en euros entiers** | **0 sur 9 961 110 ventes** |
+| Taux 10 % ou 5,5 %, montants ronds | 2,4 % |
+| Montants comportant des centimes | 6 à 13 % |
+
+Autrement dit : **jamais** dans le cas d'usage réel (véhicules à 20 %, prix en
+euros). Et dans les cas où l'écart apparaît, c'est la valeur qu'IO BILL
+transmettait déjà — IO CAR était le seul à afficher autre chose.
+
+### F3 — arbitré en faveur d'IO CAR
+
+La cascade IO CAR est la bonne : la remise se lit en HT **avant** la TVA, là où
+IO BILL affichait « Sous-total TTC avant remise », c'est-à-dire du TTC au milieu
+d'un bloc HT.
+
+Le pont transmet désormais `veh_ht_brut_cents` et `remise_ht_cents` dans
+`vehicle_meta`. **Purement documentaire** : `lines` continue de porter le prix
+NET, seul à fixer la base taxable du Factur-X — ces deux montants ne doivent
+jamais entrer dans un calcul de total.
+
+➡️ Reste à faire **côté IO BILL** : reprendre la cascade dans `pdf-builder.js`
+en consommant ces deux champs.
+
+### F4 — requalifié, puis corrigé à moitié
+
+L'exploitant ne livre le véhicule qu'une fois encaissé : le règlement intervient
+au plus tard à la remise du véhicule. Ce n'est donc **pas une échéance à
+calculer** mais une **condition** — un texte, pas une date. D'où :
+
+- ✅ la mention « Paiement comptant, au plus tard à la remise du véhicule. »
+  s'affiche désormais en tête des conditions de règlement du document IO CAR,
+  toujours, et avant le texte libre qu'un concessionnaire a pu réécrire ;
+- ✅ le pont l'envoie en `payment_terms` ;
+- ⚠️ **mais IO BILL ne la persiste pas** : `invoicePayload` est une liste
+  blanche explicite, et il n'existe pas de colonne `payment_terms` (seulement
+  `payment_terms_days`, un nombre). Le champ est donc ignoré, et
+  `generate-facturx.js` continue d'écrire son propre défaut « Paiement à
+  réception de la facture ».
+
+➡️ Reste à faire **côté IO BILL** : persister `payment_terms` et le servir au
+générateur Factur-X, pour que les deux documents portent la même phrase.
+
+`order.date_echeance` n'a **pas** été touché : il reste la date de livraison
+affichée « Livraison le : ». Ne jamais le mapper sur `due_date`.
+
+### F5 — gelé
+
+Le client ne livre pas aujourd'hui ; le jour où il livrera, ce sera une
+prestation facturée (frais de livraison). La mention d'adresse de livraison sera
+traitée avec cette fonctionnalité, pas avant. La question de fond — une voiture
+retirée à la concession est-elle « livrée à une adresse différente de celle du
+client » au sens des mentions 2026 ? — reste à poser à l'expert-comptable.
+
+### Limite connue, hors périmètre
+
+Sur un **avoir**, le tableau imprime des lignes positives tandis que les totaux
+sont négatifs. Incohérence antérieure à cet audit, non corrigée ici : elle
+touche la présentation des avoirs, pas les montants (le signe est cohérent des
+deux côtés du pont).
