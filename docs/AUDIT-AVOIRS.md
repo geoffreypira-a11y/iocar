@@ -53,15 +53,44 @@ versant dans le prix de vente, l'avoir la rend taxable.
 | Débours | 500,00 € | — (absorbé dans le prix) |
 | À payer / à rembourser | 24 680,00 € | 24 680,00 € |
 
+*Et le montant remboursé est lui-même contestable : la carte grise ayant déjà
+été payée au Trésor Public, elle n'est pas rendue au client. Voir le correctif.*
+
 Le montant remboursé au client est juste. Mais l'avoir **reprend 83,33 € de TVA
 qui n'ont jamais été collectés** — exactement 500 / 6, la TVA fictive sur le
 débours. Répété, c'est une minoration de TVA collectée.
 
-**Correctif** : l'avoir doit reprendre la structure de la facture, pas un
-montant global — `prix_ht` = le TTC (24 180) et `carte_grise` conservée (500).
-Le total à rembourser reste 24 680 €, mais la TVA reprise redevient 4 030 €.
-`mapOrderToCreditNote` devra alors transmettre les débours, qu'il ignore
-aujourd'hui.
+**Correctif** — *révisé après retour de l'exploitant, qui a tranché la question
+métier : la carte grise n'est pas remboursée au client.* Une fois la carte grise
+faite, l'argent est parti au Trésor Public et le véhicule est immatriculé au nom
+du client ; il n'y a rien à rendre.
+
+L'avoir doit donc porter sur le **TTC seul** :
+
+```js
+const totalTtc = calcOrder(o).ttc;        // 24 180,00 €  (et non .grandTotal)
+```
+
+C'est plus simple que de transporter les débours dans l'avoir, et cela suffit à
+faire disparaître le défaut : `prix_ht` = 24 180 → HT 20 150, TVA 4 030, soit
+exactement la facture d'origine. La « convention IOCAR : un avoir n'a pas de
+débours » qu'affiche `mapOrderToCreditNote` devient alors vraie, au lieu d'être
+contredite par le montant qu'on lui passe.
+
+Deux conséquences à traiter avec :
+
+- Le libellé de la modale, **« Montant total TTC »**, désigne aujourd'hui le
+  total à payer débours compris. Il redeviendra exact.
+- `AvoirPartielModal` plafonne la saisie à ce même montant
+  (`if (val > totalTtc)`) : le plafond passera de 24 680 à 24 180 €, ce qui est
+  la bonne borne.
+
+**Cas restant, à trancher séparément** : une vente annulée **avant** que la
+carte grise ne soit faite. Le garage n'a alors rien avancé et doit rendre les
+500 € — mais en tant que débours, donc **sans TVA**. Un avoir partiel de 500 €
+leur appliquerait 83,33 € de TVA. Ce cas demanderait un champ débours sur
+l'avoir ; il n'est pas couvert aujourd'hui et ne le sera pas par le correctif
+ci-dessus.
 
 ---
 
@@ -238,7 +267,7 @@ codée en dur dans `PrintDoc`, sans distinction de type.
 
 | | Sujet | Portée |
 |---|---|---|
-| 1 | **A1** — TVA sur les débours | IO CAR (création + mapping) |
+| 1 | **A1** — TVA sur les débours (avoir sur le TTC seul) | IO CAR (création) |
 | 2 | **A2** — transmission des avoirs | IO BILL (adapter PA + 2 boutons) |
 | 3 | **A3** — BT-25, numéro au lieu de l'UUID | IO BILL (+ 1 champ transmis) |
 | 4 | **A4 + A5** — facture d'origine et régime marge sur le PDF | IO BILL |
