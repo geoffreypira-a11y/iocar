@@ -4872,35 +4872,58 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
             )}
           </div>
 
-          <div style={{ background: "var(--card2)", borderRadius: 8, padding: "14px 16px", marginBottom: 16, display: "flex", gap: 24, flexWrap: "wrap" }}>
-            {/* v8.49.11 — La carte grise passe en DÉBOURS (art. 267 II 2° CGI), donc :
+          {/* v8.49.11 — La carte grise passe en DÉBOURS (art. 267 II 2° CGI), donc :
                  - Total TTC = HT + TVA (base fiscale, sans CG)
                  - Débours (CG) affiché séparé
-                 - Total à payer = TTC + Débours (ce que règle vraiment le client) */}
-            {(c.avecTva
-              ? [
-                  ["HT", fmtDec(c.ht)],
-                  ["TVA " + (c.tvaPct || 20) + "%", fmtDec(c.tvaAmt)],
-                  c.remAmt > 0 ? ["Remise déduite", fmtDec(c.remAmt)] : null,
-                  ["Total TTC", fmtDec(c.ttc)],
-                  c.debourTotal > 0 ? ["Débours (CG)", fmtDec(c.debourTotal)] : null,
-                  c.debourTotal > 0 ? ["Total à payer", fmtDec(c.grandTotal)] : null,
-                  c.repriseValeur > 0 ? ["Reprise (règlement)", "- " + fmtDec(c.repriseValeur)] : null
-                ].filter(Boolean)
-              : [
-                  ["Prix TTC", fmtDec(c.ttc)],
-                  c.debourTotal > 0 ? ["Débours (CG)", fmtDec(c.debourTotal)] : null,
-                  c.debourTotal > 0 ? ["Total à payer", fmtDec(c.grandTotal)] : null,
-                  c.repriseValeur > 0 ? ["Reprise (règlement)", "- " + fmtDec(c.repriseValeur)] : null,
-                  ["TVA", "Non applicable"],
-                  ["Régime", "Art. 297A CGI"]
-                ].filter(Boolean)
-            ).map(([l, v]) => (
-              <div key={l}>
-                <div style={{ fontSize: 10, letterSpacing: 1.5, textTransform: "uppercase", color: "var(--muted)", marginBottom: 3 }}>{l}</div>
-                <div style={{ fontSize: 16, fontWeight: 700, fontFamily: "Syne" }}>{v}</div>
-              </div>
-            ))}
+                 - Total à payer = TTC + Débours (ce que règle vraiment le client)
+              v8.178 — Ce récapitulatif était une rangée d'étiquettes dans un
+              ordre qui n'était celui d'aucun calcul : un « HT » déjà net à côté
+              d'une « Remise déduite » exprimée en TTC. On y met exactement la
+              cascade imprimée sur le document, dans le même ordre et avec les
+              mêmes libellés — ce qu'on valide ici est ce que le client lira. */}
+          <div style={{ background: "var(--card2)", borderRadius: 8, padding: "14px 16px", marginBottom: 16 }}>
+            <div style={{ maxWidth: 420, marginLeft: "auto" }}>
+              {(() => {
+                const rows = [];
+                if (c.remAmt > 0) {
+                  rows.push(["Sous-total HT", fmtDec(c.htBrut), {}]);
+                  rows.push([
+                    c.avecTva ? `Remise accordée (soit ${fmtDec(c.remAmt)} TTC)` : "Remise accordée",
+                    fmtDec(-c.remAmtHt),
+                    { color: "var(--gold)" },
+                  ]);
+                }
+                rows.push([c.remAmt > 0 ? "Total HT net" : "Montant HT", fmtDec(c.ht), {}]);
+                if (c.avecTva) {
+                  rows.push([`TVA ${c.tvaPct || 20}%`, fmtDec(c.tvaAmt), {}]);
+                } else {
+                  if (c.tvaAmt > 0) rows.push([`TVA ${c.tvaPct || 20}% (frais uniquement)`, fmtDec(c.tvaAmt), {}]);
+                  rows.push(["Véhicule hors TVA", "Art. 297A CGI", { muted: true }]);
+                }
+                rows.push(["Total TTC", fmtDec(c.ttc), { big: true }]);
+                if (c.debourTotal > 0) {
+                  rows.push(["Débours — carte grise (art. 267 II 2°)", fmtDec(c.debourTotal), { muted: true }]);
+                  rows.push(["Total à payer", fmtDec(c.grandTotal), { big: true }]);
+                }
+                // v8.154 — La reprise n'est pas une remise : elle vient après le
+                // total, comme un règlement en nature.
+                if (c.repriseValeur > 0) {
+                  rows.push(["Reprise (règlement en nature)", "- " + fmtDec(c.repriseValeur), { muted: true }]);
+                }
+                return rows.map(([label, value, o], i) => (
+                  <div key={i} style={{
+                    display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 16,
+                    padding: o.big ? "6px 0 0" : "3px 0",
+                    borderTop: o.big ? "1px solid var(--border2)" : undefined,
+                    marginTop: o.big ? 6 : undefined,
+                    color: o.color || (o.muted ? "var(--muted)" : undefined),
+                  }}>
+                    <span style={{ fontSize: o.big ? 12 : 11, letterSpacing: o.big ? 1 : 0, textTransform: o.big ? "uppercase" : "none", color: o.color || (o.big ? undefined : "var(--muted)") }}>{label}</span>
+                    <span style={{ fontFamily: "Syne", fontWeight: 700, fontSize: o.big ? 17 : 13, whiteSpace: "nowrap" }}>{value}</span>
+                  </div>
+                ));
+              })()}
+            </div>
           </div>
 
           {/* Mentions obligatoires 2026 — uniquement pour factures et avoirs */}
