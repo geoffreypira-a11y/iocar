@@ -4898,7 +4898,7 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
                   rows.push([`TVA ${c.tvaPct || 20}%`, fmtDec(c.tvaAmt), {}]);
                 } else {
                   if (c.tvaAmt > 0) rows.push([`TVA ${c.tvaPct || 20}% (frais uniquement)`, fmtDec(c.tvaAmt), {}]);
-                  rows.push(["Véhicule hors TVA", "Art. 297A CGI", { muted: true }]);
+                  rows.push(["Véhicule vendu hors TVA (TVA sur la marge)", "Art. 297 A CGI", { muted: true }]);
                 }
                 rows.push(["Total TTC", fmtDec(c.ttc), { big: true }]);
                 if (c.debourTotal > 0) {
@@ -5247,7 +5247,10 @@ function PrintDoc({ order, dealer, onClose, viewMode, livrePolice }) {
                   <td style={{ textAlign: "center", fontSize: 11 }}>1</td>
                   <td style={{ textAlign: "center", fontSize: 11 }}>u</td>
                   <td style={{ textAlign: "right", fontSize: 11 }}>{fmtDec(c.avecTva ? c.baseBrut / (1 + (c.tvaPct || 20) / 100) : c.baseBrut)}</td>
-                  <td style={{ textAlign: "center", fontSize: 11, color: c.avecTva ? undefined : "#888" }}>{c.avecTva ? `${c.tvaPct || 20}%` : "—"}</td>
+                  {/* v8.178 — En régime marge, un tiret ne dit rien. La ligne
+                      porte la mention elle-même : c'est là que le lecteur
+                      cherche le taux. */}
+                  <td style={{ textAlign: "center", fontSize: c.avecTva ? 11 : 9, color: c.avecTva ? undefined : "#6b6b78" }}>{c.avecTva ? `${c.tvaPct || 20}%` : "Hors TVA"}</td>
                   <td style={{ textAlign: "right", fontSize: 11, fontWeight: 600 }}>{fmtDec(c.avecTva ? c.baseBrut / (1 + (c.tvaPct || 20) / 100) : c.baseBrut)}</td>
                 </tr>
                 {/* L2 - Frais de mise à disposition
@@ -5310,7 +5313,10 @@ function PrintDoc({ order, dealer, onClose, viewMode, livrePolice }) {
                     </>}
                     <div className="pdoc-trow"><span>{c.remAmt > 0 ? "Total HT net" : "Montant HT"}</span><span>{fmtDec(c.ht)}</span></div>
                     {c.tvaAmt > 0 && <div className="pdoc-trow"><span>TVA {c.tvaPct || 20}% (frais uniquement)</span><span>{fmtDec(c.tvaAmt)}</span></div>}
-                    <div className="pdoc-trow" style={{ fontSize: 10, color: "#aaa" }}><span>Véhicule hors TVA</span><span>Art. 297A CGI</span></div>
+                    {/* v8.178 — Le gris clair d'origine ne survivait ni à
+                        l'écran ni à l'impression : la mention qui justifie
+                        l'absence de TVA sur le véhicule doit se lire. */}
+                    <div className="pdoc-trow" style={{ fontSize: 10, color: "#5a5a66" }}><span>Véhicule vendu hors TVA (TVA sur la marge)</span><span>Art. 297 A CGI</span></div>
                     <div className="pdoc-trow big"><span>TOTAL TTC</span><span>{fmtDec(c.ttc)}</span></div>
                   </>
                 )}
