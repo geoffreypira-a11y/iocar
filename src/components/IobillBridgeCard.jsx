@@ -63,7 +63,14 @@ export default function IobillBridgeCard({ token, garage, onUpdate }) {
     const r = await callBridge("link", corps);
     setBusy(false);
     if (!r.ok) { setErr(r.error); return false; }
-    setMsg(reparer || aReparer ? "✅ Liaison IO BILL réparée !" : "✅ Compte IO BILL activé !");
+    // v8.178 — Une réparation ne touche jamais au mot de passe IO BILL : si le
+    // compte utilisateur existait encore, IOBILL refuse de l'écraser (sinon on
+    // casserait un compte que l'abonné utilise déjà) ; s'il a été recréé, il
+    // l'est sans mot de passe. Dans les deux cas la connexion passe par
+    // « Mot de passe oublié », et le dire évite une demi-heure de tâtonnement.
+    setMsg(reparer || aReparer
+      ? "✅ Liaison IO BILL réparée. Si la connexion à IO BILL échoue, utilisez « Mot de passe oublié » sur app.iobill.online : une réparation ne modifie jamais votre mot de passe."
+      : "✅ Compte IO BILL activé !");
     setAReparer(false);
     if (onUpdate) onUpdate({
       iobill_company_id: r.data.iobill_company_id,
@@ -263,7 +270,9 @@ export default function IobillBridgeCard({ token, garage, onUpdate }) {
       <div style={{ marginTop: 12, fontSize: 11, color: "var(--muted)" }}>
         Identifiants IO BILL : <strong>{garage.iobill_email}</strong>
         {" · "}
-        Mot de passe : le même que sur IO CAR (si vous l'avez défini à l'activation)
+        Mot de passe : celui défini à l'activation, s'il l'a été. Sinon — ou après
+        une réparation, qui ne le modifie pas — passez par « Mot de passe oublié »
+        sur app.iobill.online.
       </div>
     </div>
   );
