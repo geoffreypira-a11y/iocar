@@ -134,7 +134,7 @@ async function handleLink(user, garage, supabase, body, res) {
   // v8.49 — Skip cette vérif en auto-guérison (on ne veut pas exiger le MDP
   // pour réparer un état partiel — pas de risque puisque le user est déjà
   // authentifié côté IOCAR via verifyUser en amont).
-  if (password && !isCorruptedState && !reparation) {
+  if (password && !isCorruptedState) {
     const r = await fetch(`${process.env.SUPABASE_URL}/auth/v1/token?grant_type=password`, {
       method: 'POST',
       headers: {
