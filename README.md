@@ -50,6 +50,9 @@ vercel.com → votre projet → Settings → Domains → Add → iocar.online
 
 ## Mémos techniques
 
+- [`docs/AUDIT-FACTURATION.md`](docs/AUDIT-FACTURATION.md) — audit de la chaîne
+  IO CAR → IO BILL (septembre 2026) : conformité des mentions, et comparaison au
+  centime de ce qu'IO CAR imprime et de ce qu'IO BILL déclare.
 - [`docs/LIAISON-IOBILL.md`](docs/LIAISON-IOBILL.md) — comment tient la liaison
   IO CAR ↔ IO BILL (les deux champs `iobill_company_id` / `iobill_api_token`),
   ce que fait une suppression de chaque côté, à quoi sert « Réparer la liaison »

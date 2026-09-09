@@ -721,6 +721,22 @@ const today = () => new Date().toLocaleDateString("fr-FR");
 const fmt = (n) => Number(n || 0).toLocaleString("fr-FR", { style: "currency", currency: "EUR", maximumFractionDigits: 0 });
 const fmtDec = (n) => Number(n || 0).toLocaleString("fr-FR", { style: "currency", currency: "EUR" });
 
+// v8.180 — Date à laquelle le règlement doit intervenir : mention obligatoire
+// (art. 242 nonies A 9° du CGI, art. L441-9 C. com.).
+//
+// Chez un concessionnaire elle ne se calcule pas : le véhicule n'est remis
+// qu'une fois encaissé, le règlement intervient donc au plus tard à la
+// livraison. C'est une CONDITION, pas une échéance — d'où un texte et non une
+// date. La valeur reste lue sur le garage (`delai_reglement`) : le jour où un
+// concessionnaire pratiquera le paiement à 30 jours, il suffira d'ajouter la
+// colonne et le champ dans Paramètres — ni le document ni le pont ne bougeront.
+//
+// ⚠ Ne pas confondre avec `order.date_echeance`, qui est affiché « Livraison
+// le : » sur le document : c'est une date de livraison, pas une échéance de
+// paiement. Les mapper l'un sur l'autre transmettrait une date fausse.
+const DELAI_REGLEMENT_DEFAUT = "Paiement comptant, au plus tard à la remise du véhicule.";
+const delaiReglement = (dealer) => String(dealer?.delai_reglement || "").trim() || DELAI_REGLEMENT_DEFAUT;
+
 // ─── DATES ──────────────────────────────────────────────────
 // Parse une date "DD/MM/YYYY" (format affiché partout dans l'app) en objet Date.
 // Retourne null si le format est invalide ou la chaîne vide.
@@ -982,21 +998,42 @@ function calcOrder(o) {
   // Le prix de vente + frais mise dispo = montant TTC soumis à TVA
   const montantTTC_soumis = prixApresRemise + fraisMiseDispo;
 
-  let ht, tvaAmt;
-  if (avecTva) {
-    // TVA classique "en dedans" sur tout : HT = TTC / (1 + taux)
-    ht = montantTTC_soumis / (1 + tvaPct / 100);
-    tvaAmt = montantTTC_soumis - ht;
-  } else {
-    // v8.48.9 — Régime marge occasion (Art. 297A CGI) :
-    //   Le VÉHICULE est vendu sans TVA visible (elle est prélevée sur la marge du
-    //   garage, hors facture). Les FRAIS de mise à disposition restent taxables
-    //   au taux normal (prestation accessoire indépendante du véhicule d'occasion).
-    //   → HT = prixVehicule + (frais/1.20), TVA = (frais - frais/1.20)
-    const fraisHt = fraisMiseDispo / (1 + tvaPct / 100);
-    ht = prixApresRemise + fraisHt;
-    tvaAmt = fraisMiseDispo - fraisHt;
-  }
+  // ═══════════════════════════════════════════════════════════════
+  // v8.180 — Totaux calculés LIGNE PAR LIGNE, en centimes.
+  //
+  // Jusqu'ici on divisait le TTC global une seule fois (ht = TTC / 1,2). Le
+  // pont, lui, envoie une ligne par prestation et IOBILL recompose les totaux
+  // en arrondissant CHAQUE ligne au centime. Deux chemins d'arrondi, deux
+  // résultats : l'audit (docs/AUDIT-FACTURATION.md) a mesuré un écart d'un
+  // centime sur le HT et la TVA dans 6,7 % des ventes réalistes. La facture
+  // remise au client n'annonçait donc pas la même TVA que le Factur-X transmis
+  // à l'administration.
+  //
+  // C'est IOBILL qui a raison : EN 16931 construit la facture à partir de ses
+  // lignes (BR-CO-10, le total HT est la somme des montants nets de ligne). On
+  // reproduit donc ici, à l'identique, ce que fait mapOrderToInvoice puis
+  // computeTotalsFromLines — mêmes lignes, mêmes arrondis, mêmes totaux.
+  //
+  // Bénéfice second : la colonne « Total HT » du tableau somme désormais
+  // exactement au sous-total affiché, et Sous-total − Remise donne exactement
+  // le Total HT net. Ces trois nombres venaient de calculs différents.
+  // ═══════════════════════════════════════════════════════════════
+  const c100 = (montant) => Math.round(montant * 100);
+  // Le véhicule : TTC converti en HT au taux applicable ; en régime marge la
+  // TVA n'est pas mentionnable (art. 297 E), le prix est porté tel quel.
+  const vehHtCents = (ttcVehicule) => avecTva ? c100(ttcVehicule / (1 + tvaPct / 100)) : c100(ttcVehicule);
+  // Les frais restent taxables au taux normal dans les DEUX régimes : c'est une
+  // prestation accessoire, indépendante du véhicule d'occasion (cf. v8.62).
+  const fraisHtCents = c100(fraisMiseDispo / (1 + tvaPct / 100));
+  const tvaCents = (htCents, taux) => Math.round(htCents * taux / 100);
+
+  const vehNetCents = vehHtCents(prixApresRemise);
+  const htCents = vehNetCents + fraisHtCents;
+  const tvaAmtCents = tvaCents(vehNetCents, avecTva ? tvaPct : 0) + tvaCents(fraisHtCents, tvaPct);
+  const ttcCents = htCents + tvaAmtCents;
+
+  const ht = htCents / 100;
+  const tvaAmt = tvaAmtCents / 100;
 
   // Total TTC (BASE TVA) = HT + TVA. La carte grise est traitée à part comme
   // débours ci-dessous.
@@ -1016,21 +1053,31 @@ function calcOrder(o) {
   // Le RESTE À PAYER est inchangé : ce qui sortait du total entre maintenant
   // dans les encaissements.
   const repriseValeur = o.reprise_active ? (parseFloat(o.reprise_valeur) || 0) : 0;
-  const ttc = montantTTC_soumis;
+  // v8.180 — Le TTC est désormais HT + TVA, comme l'exige EN 16931 (BR-CO-15)
+  // et comme le calcule IOBILL. Sur les valeurs réellement saisies il reste
+  // égal au prix négocié + frais au centime près (vérifié sur 1 795 140 ventes
+  // simulées) : le client paie bien ce qui a été convenu.
+  const ttc = ttcCents / 100;
 
-  // v8.178 — Le document présente désormais la cascade dans l'ordre légal :
-  // lignes HT → remise → HT net → TVA → TTC. Il lui faut donc le HT AVANT
-  // remise (c'est la somme des lignes du tableau) et la remise exprimée en HT.
+  // v8.178 — Le document présente la cascade dans l'ordre légal : lignes HT →
+  // remise → HT net → TVA → TTC. Il lui faut donc le HT AVANT remise (c'est la
+  // somme des lignes du tableau) et la remise exprimée en HT.
   //
   // La remise porte sur le prix du véhicule, saisi TTC. En régime normal elle
   // contient donc de la TVA, qu'il faut retirer : la base imposable est nette
   // des remises (art. 267 II 1° CGI), sans quoi le document annoncerait une
   // TVA supérieure à celle réellement due — et à celle transmise à IOBILL.
   // En régime marge le véhicule ne porte pas de TVA visible : remise HT = TTC.
-  const htBrut = avecTva
-    ? (prixVente + fraisMiseDispo) / (1 + tvaPct / 100)
-    : prixVente + fraisMiseDispo / (1 + tvaPct / 100);
-  const remAmtHt = avecTva ? remAmt / (1 + tvaPct / 100) : remAmt;
+  //
+  // v8.180 — La remise HT se DÉDUIT des deux HT au lieu d'être calculée à part
+  // (remAmt / 1,2). C'est ce qui garantit que la soustraction imprimée tombe
+  // juste : htBrut − remAmtHt vaut ht par construction, jamais à un centime
+  // près. Même raison pour le prix brut du véhicule, qui doit sommer avec les
+  // frais pour donner exactement le sous-total.
+  const vehBrutCents = vehHtCents(prixVente);
+  const htBrutCents = vehBrutCents + fraisHtCents;
+  const htBrut = htBrutCents / 100;
+  const remAmtHt = (htBrutCents - htCents) / 100;
   const debourTotal = carteGrise;
   const grandTotal = ttc + debourTotal;
 
@@ -1071,7 +1118,12 @@ function calcOrder(o) {
     ht: ht * sign, remAmt, base: prixApresRemise, fraisMiseDispo,
     // v8.178 — avant remise : prix TTC du véhicule, HT de l'ensemble des lignes,
     // et remise ramenée en HT. htBrut − remAmtHt === ht, dans les deux régimes.
-    baseBrut: prixVente, htBrut: htBrut * sign, remAmtHt: remAmtHt * sign,
+    // v8.180 — vehHtBrut et fraisHt sont les HT arrondis des deux lignes, avant
+    // remise : ce sont EUX qu'imprime le tableau, pour que la colonne somme
+    // exactement au sous-total. Non signés, comme baseBrut : le tableau liste
+    // des prestations à leur valeur, c'est le total qui porte le sens d'un avoir.
+    baseBrut: prixVente, vehHtBrut: vehBrutCents / 100, fraisHt: fraisHtCents / 100,
+    htBrut: htBrut * sign, remAmtHt: remAmtHt * sign,
     carteGrise, repriseValeur, baseTotal: montantTTC_soumis,
     tvaAmt: tvaAmt * sign,
     ttc: ttc * sign,                    // v8.49.11 — TTC hors débours (base TVA)
@@ -5252,19 +5304,21 @@ function PrintDoc({ order, dealer, onClose, viewMode, livrePolice }) {
                   </td>
                   <td style={{ textAlign: "center", fontSize: 11 }}>1</td>
                   <td style={{ textAlign: "center", fontSize: 11 }}>u</td>
-                  <td style={{ textAlign: "right", fontSize: 11 }}>{fmtDec(c.avecTva ? c.baseBrut / (1 + (c.tvaPct || 20) / 100) : c.baseBrut)}</td>
+                  <td style={{ textAlign: "right", fontSize: 11 }}>{fmtDec(c.vehHtBrut)}</td>
                   {/* v8.178 — En régime marge, un tiret ne dit rien. La ligne
                       porte la mention elle-même : c'est là que le lecteur
                       cherche le taux. */}
                   <td style={{ textAlign: "center", fontSize: c.avecTva ? 11 : 9, color: c.avecTva ? undefined : "#6b6b78" }}>{c.avecTva ? `${c.tvaPct || 20}%` : "Hors TVA"}</td>
-                  <td style={{ textAlign: "right", fontSize: 11, fontWeight: 600 }}>{fmtDec(c.avecTva ? c.baseBrut / (1 + (c.tvaPct || 20) / 100) : c.baseBrut)}</td>
+                  <td style={{ textAlign: "right", fontSize: 11, fontWeight: 600 }}>{fmtDec(c.vehHtBrut)}</td>
                 </tr>
                 {/* L2 - Frais de mise à disposition
                     v8.48.9 — Les frais sont TOUJOURS taxables au taux normal, même en régime marge */}
                 {(parseFloat(order.frais_mise_dispo) || 0) > 0 && (() => {
-                  const fmd = parseFloat(order.frais_mise_dispo) || 0;
-                  // En régime marge OU classique, les frais sont taxables au taux normal
-                  const fmdHt = fmd / (1 + (c.tvaPct || 20) / 100);
+                  // En régime marge OU classique, les frais sont taxables au taux normal.
+                  // v8.180 — On réutilise le HT arrondi calculé par calcOrder plutôt que
+                  // de refaire la division ici : c'est ce montant-là qui entre dans le
+                  // sous-total, et la colonne doit sommer juste.
+                  const fmdHt = c.fraisHt;
                   return (
                     <tr>
                       <td style={{ fontSize: 11 }}>Frais de mise à disposition</td>
@@ -5493,6 +5547,10 @@ function PrintDoc({ order, dealer, onClose, viewMode, livrePolice }) {
                   </div>
                   <div style={{ fontSize: 9, color: "#aaa", lineHeight: 1.8, flex: 1 }}>
                     <strong style={{ color: "#888", letterSpacing: 1, textTransform: "uppercase", fontSize: 8 }}>Conditions de règlement</strong><br />
+                    {/* v8.180 — Le délai de règlement est une mention obligatoire :
+                        il s'affiche toujours, et avant le texte libre, qu'un
+                        concessionnaire a pu réécrire sans l'y remettre. */}
+                    <span style={{ color: "#555", fontWeight: 700 }}>{delaiReglement(dealer)}</span><br />
                     {(dealer?.conditions_reglement || "TVA acquittée sur les encaissements.\nTout retard de paiement entraîne des pénalités au taux légal en vigueur (art. L441-10 C. com.).\nIndemnité forfaitaire de recouvrement : 40 €.").split("\n").map((l, i) => <span key={i}>{l}<br /></span>)}
                   </div>
                   <div style={{ fontSize: 9, color: "#aaa", lineHeight: 1.8, flex: 1 }}>

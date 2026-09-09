@@ -1161,6 +1161,13 @@ function buildReprisePayment(order, sign = 1) {
   };
 }
 
+// v8.180 — Date à laquelle le règlement doit intervenir : mention obligatoire
+// (art. 242 nonies A 9° du CGI). Chez un concessionnaire c'est une condition et
+// non une échéance — le véhicule n'est remis qu'une fois encaissé. Doit rester
+// identique à DELAI_REGLEMENT_DEFAUT dans src/App.jsx : c'est la même phrase
+// qui doit figurer sur le document imprimé et dans la facture électronique.
+const DELAI_REGLEMENT_DEFAUT = 'Paiement comptant, au plus tard à la remise du véhicule.';
+
 function mapOrderToInvoice(order, calc) {
   const avecTva = order.avec_tva !== false;
   const tvaPct = avecTva ? (Number(order.tva_pct) || 20) : 0;
@@ -1369,6 +1376,11 @@ function mapOrderToInvoice(order, calc) {
     issue_date: toIsoDate(order.date_facture || order.date_creation),
     // ⚠️ Toujours 'paid' : on n'a pushé que parce que calc.reste <= 0.01
     status: 'paid',
+    // v8.180 — Mention obligatoire, jusqu'ici absente du Factur-X : le
+    // générateur se rabattait sur son propre texte par défaut, différent de
+    // celui imprimé par IOCAR. Les deux documents disent maintenant la même
+    // chose. (Ce n'est pas une échéance : voir DELAI_REGLEMENT_DEFAUT.)
+    payment_terms: DELAI_REGLEMENT_DEFAUT,
     client: clientPayload,
     lines,
     payments,
@@ -1411,6 +1423,22 @@ function mapOrderToInvoice(order, calc) {
       // élément d'affichage, la base taxable étant nette de remise — le XML
       // Factur-X n'a donc rien à en dire.
       remise_ttc_cents: Math.round(Math.abs(Number(order.remise_ttc) || 0) * 100) || null,
+      // v8.180 — De quoi qu'IOBILL imprime EXACTEMENT la même cascade qu'IOCAR :
+      // le HT de la ligne véhicule AVANT remise, et la remise ramenée en HT.
+      //
+      // Purement documentaire : `lines` continue de porter le prix NET, qui
+      // seul fixe la base taxable du Factur-X. Ces deux montants ne doivent
+      // jamais entrer dans un calcul de total — ils servent à afficher
+      // « Sous-total HT / Remise accordée / Total HT net » là où IOBILL
+      // affichait « Sous-total TTC avant remise », c'est-à-dire du TTC au
+      // milieu d'un bloc HT.
+      //
+      // remise_ht_cents est DÉDUIT des deux HT plutôt que divisé à part : c'est
+      // ce qui garantit que la soustraction imprimée tombe juste au centime.
+      veh_ht_brut_cents: remAmt > 0 ? Math.round(ttcToHt(baseTtc) * 100 * sign) : null,
+      remise_ht_cents: remAmt > 0
+        ? Math.round(ttcToHt(baseTtc) * 100 * sign) - Math.round(ttcToHt(baseApresRem) * 100 * sign)
+        : null,
       // v8.151 — Véhicule REPRIS. Depuis que la reprise est portée en règlement
       // et non plus en ligne de facture, sa description n'apparaissait plus que
       // dans le libellé du paiement. IOCAR, lui, affiche un bloc dédié avec la
