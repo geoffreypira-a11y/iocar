@@ -67,6 +67,15 @@ export default async function handler(req, res) {
   }
 }
 
+// v8.176 — Un garage avec un company_id mais sans jeton n'est pas « non lié » :
+// il est lié à moitié, et le dire ainsi envoyait l'abonné chercher une case à
+// cocher qui n'existe pas. On nomme l'état réel et l'action qui le répare.
+function messageLiaisonManquante(garage) {
+  return garage.iobill_company_id
+    ? 'Liaison IOBILL incomplète (clé d\'accès manquante) — utilisez « Réparer la liaison » dans Paramètres.'
+    : 'Compte IOBILL non lié';
+}
+
 // ───────────────────────────────────────────────────────────────────
 // STATUS
 // ───────────────────────────────────────────────────────────────────
@@ -208,7 +217,7 @@ async function handleLink(user, garage, supabase, body, res) {
 // ───────────────────────────────────────────────────────────────────
 async function handleSyncCompany(garage, supabase, res) {
   if (!garage.iobill_api_token) {
-    return res.status(400).json({ error: 'Compte IOBILL non lié' });
+    return res.status(400).json({ error: messageLiaisonManquante(garage) });
   }
 
   // v8.40.3 — bonnes colonnes IOCAR
@@ -279,7 +288,7 @@ async function handleSyncCompany(garage, supabase, res) {
 // ───────────────────────────────────────────────────────────────────
 async function handlePushInvoice(garage, supabase, body, res) {
   if (!garage.iobill_api_token) {
-    return res.status(400).json({ error: 'Compte IOBILL non lié' });
+    return res.status(400).json({ error: messageLiaisonManquante(garage) });
   }
   const orderId = body?.order_id;
   if (!orderId) return res.status(400).json({ error: 'order_id requis' });
@@ -371,7 +380,7 @@ async function handlePushInvoice(garage, supabase, body, res) {
 // ───────────────────────────────────────────────────────────────────
 async function handlePushInvoiceDraft(garage, supabase, body, res) {
   if (!garage.iobill_api_token) {
-    return res.status(400).json({ error: 'Compte IOBILL non lié' });
+    return res.status(400).json({ error: messageLiaisonManquante(garage) });
   }
   const orderId = body?.order_id;
   if (!orderId) return res.status(400).json({ error: 'order_id requis' });
@@ -454,7 +463,7 @@ async function handlePushInvoiceDraft(garage, supabase, body, res) {
 // ───────────────────────────────────────────────────────────────────
 async function handlePushInvoiceIssued(garage, supabase, body, res) {
   if (!garage.iobill_api_token) {
-    return res.status(400).json({ error: 'Compte IOBILL non lié' });
+    return res.status(400).json({ error: messageLiaisonManquante(garage) });
   }
   const orderId = body?.order_id;
   if (!orderId) return res.status(400).json({ error: 'order_id requis' });
@@ -560,7 +569,7 @@ async function handlePushInvoiceIssued(garage, supabase, body, res) {
 // ───────────────────────────────────────────────────────────────────
 async function handleMarkInvoicePaid(garage, supabase, body, res) {
   if (!garage.iobill_api_token) {
-    return res.status(400).json({ error: 'Compte IOBILL non lié' });
+    return res.status(400).json({ error: messageLiaisonManquante(garage) });
   }
   const orderId = body?.order_id;
   if (!orderId) return res.status(400).json({ error: 'order_id requis' });
@@ -672,7 +681,7 @@ async function handleMarkInvoicePaid(garage, supabase, body, res) {
 // ───────────────────────────────────────────────────────────────────
 async function handlePushCreditNote(garage, supabase, body, res) {
   if (!garage.iobill_api_token) {
-    return res.status(400).json({ error: 'Compte IOBILL non lié' });
+    return res.status(400).json({ error: messageLiaisonManquante(garage) });
   }
   const orderId = body?.order_id;
   if (!orderId) return res.status(400).json({ error: 'order_id requis' });
@@ -774,7 +783,7 @@ async function handlePushCreditNote(garage, supabase, body, res) {
 // ───────────────────────────────────────────────────────────────────
 async function handleSyncClient(garage, supabase, body, res) {
   if (!garage.iobill_api_token) {
-    return res.status(400).json({ error: 'Compte IOBILL non lié' });
+    return res.status(400).json({ error: messageLiaisonManquante(garage) });
   }
   const clientId = body?.client_id;
   if (!clientId) return res.status(400).json({ error: 'client_id requis' });
@@ -832,7 +841,7 @@ async function handleSyncClient(garage, supabase, body, res) {
 // ───────────────────────────────────────────────────────────────────
 async function handleDeleteClient(garage, supabase, body, res) {
   if (!garage.iobill_api_token) {
-    return res.status(400).json({ error: 'Compte IOBILL non lié' });
+    return res.status(400).json({ error: messageLiaisonManquante(garage) });
   }
   const clientId = body?.client_id;
   if (!clientId) return res.status(400).json({ error: 'client_id requis' });
@@ -868,7 +877,7 @@ async function handleDeleteClient(garage, supabase, body, res) {
 // ───────────────────────────────────────────────────────────────────
 async function handleSyncAllClients(garage, supabase, body, res) {
   if (!garage.iobill_api_token) {
-    return res.status(400).json({ error: 'Compte IOBILL non lié' });
+    return res.status(400).json({ error: messageLiaisonManquante(garage) });
   }
 
   // Récupère tous les clients du garage
@@ -934,7 +943,7 @@ async function handleSyncAllClients(garage, supabase, body, res) {
 // ───────────────────────────────────────────────────────────────────
 async function handleSyncClientsBatchFromIocar(garage, supabase, body, res) {
   if (!garage.iobill_api_token) {
-    return res.status(400).json({ error: 'Compte IOBILL non lié' });
+    return res.status(400).json({ error: messageLiaisonManquante(garage) });
   }
 
   // Récupère tous les clients du garage
