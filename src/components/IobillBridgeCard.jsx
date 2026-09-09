@@ -19,6 +19,12 @@ import React, { useState, useEffect } from "react";
 export default function IobillBridgeCard({ token, garage, onUpdate }) {
   const linked = !!garage?.iobill_company_id;
   const [showActivateModal, setShowActivateModal] = useState(false);
+  // v8.179 — La réparation passe par la même modale que l'activation, pour
+  // pouvoir redonner un mot de passe : supprimer une société côté IO BILL
+  // supprime aussi son compte utilisateur, et le compte recréé naîtrait sans
+  // mot de passe — l'abonné devait passer par « Mot de passe oublié ».
+  const [modeReparation, setModeReparation] = useState(false);
+  const ouvrirReparation = () => { setErr(""); setModeReparation(true); setShowActivateModal(true); };
   const [autoPush, setAutoPush] = useState(!!garage?.iobill_auto_push);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
@@ -78,6 +84,7 @@ export default function IobillBridgeCard({ token, garage, onUpdate }) {
       iobill_linked_at: new Date().toISOString()
     });
     setShowActivateModal(false);
+    setModeReparation(false);
     return true;
   }
 
@@ -151,8 +158,9 @@ export default function IobillBridgeCard({ token, garage, onUpdate }) {
         {showActivateModal && (
           <ActivateModal
             email={garage?.email || ""}
-            onCancel={() => { setShowActivateModal(false); setErr(""); }}
-            onActivate={doLink}
+            onCancel={() => { setShowActivateModal(false); setModeReparation(false); setErr(""); }}
+            onActivate={(pwd) => doLink(pwd, modeReparation)}
+            reparation={modeReparation}
             busy={busy}
             error={err}
           />
@@ -224,8 +232,8 @@ export default function IobillBridgeCard({ token, garage, onUpdate }) {
             la synchronisation et l'envoi des factures échouent. La réparation
             rejoue la liaison, sans rien perdre de vos données.
           </div>
-          <button style={styles.btn} onClick={() => doLink(null, true)} disabled={busy}>
-            {busy ? "Réparation..." : "🔧 Réparer la liaison"}
+          <button style={styles.btn} onClick={ouvrirReparation} disabled={busy}>
+            🔧 Réparer la liaison
           </button>
         </div>
       )}
@@ -255,8 +263,8 @@ export default function IobillBridgeCard({ token, garage, onUpdate }) {
         <div style={styles.err}>
           ❌ {err}
           <div style={{ marginTop: 10 }}>
-            <button style={styles.btn} onClick={() => doLink(null, true)} disabled={busy}>
-              {busy ? "Réparation..." : "🔧 Réparer la liaison"}
+            <button style={styles.btn} onClick={ouvrirReparation} disabled={busy}>
+              🔧 Réparer la liaison
             </button>
             <div style={{ fontSize: 11, color: "var(--muted2)", marginTop: 6, lineHeight: 1.5 }}>
               Rétablit le lien avec IO BILL. Votre société y est réutilisée si elle
@@ -266,6 +274,17 @@ export default function IobillBridgeCard({ token, garage, onUpdate }) {
         </div>
       )}
       {msg && <div style={styles.ok}>{msg}</div>}
+
+      {showActivateModal && (
+        <ActivateModal
+          email={garage?.iobill_email || garage?.email || ""}
+          onCancel={() => { setShowActivateModal(false); setModeReparation(false); setErr(""); }}
+          onActivate={(pwd) => doLink(pwd, modeReparation)}
+          reparation={modeReparation}
+          busy={busy}
+          error={err}
+        />
+      )}
 
       <div style={{ marginTop: 12, fontSize: 11, color: "var(--muted)" }}>
         Identifiants IO BILL : <strong>{garage.iobill_email}</strong>
@@ -282,7 +301,7 @@ export default function IobillBridgeCard({ token, garage, onUpdate }) {
 // ActivateModal — modale pour demander le mot de passe IOCAR
 // (afin de l'utiliser comme MDP du compte IOBILL aussi)
 // ═══════════════════════════════════════════════════════════════════
-function ActivateModal({ email, onCancel, onActivate, busy, error }) {
+function ActivateModal({ email, onCancel, onActivate, busy, error, reparation = false }) {
   const [password, setPassword] = useState("");
   const [useSamePwd, setUseSamePwd] = useState(true);
 
@@ -322,12 +341,25 @@ function ActivateModal({ email, onCancel, onActivate, busy, error }) {
     <div style={overlay} onClick={onCancel}>
       <div style={modal} onClick={(e) => e.stopPropagation()}>
         <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>
-          🦉 Activation du compte IO BILL inclus
+          {reparation ? "🔧 Réparation de la liaison IO BILL" : "🦉 Activation du compte IO BILL inclus"}
         </div>
         <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 18, lineHeight: 1.5 }}>
-          Un compte IO BILL va être créé avec l'email <strong>{email}</strong>.
-          <br/><br/>
-          Pour vous simplifier la vie, vous pouvez utiliser le <strong>même mot de passe que sur IO CAR</strong>.
+          {reparation ? (
+            <>
+              La liaison avec IO BILL va être rejouée pour l'email <strong>{email}</strong>.
+              Votre société y sera réutilisée si elle existe encore, recréée sinon.
+              <br/><br/>
+              Si le compte IO BILL doit être recréé, il le sera avec le mot de passe
+              ci-dessous. S'il existe toujours, <strong>son mot de passe actuel est
+              conservé</strong> — IO BILL ne le remplace jamais.
+            </>
+          ) : (
+            <>
+              Un compte IO BILL va être créé avec l'email <strong>{email}</strong>.
+              <br/><br/>
+              Pour vous simplifier la vie, vous pouvez utiliser le <strong>même mot de passe que sur IO CAR</strong>.
+            </>
+          )}
         </div>
 
         <div style={{
@@ -368,7 +400,7 @@ function ActivateModal({ email, onCancel, onActivate, busy, error }) {
             />
             <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 6 }}>
               Votre mot de passe n'est ni stocké ni transmis en clair — il sert juste à
-              créer votre compte IO BILL avec les mêmes identifiants.
+              {reparation ? " rétablir votre compte IO BILL avec les mêmes identifiants." : " créer votre compte IO BILL avec les mêmes identifiants."}
             </div>
           </div>
         )}
