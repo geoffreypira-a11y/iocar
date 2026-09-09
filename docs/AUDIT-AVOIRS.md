@@ -15,9 +15,12 @@ proposent la transmission — puis génération d'un vrai PDF d'avoir.
 
 ## Verdict
 
-> **Le calcul de l'avoir est faux dès qu'il y a une carte grise, et aucun avoir
-> ne peut être transmis à l'administration : le bouton existe, il tombe sur un
-> endpoint désactivé qui répond 410.**
+> **Un avoir ne réduit jamais la TVA déclarée, et ne part jamais à
+> l'administration. En régime marge, il ne porte même pas la TVA qu'il faudrait
+> reprendre. Et son calcul est faux dès qu'il y a une carte grise.**
+
+Autrement dit : aujourd'hui, annuler une vente dans IO CAR produit un document
+juste pour le client, et rigoureusement aucun effet fiscal.
 
 ---
 
@@ -85,12 +88,15 @@ Deux conséquences à traiter avec :
   (`if (val > totalTtc)`) : le plafond passera de 24 680 à 24 180 €, ce qui est
   la bonne borne.
 
-**Cas restant, à trancher séparément** : une vente annulée **avant** que la
-carte grise ne soit faite. Le garage n'a alors rien avancé et doit rendre les
-500 € — mais en tant que débours, donc **sans TVA**. Un avoir partiel de 500 €
-leur appliquerait 83,33 € de TVA. Ce cas demanderait un champ débours sur
-l'avoir ; il n'est pas couvert aujourd'hui et ne le sera pas par le correctif
-ci-dessus.
+**Cas restant — tranché : hors application.** Une vente annulée **avant** que la
+carte grise ne soit faite : le garage n'a rien avancé et doit rendre les 500 €,
+mais en tant que débours, donc **sans TVA**. Un avoir partiel de 500 € leur
+appliquerait 83,33 € de TVA.
+
+Décision de l'exploitant : ce cas se règle **manuellement**, par un
+remboursement hors facture. C'est cohérent — un débours restitué n'a ni base
+taxable ni ligne de facture, il n'a rien à faire dans un avoir. On n'ajoute donc
+pas de champ débours sur l'avoir.
 
 ---
 
@@ -210,6 +216,65 @@ Deux effets :
 
 ---
 
+## A8 — Aucun avoir n'apparaît dans la déclaration de TVA 🔴
+
+**Gravité : élevée. Découvert en répondant à la question « y a-t-il une
+différence entre un avoir sur une facture en TVA normale et un sur une facture
+en marge ? ».**
+
+La déclaration de TVA d'IO BILL (`src/modules/vat/VatPage.jsx`) et sa
+synchronisation (`src/lib/vat-sync.js`) sont construites à partir de **deux
+tables seulement** :
+
+```js
+const invInPeriod = invoices.filter((i) => filterDate(i.issue_date));
+const purInPeriod = purchases.filter((p) => filterDate(p.issue_date));
+```
+
+Le mot `credit_notes` n'apparaît **nulle part** dans ces deux fichiers. La TVA
+collectée du bloc 1 comme la TVA sur marge du bloc 2 sont sommées sur les
+factures, sans jamais rien retrancher.
+
+**Conséquence** : une vente annulée reste déclarée. L'exploitant paie la TVA
+d'une vente qui n'a pas eu lieu — l'erreur est à son détriment, mais c'est une
+erreur.
+
+---
+
+## A9 — La marge n'est pas la TVA normale : un avoir en marge ne reprend rien 🔴
+
+**Gravité : élevée. C'est la réponse à la question posée.**
+
+Oui, il y a une différence, et elle est structurelle.
+
+Reprenons la même vente, une fois dans chaque régime — véhicule vendu 24 000 €
+après remise, acheté 20 000 €, frais 180 € :
+
+| | TVA normale | Régime marge |
+|---|---|---|
+| TVA due sur la vente | 4 030,00 € (visible) | 30,00 € (frais) **+ 666,67 €** (marge) |
+| Ce que l'avoir porte | HT 20 150 · **TVA 4 030** | HT 24 180 · **TVA 0** |
+| Ce qu'il faudrait reprendre | 4 030,00 € | 696,67 € |
+
+Deux causes distinctes :
+
+1. **`mapOrderToCreditNote` construit une ligne unique** au taux
+   `avecTva ? tva_pct : 0`. En marge, toute la ligne passe à 0 % — y compris la
+   part correspondant aux frais de mise à disposition, qui portaient pourtant
+   30 € de TVA bien réelle.
+2. **Les données de marge ne sont pas transmises.** `mapOrderToInvoice` envoie
+   `purchase_price_cents`, `marge_cents` et `tva_marge_cents` ; son homologue
+   `mapOrderToCreditNote` n'envoie rien de tel, et la table `credit_notes` n'a
+   pas ces colonnes. La TVA sur marge de la vente annulée — 666,67 € ici — reste
+   déclarée à jamais.
+
+**Le point important pour l'ordre des travaux** : corriger A8 (faire lire les
+avoirs par la déclaration) suffirait pour le régime normal, puisque l'avoir y
+porte déjà la bonne TVA. **En marge, cela ne suffirait pas** : il n'y aurait
+rien à soustraire, l'avoir portant zéro. Les deux corrections vont ensemble.
+
+---
+
 ## A6 — `mark_invoice_paid` accepte un avoir et le traiterait comme une facture 🟡
 
 **Gravité : latente. Non atteignable depuis l'interface aujourd'hui.**
@@ -267,11 +332,15 @@ codée en dur dans `PrintDoc`, sans distinction de type.
 
 | | Sujet | Portée |
 |---|---|---|
-| 1 | **A1** — TVA sur les débours (avoir sur le TTC seul) | IO CAR (création) |
-| 2 | **A2** — transmission des avoirs | IO BILL (adapter PA + 2 boutons) |
-| 3 | **A3** — BT-25, numéro au lieu de l'UUID | IO BILL (+ 1 champ transmis) |
-| 4 | **A4 + A5** — facture d'origine et régime marge sur le PDF | IO BILL |
-| 5 | **A6** — fermer l'endpoint aux avoirs | IO CAR |
-| 6 | **A7** — libellés | les deux |
+| 1 | **A8 + A9** — l'avoir doit réduire la TVA déclarée, marge comprise | IO BILL (déclaration) + IO CAR (mapping marge) |
+| 2 | **A1** — TVA sur les débours (avoir sur le TTC seul) | IO CAR (création) |
+| 3 | **A2** — transmission des avoirs | IO BILL (adapter PA + 2 boutons) |
+| 4 | **A3** — BT-25, numéro au lieu de l'UUID | IO BILL (+ 1 champ transmis) |
+| 5 | **A4 + A5** — facture d'origine et régime marge sur le PDF | IO BILL |
+| 6 | **A6** — fermer l'endpoint aux avoirs | IO CAR |
+| 7 | **A7** — libellés | les deux |
 
-A1 et A2 sont les deux seuls à conséquence fiscale directe.
+A8, A9, A1 et A2 ont une conséquence fiscale directe. A8 et A9 passent devant
+A2 : un avoir transmis mais absent de la déclaration reste faux là où ça compte,
+tandis qu'un avoir juste mais non transmis est au moins comptabilisé
+correctement.
