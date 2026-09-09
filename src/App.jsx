@@ -6582,6 +6582,15 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
               iobill_synced_at: null,
             };
             setOrders([...orders, avoir]);
+            // v8.183 — L'avoir part à IO BILL dès sa création.
+            //
+            // Il n'y était poussé que depuis la modale de paiement, et
+            // seulement une fois intégralement remboursé. Un avoir créé puis
+            // laissé tel quel — le cas courant — n'atteignait donc jamais
+            // IO BILL : la vente annulée restait déclarée, avec sa TVA et son
+            // chiffre d'affaires. Or la TVA se récupère dès la rectification de
+            // la facture (art. 272-1 du CGI), pas au remboursement.
+            pushCreditNoteToIobill(avoir, 'issue');
             setAvoirChoice(null);
           }}
           onPartiel={() => {
@@ -6634,6 +6643,15 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
               iobill_synced_at: null,
             };
             setOrders([...orders, avoir]);
+            // v8.183 — L'avoir part à IO BILL dès sa création.
+            //
+            // Il n'y était poussé que depuis la modale de paiement, et
+            // seulement une fois intégralement remboursé. Un avoir créé puis
+            // laissé tel quel — le cas courant — n'atteignait donc jamais
+            // IO BILL : la vente annulée restait déclarée, avec sa TVA et son
+            // chiffre d'affaires. Or la TVA se récupère dès la rectification de
+            // la facture (art. 272-1 du CGI), pas au remboursement.
+            pushCreditNoteToIobill(avoir, 'issue');
             setAvoirPartiel(null);
           }}
           onCancel={() => setAvoirPartiel(null)}

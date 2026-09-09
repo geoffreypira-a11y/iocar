@@ -15,9 +15,11 @@ proposent la transmission — puis génération d'un vrai PDF d'avoir.
 
 ## Verdict
 
-> **Un avoir ne réduit jamais la TVA déclarée, et ne part jamais à
-> l'administration. En régime marge, il ne porte même pas la TVA qu'il faudrait
-> reprendre. Et son calcul est faux dès qu'il y a une carte grise.**
+> **Un avoir n'arrive même pas jusqu'à IO BILL tant qu'il n'a pas été
+> intégralement remboursé. Quand il y arrive, il ne réduit ni la TVA déclarée ni
+> le chiffre d'affaires, et ne part jamais à l'administration. En régime marge,
+> il ne porte même pas la TVA qu'il faudrait reprendre. Et son calcul est faux
+> dès qu'il y a une carte grise.**
 
 Autrement dit : aujourd'hui, annuler une vente dans IO CAR produit un document
 juste pour le client, et rigoureusement aucun effet fiscal.
@@ -313,6 +315,95 @@ ne casse aujourd'hui. Mais l'endpoint est ouvert.
 Les montants concordent en valeur absolue. Le défaut le plus visible est le
 libellé « VENTE VÉHICULE » en tête d'un document intitulé AVOIR : la ligne est
 codée en dur dans `PrintDoc`, sans distinction de type.
+
+---
+
+# Second passage — 9 septembre 2026
+
+*Déclenché par l'exploitant : « il me semble que l'avoir laisse du chiffre
+d'affaires et une TVA reste due ». Il avait raison, et la cause était en amont
+de tout ce qui précède.*
+
+## A10 — L'avoir n'atteignait IO BILL que si un remboursement total était saisi 🔴
+
+**Gravité : élevée. Cause racine du symptôme décrit.**
+
+`pushCreditNoteToIobill` n'a qu'**un seul appelant** dans toute l'application :
+
+```js
+{payment && <PaymentModal order={payment} onSave={o => {
+  if (o.type === "avoir" && o.facture_origine) {
+    …
+    if (reste <= 0.01) pushCreditNoteToIobill(o, 'finalize');
+  }
+}} />}
+```
+
+Créer un avoir ne poussait donc **rien**. Il fallait ouvrir la modale de
+paiement sur l'avoir et y saisir le remboursement intégral pour qu'il existe
+côté IO BILL. Un avoir créé puis laissé tel quel — le cas courant, et le seul
+tant que le client n'a pas été remboursé — n'y arrivait jamais : la vente
+annulée restait déclarée, avec sa TVA et son chiffre d'affaires.
+
+Aucune des corrections A8/A9 ne pouvait compenser cela : la déclaration lisait
+bien `credit_notes`, mais il n'y avait aucune ligne à lire.
+
+Le mode `'draft'` prévu « à la création » par le commentaire du pont n'avait
+d'ailleurs jamais été branché non plus.
+
+**Correctif** : l'avoir part à IO BILL **dès sa création**, en `issued`. Un
+nouveau mode `'issue'` émet sans exiger le remboursement — l'effet fiscal d'un
+avoir tient à son émission, pas au mouvement d'argent : la TVA se récupère dès
+lors que la facture a été rectifiée (art. 272-1 du CGI). Le remboursement est un
+fait de trésorerie, distinct, et le chemin `'finalize'` existant reste en place.
+
+## A11 — Le client de l'avoir était amputé 🟠
+
+`mapOrderToInvoice` et `mapOrderToCreditNote` construisaient chacun leur payload
+client, et celui de l'avoir avait divergé :
+
+| | Facture | Avoir |
+|---|---|---|
+| Adresse | `address_line1` + `postal_code` + `city` | tout concaténé dans `address_line1` |
+| Code postal / ville | ✅ | **`null` / `null`** |
+| N° TVA intra | ✅ | absent |
+| Personne de contact | ✅ | absent |
+| Société détectée par | `type === "company"` **ou** SIREN | SIREN seul |
+
+Le même client apparaissait donc complet sur la facture et amputé sur l'avoir,
+jusque dans le Factur-X (BT-52 / BT-53 vides).
+
+**Correctif** : un seul `buildClientPayload(order)`, partagé. La divergence ne
+peut plus se reformer.
+
+## A12 — L'avoir IO BILL n'avait ni véhicule ni mentions 🟠
+
+**C'est la « différence d'architecture » constatée par l'exploitant.**
+
+`mapOrderToCreditNote` ne transmettait ni `vehicle_meta`, ni
+`business_mentions`, ni `payment_terms` — tout ce que la facture envoie depuis
+toujours. Le PDF de l'avoir sortait donc sans bloc véhicule, sans plaque, sans
+référence au livre de police, là où le document IO CAR les affiche.
+
+Deux documents pour une même vente n'avaient ni la même architecture ni les
+mêmes références.
+
+**Correctif** : les trois sont transmis.
+
+## A13 — Le tableau de bord IO BILL ignorait les avoirs 🟠
+
+`DashboardCharts.jsx` construit le CA mensuel et le CA par client sur
+`invoices` seulement. Après une vente annulée, le chiffre d'affaires affiché ne
+baissait jamais, et le client concerné restait en tête du classement.
+
+**Correctif** : les avoirs émis se déduisent des deux graphiques.
+
+## Ce qui, en revanche, était déjà juste
+
+Le tableau de bord **IO CAR** compte correctement : `tvaCollectee` et
+`debourRefacture` somment `calcOrder(o)` sur les factures **et** les avoirs,
+dont le signe est négatif. Le symptôme ne venait donc pas de là — c'est bien
+côté IO BILL que tout se perdait, faute d'avoir reçu l'avoir (A10).
 
 ---
 

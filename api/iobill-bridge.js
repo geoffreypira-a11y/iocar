@@ -728,6 +728,17 @@ async function handlePushCreditNote(garage, supabase, body, res) {
   let targetStatus;
   if (body?.mode === 'draft') {
     targetStatus = 'draft';
+  } else if (body?.mode === 'issue') {
+    // v8.183 — Émission de l'avoir, SANS attendre le remboursement.
+    //
+    // L'effet fiscal d'un avoir tient à son émission, pas au mouvement
+    // d'argent : la TVA se récupère dès lors que la facture a été rectifiée
+    // (art. 272-1 du CGI). Le remboursement est un fait de trésorerie, distinct.
+    //
+    // Le lier au remboursement, comme le faisait le seul appelant existant,
+    // revenait à ne jamais transmettre les avoirs non encore remboursés : la
+    // vente annulée restait déclarée, TVA comprise.
+    targetStatus = 'issued';
   } else if (body?.mode === 'finalize') {
     if (calc.reste > 0.01) {
       return res.status(400).json({
@@ -1181,6 +1192,82 @@ function buildReprisePayment(order, sign = 1) {
 // qui doit figurer sur le document imprimé et dans la facture électronique.
 const DELAI_REGLEMENT_DEFAUT = 'Paiement comptant, au plus tard à la remise du véhicule.';
 
+// v8.183 — Payload client, PARTAGÉ entre la facture et l'avoir.
+//
+// Les deux le construisaient séparément, et celui de l'avoir avait divergé :
+// adresse concaténée au lieu des champs séparés, code postal et ville à null,
+// ni n° de TVA intra ni personne de contact, et une société reconnue au seul
+// SIREN — pas au type. Le même client apparaissait donc complet sur la facture
+// et amputé sur l'avoir, jusque dans le Factur-X (BT-52 / BT-53 vides).
+function buildClientPayload(order) {
+  const cli = order.client || {};
+  const isCompany = cli.type === "company" || !!(cli.siren && String(cli.siren).trim());
+  // Adresse : privilégie les champs séparés (nouveau CRM), fallback parseGarageAddress
+  const addrLine1 = sanitizeString(cli.adresse) || null;
+  const addrCp = sanitizeString(cli.code_postal) || null;
+  const addrVille = sanitizeString(cli.ville) || null;
+  // Si les champs séparés sont absents (client legacy), on parse l'adresse concaténée
+  const hasSeparatedAddr = !!(addrLine1 || addrCp || addrVille);
+  const addrParsed = hasSeparatedAddr
+    ? { line1: addrLine1, postal_code: addrCp, city: addrVille }
+    : parseGarageAddress(cli.address || null);
+  // L'external_id du client : prioritairement order.client_id (réf stable en BDD),
+  // sinon order.client.id (cas où le client est embedded directement).
+  const clientExternalId = order.client_id || cli.id || null;
+  let clientPayload;
+  if (isCompany) {
+    clientPayload = {
+      external_id: clientExternalId ? String(clientExternalId) : null,
+      // v8.80 — client_type explicite (évite l'inférence côté IOBILL).
+      client_type: "company",
+      // Raison sociale : `cli.nom` (nouveau CrmModal Société) OU `cli.name` (legacy)
+      legal_name: sanitizeString(cli.nom) || sanitizeString(cli.name) || null,
+      first_name: null,
+      last_name: null,
+      siret: cli.siren ? String(cli.siren).replace(/\s/g, '') : null,
+      // v8.59.2 — Nouveaux champs société transmis à IOBILL
+      vat_number: sanitizeString(cli.tva_intra) || null,
+      contact_person: sanitizeString(cli.personne_contact) || null,
+      email: sanitizeString(cli.email) || null,
+      phone: sanitizeString(cli.phone) || null,
+      address_line1: addrParsed.line1,
+      postal_code: addrParsed.postal_code,
+      city: addrParsed.city,
+      country: sanitizeString(cli.pays) === 'France' || !cli.pays ? 'FR' : sanitizeString(cli.pays)
+    };
+  } else {
+    // Particulier : prénom+nom séparés si dispo (nouveau CrmModal),
+    // sinon splite "Prénom Nom" (legacy fallback)
+    let firstName = sanitizeString(cli.prenom) || null;
+    let lastName = sanitizeString(cli.nom) || null;
+    if (!firstName && !lastName) {
+      const fullName = sanitizeString(String(cli.name || '').trim());
+      const parts = fullName.split(/\s+/);
+      firstName = parts.length > 1 ? parts.slice(0, -1).join(' ') : (parts[0] || null);
+      lastName = parts.length > 1 ? parts[parts.length - 1] : null;
+    }
+    clientPayload = {
+      external_id: clientExternalId ? String(clientExternalId) : null,
+      // v8.80 — client_type explicite : déclenche processing_rule=B2C côté IOBILL.
+      client_type: "individual",
+      legal_name: null,
+      first_name: firstName || null,
+      last_name: lastName || null,
+      siret: null,
+      vat_number: null,
+      contact_person: null,
+      email: sanitizeString(cli.email) || null,
+      phone: sanitizeString(cli.phone) || null,
+      address_line1: addrParsed.line1,
+      postal_code: addrParsed.postal_code,
+      city: addrParsed.city,
+      country: sanitizeString(cli.pays) === 'France' || !cli.pays ? 'FR' : sanitizeString(cli.pays)
+    };
+  }
+
+  return clientPayload;
+}
+
 function mapOrderToInvoice(order, calc) {
   const avecTva = order.avec_tva !== false;
   const tvaPct = avecTva ? (Number(order.tva_pct) || 20) : 0;
@@ -1318,70 +1405,7 @@ function mapOrderToInvoice(order, calc) {
   //   - Détection par `cli.type === "company"` OU `cli.siren`
   //   - Envoie legal_name, siret, vat_number, contact_person à IOBILL en mode société
   //   - Adresse dispatchée en address_line1/postal_code/city au lieu de tout concaténer
-  const cli = order.client || {};
-  const isCompany = cli.type === "company" || !!(cli.siren && String(cli.siren).trim());
-  // Adresse : privilégie les champs séparés (nouveau CRM), fallback parseGarageAddress
-  const addrLine1 = sanitizeString(cli.adresse) || null;
-  const addrCp = sanitizeString(cli.code_postal) || null;
-  const addrVille = sanitizeString(cli.ville) || null;
-  // Si les champs séparés sont absents (client legacy), on parse l'adresse concaténée
-  const hasSeparatedAddr = !!(addrLine1 || addrCp || addrVille);
-  const addrParsed = hasSeparatedAddr
-    ? { line1: addrLine1, postal_code: addrCp, city: addrVille }
-    : parseGarageAddress(cli.address || null);
-  // L'external_id du client : prioritairement order.client_id (réf stable en BDD),
-  // sinon order.client.id (cas où le client est embedded directement).
-  const clientExternalId = order.client_id || cli.id || null;
-  let clientPayload;
-  if (isCompany) {
-    clientPayload = {
-      external_id: clientExternalId ? String(clientExternalId) : null,
-      // v8.80 — client_type explicite (évite l'inférence côté IOBILL).
-      client_type: "company",
-      // Raison sociale : `cli.nom` (nouveau CrmModal Société) OU `cli.name` (legacy)
-      legal_name: sanitizeString(cli.nom) || sanitizeString(cli.name) || null,
-      first_name: null,
-      last_name: null,
-      siret: cli.siren ? String(cli.siren).replace(/\s/g, '') : null,
-      // v8.59.2 — Nouveaux champs société transmis à IOBILL
-      vat_number: sanitizeString(cli.tva_intra) || null,
-      contact_person: sanitizeString(cli.personne_contact) || null,
-      email: sanitizeString(cli.email) || null,
-      phone: sanitizeString(cli.phone) || null,
-      address_line1: addrParsed.line1,
-      postal_code: addrParsed.postal_code,
-      city: addrParsed.city,
-      country: sanitizeString(cli.pays) === 'France' || !cli.pays ? 'FR' : sanitizeString(cli.pays)
-    };
-  } else {
-    // Particulier : prénom+nom séparés si dispo (nouveau CrmModal),
-    // sinon splite "Prénom Nom" (legacy fallback)
-    let firstName = sanitizeString(cli.prenom) || null;
-    let lastName = sanitizeString(cli.nom) || null;
-    if (!firstName && !lastName) {
-      const fullName = sanitizeString(String(cli.name || '').trim());
-      const parts = fullName.split(/\s+/);
-      firstName = parts.length > 1 ? parts.slice(0, -1).join(' ') : (parts[0] || null);
-      lastName = parts.length > 1 ? parts[parts.length - 1] : null;
-    }
-    clientPayload = {
-      external_id: clientExternalId ? String(clientExternalId) : null,
-      // v8.80 — client_type explicite : déclenche processing_rule=B2C côté IOBILL.
-      client_type: "individual",
-      legal_name: null,
-      first_name: firstName || null,
-      last_name: lastName || null,
-      siret: null,
-      vat_number: null,
-      contact_person: null,
-      email: sanitizeString(cli.email) || null,
-      phone: sanitizeString(cli.phone) || null,
-      address_line1: addrParsed.line1,
-      postal_code: addrParsed.postal_code,
-      city: addrParsed.city,
-      country: sanitizeString(cli.pays) === 'France' || !cli.pays ? 'FR' : sanitizeString(cli.pays)
-    };
-  }
+  const clientPayload = buildClientPayload(order);
 
   return {
     external_id: order.id,
@@ -1758,41 +1782,8 @@ function mapOrderToCreditNote(order, calc, overrideStatus = null) {
     }
   }
 
-  // Client — v8.44 ajout external_id pour matching fiable
-  const cli = order.client || {};
-  const hasSiren = !!(cli.siren && String(cli.siren).trim());
-  const cleanAddress = cli.address ? sanitizeString(cli.address, ' — ') : null;
-  const clientExternalId = order.client_id || cli.id || null;
-  let clientPayload;
-  if (hasSiren) {
-    clientPayload = {
-      external_id: clientExternalId ? String(clientExternalId) : null,
-      client_type: "company",
-      legal_name: sanitizeString(cli.name) || null,
-      first_name: null, last_name: null,
-      siret: String(cli.siren).replace(/\s/g, '') || null,
-      email: sanitizeString(cli.email) || null,
-      phone: sanitizeString(cli.phone) || null,
-      address_line1: cleanAddress,
-      postal_code: null, city: null, country: 'FR'
-    };
-  } else {
-    const fullName = sanitizeString(String(cli.name || '').trim());
-    const parts = fullName.split(/\s+/);
-    const firstName = parts.length > 1 ? parts.slice(0, -1).join(' ') : (parts[0] || null);
-    const lastName = parts.length > 1 ? parts[parts.length - 1] : null;
-    clientPayload = {
-      external_id: clientExternalId ? String(clientExternalId) : null,
-      client_type: "individual",
-      legal_name: null,
-      first_name: firstName || null, last_name: lastName || null,
-      siret: null,
-      email: sanitizeString(cli.email) || null,
-      phone: sanitizeString(cli.phone) || null,
-      address_line1: cleanAddress,
-      postal_code: null, city: null, country: 'FR'
-    };
-  }
+  // v8.183 — Même client que sur la facture (cf. buildClientPayload).
+  const clientPayload = buildClientPayload(order);
 
   return {
     external_id: order.id,
@@ -1803,6 +1794,30 @@ function mapOrderToCreditNote(order, calc, overrideStatus = null) {
     reason: sanitizeString(order.motif_avoir) || sanitizeString(order.notes) || null,
     client: clientPayload,
     lines,
+    // v8.183 — Le véhicule et les mentions du garage, que la facture transmet
+    // depuis toujours et que l'avoir laissait de côté : son PDF sortait donc
+    // sans bloc véhicule, sans plaque et sans référence au livre de police,
+    // là où le document IOCAR les affiche. Deux documents pour une même vente
+    // n'avaient ni la même architecture ni les mêmes références.
+    vehicle_meta: {
+      plate: vehiclePlate,
+      vin: sanitizeString(v.vin) || null,
+      marque: sanitizeString(v.marque) || null,
+      modele: sanitizeString(v.modele) || null,
+      finition: sanitizeString(v.finition) || null,
+      annee: v.annee || null,
+      kilometrage: v.kilometrage || null,
+      carburant: sanitizeString(v.carburant) || null,
+      genre: sanitizeString(v.genre) || null,
+      date_mise_en_circulation: sanitizeString(v.date_mise_en_circulation) || null,
+      puissance_cv: v.puissance_cv || null,
+      puissance_fiscale: v.puissance_fiscale || null,
+      options: sanitizeString(v.options) || null,
+      garantie_mois: order.garantie_mois || 0,
+      livre_police: sanitizeString(order.livre_police_ref) || null
+    },
+    business_mentions: buildOrderSpecificMentions(order),
+    payment_terms: DELAI_REGLEMENT_DEFAUT,
     // v8.182 — Régime, pour que le PDF de l'avoir porte la mention art. 297 A
     // comme celui de la facture : `credit_notes` ne stockait aucun régime, la
     // mention y était donc toujours absente.
