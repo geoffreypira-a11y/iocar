@@ -47,3 +47,10 @@ l'app vivent eux dans `src/lib/plans.js` et doivent rester alignés.
 
 ### 6. Connecter le domaine
 vercel.com → votre projet → Settings → Domains → Add → iocar.online
+
+## Mémos techniques
+
+- [`docs/LIAISON-IOBILL.md`](docs/LIAISON-IOBILL.md) — comment tient la liaison
+  IO CAR ↔ IO BILL (les deux champs `iobill_company_id` / `iobill_api_token`),
+  ce que fait une suppression de chaque côté, à quoi sert « Réparer la liaison »
+  et l'angle mort du mot de passe après une suppression dans l'admin IO BILL.

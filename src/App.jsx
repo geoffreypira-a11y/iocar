@@ -1017,6 +1017,20 @@ function calcOrder(o) {
   // dans les encaissements.
   const repriseValeur = o.reprise_active ? (parseFloat(o.reprise_valeur) || 0) : 0;
   const ttc = montantTTC_soumis;
+
+  // v8.178 — Le document présente désormais la cascade dans l'ordre légal :
+  // lignes HT → remise → HT net → TVA → TTC. Il lui faut donc le HT AVANT
+  // remise (c'est la somme des lignes du tableau) et la remise exprimée en HT.
+  //
+  // La remise porte sur le prix du véhicule, saisi TTC. En régime normal elle
+  // contient donc de la TVA, qu'il faut retirer : la base imposable est nette
+  // des remises (art. 267 II 1° CGI), sans quoi le document annoncerait une
+  // TVA supérieure à celle réellement due — et à celle transmise à IOBILL.
+  // En régime marge le véhicule ne porte pas de TVA visible : remise HT = TTC.
+  const htBrut = avecTva
+    ? (prixVente + fraisMiseDispo) / (1 + tvaPct / 100)
+    : prixVente + fraisMiseDispo / (1 + tvaPct / 100);
+  const remAmtHt = avecTva ? remAmt / (1 + tvaPct / 100) : remAmt;
   const debourTotal = carteGrise;
   const grandTotal = ttc + debourTotal;
 
@@ -1055,6 +1069,9 @@ function calcOrder(o) {
   const sign = o.type === "avoir" ? -1 : 1;
   return {
     ht: ht * sign, remAmt, base: prixApresRemise, fraisMiseDispo,
+    // v8.178 — avant remise : prix TTC du véhicule, HT de l'ensemble des lignes,
+    // et remise ramenée en HT. htBrut − remAmtHt === ht, dans les deux régimes.
+    baseBrut: prixVente, htBrut: htBrut * sign, remAmtHt: remAmtHt * sign,
     carteGrise, repriseValeur, baseTotal: montantTTC_soumis,
     tvaAmt: tvaAmt * sign,
     ttc: ttc * sign,                    // v8.49.11 — TTC hors débours (base TVA)
@@ -4855,35 +4872,64 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
             )}
           </div>
 
-          <div style={{ background: "var(--card2)", borderRadius: 8, padding: "14px 16px", marginBottom: 16, display: "flex", gap: 24, flexWrap: "wrap" }}>
-            {/* v8.49.11 — La carte grise passe en DÉBOURS (art. 267 II 2° CGI), donc :
+          {/* v8.49.11 — La carte grise passe en DÉBOURS (art. 267 II 2° CGI), donc :
                  - Total TTC = HT + TVA (base fiscale, sans CG)
                  - Débours (CG) affiché séparé
-                 - Total à payer = TTC + Débours (ce que règle vraiment le client) */}
-            {(c.avecTva
-              ? [
-                  ["HT", fmtDec(c.ht)],
-                  ["TVA " + (c.tvaPct || 20) + "%", fmtDec(c.tvaAmt)],
-                  c.remAmt > 0 ? ["Remise déduite", fmtDec(c.remAmt)] : null,
-                  ["Total TTC", fmtDec(c.ttc)],
-                  c.debourTotal > 0 ? ["Débours (CG)", fmtDec(c.debourTotal)] : null,
-                  c.debourTotal > 0 ? ["Total à payer", fmtDec(c.grandTotal)] : null,
-                  c.repriseValeur > 0 ? ["Reprise (règlement)", "- " + fmtDec(c.repriseValeur)] : null
-                ].filter(Boolean)
-              : [
-                  ["Prix TTC", fmtDec(c.ttc)],
-                  c.debourTotal > 0 ? ["Débours (CG)", fmtDec(c.debourTotal)] : null,
-                  c.debourTotal > 0 ? ["Total à payer", fmtDec(c.grandTotal)] : null,
-                  c.repriseValeur > 0 ? ["Reprise (règlement)", "- " + fmtDec(c.repriseValeur)] : null,
-                  ["TVA", "Non applicable"],
-                  ["Régime", "Art. 297A CGI"]
-                ].filter(Boolean)
-            ).map(([l, v]) => (
-              <div key={l}>
-                <div style={{ fontSize: 10, letterSpacing: 1.5, textTransform: "uppercase", color: "var(--muted)", marginBottom: 3 }}>{l}</div>
-                <div style={{ fontSize: 16, fontWeight: 700, fontFamily: "Syne" }}>{v}</div>
-              </div>
-            ))}
+                 - Total à payer = TTC + Débours (ce que règle vraiment le client)
+              v8.178 — Ce récapitulatif était une rangée d'étiquettes dans un
+              ordre qui n'était celui d'aucun calcul : un « HT » déjà net à côté
+              d'une « Remise déduite » exprimée en TTC. On y met exactement la
+              cascade imprimée sur le document, dans le même ordre et avec les
+              mêmes libellés — ce qu'on valide ici est ce que le client lira. */}
+          <div style={{ background: "var(--card2)", borderRadius: 8, padding: "14px 16px", marginBottom: 16 }}>
+            <div style={{ maxWidth: 420, marginLeft: "auto" }}>
+              {(() => {
+                const rows = [];
+                if (c.remAmt > 0) {
+                  rows.push([c.avecTva ? "Sous-total HT" : "Sous-total", fmtDec(c.htBrut), {}]);
+                  rows.push([
+                    c.avecTva ? `Remise accordée (soit ${fmtDec(c.remAmt)} TTC)` : "Remise accordée",
+                    fmtDec(-c.remAmtHt),
+                    { color: "var(--gold)" },
+                  ]);
+                }
+                // v8.179 — En régime marge on ne dit pas « HT » : la TVA du
+                // véhicule n'est pas mentionnable (art. 297 E CGI).
+                rows.push([
+                  c.avecTva ? (c.remAmt > 0 ? "Total HT net" : "Montant HT")
+                            : (c.remAmt > 0 ? "Net après remise" : "Sous-total"),
+                  fmtDec(c.ht), {},
+                ]);
+                if (c.avecTva) {
+                  rows.push([`TVA ${c.tvaPct || 20}%`, fmtDec(c.tvaAmt), {}]);
+                } else {
+                  if (c.tvaAmt > 0) rows.push([`TVA ${c.tvaPct || 20}% (frais uniquement)`, fmtDec(c.tvaAmt), {}]);
+                  rows.push(["TVA sur la marge — non récupérable par l'acquéreur", "Art. 297 A CGI", { muted: true }]);
+                }
+                rows.push(["Total TTC", fmtDec(c.ttc), { big: true }]);
+                if (c.debourTotal > 0) {
+                  rows.push(["Débours — carte grise (art. 267 II 2°)", fmtDec(c.debourTotal), { muted: true }]);
+                  rows.push(["Total à payer", fmtDec(c.grandTotal), { big: true }]);
+                }
+                // v8.154 — La reprise n'est pas une remise : elle vient après le
+                // total, comme un règlement en nature.
+                if (c.repriseValeur > 0) {
+                  rows.push(["Reprise (règlement en nature)", "- " + fmtDec(c.repriseValeur), { muted: true }]);
+                }
+                return rows.map(([label, value, o], i) => (
+                  <div key={i} style={{
+                    display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 16,
+                    padding: o.big ? "6px 0 0" : "3px 0",
+                    borderTop: o.big ? "1px solid var(--border2)" : undefined,
+                    marginTop: o.big ? 6 : undefined,
+                    color: o.color || (o.muted ? "var(--muted)" : undefined),
+                  }}>
+                    <span style={{ fontSize: o.big ? 12 : 11, letterSpacing: o.big ? 1 : 0, textTransform: o.big ? "uppercase" : "none", color: o.color || (o.big ? undefined : "var(--muted)") }}>{label}</span>
+                    <span style={{ fontFamily: "Syne", fontWeight: 700, fontSize: o.big ? 17 : 13, whiteSpace: "nowrap" }}>{value}</span>
+                  </div>
+                ));
+              })()}
+            </div>
           </div>
 
           {/* Mentions obligatoires 2026 — uniquement pour factures et avoirs */}
@@ -5191,7 +5237,10 @@ function PrintDoc({ order, dealer, onClose, viewMode, livrePolice }) {
               <tbody>
                 {/* L1 - Véhicule
                     v8.48.9 — En régime marge (avecTva=false), le véhicule n'a pas de TVA
-                    visible (elle est prélevée sur la marge). PU HT = TTC. */}
+                    visible (elle est prélevée sur la marge). PU HT = TTC.
+                    v8.178 — Prix AVANT remise (c.baseBrut) : la remise se lit
+                    sous le tableau, en une seule fois. La somme des lignes est
+                    donc exactement le « Sous-total HT » des totaux. */}
                 <tr>
                   <td style={{ fontSize: 11 }}>
                     VENTE VÉHICULE - {(() => {
@@ -5203,9 +5252,12 @@ function PrintDoc({ order, dealer, onClose, viewMode, livrePolice }) {
                   </td>
                   <td style={{ textAlign: "center", fontSize: 11 }}>1</td>
                   <td style={{ textAlign: "center", fontSize: 11 }}>u</td>
-                  <td style={{ textAlign: "right", fontSize: 11 }}>{fmtDec(c.avecTva ? c.base / (1 + (c.tvaPct || 20) / 100) : c.base)}</td>
-                  <td style={{ textAlign: "center", fontSize: 11, color: c.avecTva ? undefined : "#888" }}>{c.avecTva ? `${c.tvaPct || 20}%` : "—"}</td>
-                  <td style={{ textAlign: "right", fontSize: 11, fontWeight: 600 }}>{fmtDec(c.avecTva ? c.base / (1 + (c.tvaPct || 20) / 100) : c.base)}</td>
+                  <td style={{ textAlign: "right", fontSize: 11 }}>{fmtDec(c.avecTva ? c.baseBrut / (1 + (c.tvaPct || 20) / 100) : c.baseBrut)}</td>
+                  {/* v8.178 — En régime marge, un tiret ne dit rien. La ligne
+                      porte la mention elle-même : c'est là que le lecteur
+                      cherche le taux. */}
+                  <td style={{ textAlign: "center", fontSize: c.avecTva ? 11 : 9, color: c.avecTva ? undefined : "#6b6b78" }}>{c.avecTva ? `${c.tvaPct || 20}%` : "Hors TVA"}</td>
+                  <td style={{ textAlign: "right", fontSize: 11, fontWeight: 600 }}>{fmtDec(c.avecTva ? c.baseBrut / (1 + (c.tvaPct || 20) / 100) : c.baseBrut)}</td>
                 </tr>
                 {/* L2 - Frais de mise à disposition
                     v8.48.9 — Les frais sont TOUJOURS taxables au taux normal, même en régime marge */}
@@ -5237,27 +5289,44 @@ function PrintDoc({ order, dealer, onClose, viewMode, livrePolice }) {
               <div className="pdoc-totals-box">
                 {c.avecTva ? (
                   <>
-                    {/* v8.163 — La remise est déjà déduite du prix des lignes
-                        ci-dessus : elle se lit AVANT le montant HT, sinon le
-                        document invite à la soustraire une seconde fois. */}
+                    {/* v8.178 — Cascade dans l'ordre où elle se lit et se
+                        vérifie : somme des lignes HT, remise, HT net, TVA,
+                        TTC. La remise apparaît AVANT la TVA parce que la base
+                        imposable est nette des remises (art. 267 II 1° CGI) :
+                        la TVA affichée est celle réellement due, et celle que
+                        le pont transmet à IOBILL puis à la PDP.
+                        Le client négocie en TTC : on rappelle son montant. */}
                     {c.remAmt > 0 && <>
-                      <div className="pdoc-trow"><span>Sous-total TTC avant remise</span><span>{fmtDec(c.baseTotal + c.remAmt)}</span></div>
-                      <div className="pdoc-trow" style={{ color: "#c79528" }}><span>Remise accordée</span><span>- {fmtDec(c.remAmt)}</span></div>
+                      <div className="pdoc-trow"><span>Sous-total HT</span><span>{fmtDec(c.htBrut)}</span></div>
+                      <div className="pdoc-trow" style={{ color: "#c79528" }}>
+                        <span>Remise accordée <span style={{ fontSize: 9, opacity: 0.75 }}>(soit {fmtDec(c.remAmt)} TTC)</span></span>
+                        <span>{fmtDec(-c.remAmtHt)}</span>
+                      </div>
                     </>}
-                    <div className="pdoc-trow"><span>Montant HT</span><span>{fmtDec(c.ht)}</span></div>
+                    <div className="pdoc-trow"><span>{c.remAmt > 0 ? "Total HT net" : "Montant HT"}</span><span>{fmtDec(c.ht)}</span></div>
                     <div className="pdoc-trow"><span>TVA {c.tvaPct || 20}%</span><span>{fmtDec(c.tvaAmt)}</span></div>
                     <div className="pdoc-trow big"><span>TOTAL TTC</span><span>{fmtDec(c.ttc)}</span></div>
                   </>
                 ) : (
                   <>
-                    {/* v8.48.9 — Régime marge : véhicule sans TVA + frais avec TVA sur taux normal */}
+                    {/* v8.48.9 — Régime marge : véhicule sans TVA + frais avec TVA sur taux normal
+                        v8.179 — Même cascade qu'au régime normal, mais SANS le
+                        mot « HT ». Le véhicule est vendu à un prix unique dont
+                        la TVA ne peut pas être mentionnée (art. 297 E CGI) :
+                        l'appeler « HT » laisserait croire à l'acquéreur qu'une
+                        TVA vient s'y ajouter, ou qu'il pourrait la déduire.
+                        Seuls les frais sont un vrai HT, et leur ligne le dit. */}
                     {c.remAmt > 0 && <>
-                      <div className="pdoc-trow"><span>Sous-total TTC avant remise</span><span>{fmtDec(c.baseTotal + c.remAmt)}</span></div>
-                      <div className="pdoc-trow" style={{ color: "#c79528" }}><span>Remise accordée</span><span>- {fmtDec(c.remAmt)}</span></div>
+                      <div className="pdoc-trow"><span>Sous-total</span><span>{fmtDec(c.htBrut)}</span></div>
+                      <div className="pdoc-trow" style={{ color: "#c79528" }}><span>Remise accordée</span><span>{fmtDec(-c.remAmtHt)}</span></div>
                     </>}
-                    <div className="pdoc-trow"><span>Montant HT</span><span>{fmtDec(c.ht)}</span></div>
+                    <div className="pdoc-trow"><span>{c.remAmt > 0 ? "Net après remise" : "Sous-total"}</span><span>{fmtDec(c.ht)}</span></div>
                     {c.tvaAmt > 0 && <div className="pdoc-trow"><span>TVA {c.tvaPct || 20}% (frais uniquement)</span><span>{fmtDec(c.tvaAmt)}</span></div>}
-                    <div className="pdoc-trow" style={{ fontSize: 10, color: "#aaa" }}><span>Véhicule hors TVA</span><span>Art. 297A CGI</span></div>
+                    {/* v8.178 — Le gris clair d'origine ne survivait ni à l'écran
+                        ni à l'impression. v8.179 — Version courte : la case ne
+                        fait que 260 px, la mention complète est en bande sous
+                        les totaux. */}
+                    <div className="pdoc-trow" style={{ fontSize: 10, color: "#5a5a66" }}><span>TVA sur la marge</span><span>Art. 297 A CGI</span></div>
                     <div className="pdoc-trow big"><span>TOTAL TTC</span><span>{fmtDec(c.ttc)}</span></div>
                   </>
                 )}
@@ -5307,6 +5376,22 @@ function PrintDoc({ order, dealer, onClose, viewMode, livrePolice }) {
                 </>}
               </div>
             </div>
+
+            {/* v8.179 — Mention du régime de la marge, en bande pleine largeur.
+                Elle ne tenait pas dans la case des totaux (260 px) et c'est
+                pourtant elle qui rend la facture opposable : l'acquéreur doit
+                savoir qu'aucune TVA n'est mentionnée (art. 297 E CGI) et qu'il
+                ne peut donc pas la déduire. « Régime particulier — Biens
+                d'occasion » est le libellé prévu par la directive TVA
+                (2006/112/CE, art. 226 point 14), repris par l'art. 242 nonies A
+                du CGI. */}
+            {order.avec_tva === false && (
+              <div className="pdoc-section" style={{ marginTop: 12, padding: "8px 14px", background: "#f9f8f5", borderRadius: 6, fontSize: 10, color: "#555", border: "1px solid #e8e8e8", lineHeight: 1.6 }}>
+                <strong>Régime particulier — Biens d'occasion.</strong> Véhicule soumis à la TVA sur la marge
+                (art. 297 A du CGI) : la TVA n'est pas mentionnée sur la présente facture et n'est pas
+                récupérable par l'acquéreur (art. 297 E du CGI).
+              </div>
+            )}
 
             {/* Garantie véhicule */}
             {garantieLabel(order.garantie_mois) && (
