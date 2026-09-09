@@ -105,8 +105,20 @@ async function handleLink(user, garage, supabase, body, res) {
       { garage_id: garage.id, iobill_company_id: garage.iobill_company_id });
   }
 
+  // v8.177 — Réparation demandée explicitement par l'abonné. Les deux champs
+  // peuvent être présents et la liaison pourtant morte : la company IOBILL a
+  // été supprimée ou suspendue de l'autre côté, et IOCAR n'a aucun moyen de
+  // le savoir sans redemander. On rejoue alors la liaison, qui recrée ce
+  // qu'il faut (l'appel est idempotent : il réutilise la company existante
+  // quand elle est toujours là).
+  const reparation = !!(body && body.repair === true);
+  if (reparation) {
+    console.warn('[link] réparation demandée — on rejoue la liaison',
+      { garage_id: garage.id, iobill_company_id: garage.iobill_company_id });
+  }
+
   // Idempotent : si déjà lié PROPREMENT (les 2 champs), on retourne le statut
-  if (garage.iobill_company_id && garage.iobill_api_token) {
+  if (!reparation && garage.iobill_company_id && garage.iobill_api_token) {
     return res.status(200).json({
       ok: true,
       already_linked: true,
@@ -122,7 +134,7 @@ async function handleLink(user, garage, supabase, body, res) {
   // v8.49 — Skip cette vérif en auto-guérison (on ne veut pas exiger le MDP
   // pour réparer un état partiel — pas de risque puisque le user est déjà
   // authentifié côté IOCAR via verifyUser en amont).
-  if (password && !isCorruptedState) {
+  if (password && !isCorruptedState && !reparation) {
     const r = await fetch(`${process.env.SUPABASE_URL}/auth/v1/token?grant_type=password`, {
       method: 'POST',
       headers: {
