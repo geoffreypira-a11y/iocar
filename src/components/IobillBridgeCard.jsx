@@ -14,7 +14,7 @@
 //   - garage : ligne `garages` complète (lit iobill_* + iobill_auto_push)
 //   - onUpdate : callback(patch) après modif, pour rafraîchir le parent
 // ═══════════════════════════════════════════════════════════════════
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 
 export default function IobillBridgeCard({ token, garage, onUpdate }) {
   const linked = !!garage?.iobill_company_id;
@@ -23,6 +23,25 @@ export default function IobillBridgeCard({ token, garage, onUpdate }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
+  // v8.176 — Liaison incomplète : company_id enregistré mais jeton absent.
+  // Le jeton ne quitte jamais le serveur, seul lui peut nous le dire.
+  // Dans cet état la carte s'affichait « lié » et proposait la resynchro,
+  // qui répondait « Compte IOBILL non lié » : aucune sortie possible, alors
+  // que le pont sait déjà réparer (l'action « link » est idempotente et
+  // rejoue la liaison). Il ne manquait que le bouton pour l'atteindre.
+  const [aReparer, setAReparer] = useState(false);
+
+  useEffect(() => {
+    if (!token || !linked) { setAReparer(false); return; }
+    let annule = false;
+    (async () => {
+      const r = await callBridge("status");
+      if (annule || !r.ok) return;          // hors ligne : on ne crie pas au loup
+      setAReparer(r.data.linked && !r.data.has_token);
+    })();
+    return () => { annule = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, linked, garage?.iobill_company_id]);
 
   async function callBridge(action, body = {}) {
     const r = await fetch("/api/iobill-bridge", {
@@ -42,7 +61,8 @@ export default function IobillBridgeCard({ token, garage, onUpdate }) {
     const r = await callBridge("link", password ? { password } : {});
     setBusy(false);
     if (!r.ok) { setErr(r.error); return false; }
-    setMsg("✅ Compte IO BILL activé !");
+    setMsg(aReparer ? "✅ Liaison IO BILL réparée !" : "✅ Compte IO BILL activé !");
+    setAReparer(false);
     if (onUpdate) onUpdate({
       iobill_company_id: r.data.iobill_company_id,
       iobill_email: r.data.iobill_email,
@@ -181,6 +201,25 @@ export default function IobillBridgeCard({ token, garage, onUpdate }) {
           </div>
         </label>
       </div>
+
+      {aReparer && (
+        <div style={{
+          background: "rgba(229,151,60,.10)", border: "1px solid rgba(229,151,60,.35)",
+          borderRadius: 8, padding: "12px 14px", marginBottom: 12,
+        }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "var(--orange)", marginBottom: 4 }}>
+            ⚠️ Liaison incomplète
+          </div>
+          <div style={{ fontSize: 12, color: "var(--muted2)", lineHeight: 1.5, marginBottom: 10 }}>
+            Le compte est bien rattaché à IO BILL, mais la clé d'accès manque —
+            la synchronisation et l'envoi des factures échouent. La réparation
+            rejoue la liaison, sans rien perdre de vos données.
+          </div>
+          <button style={styles.btn} onClick={() => doLink(null)} disabled={busy}>
+            {busy ? "Réparation..." : "🔧 Réparer la liaison"}
+          </button>
+        </div>
+      )}
 
       {/* Resync paramètres */}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>

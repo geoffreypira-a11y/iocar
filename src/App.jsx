@@ -11972,13 +11972,38 @@ export default function App() {
     "saved",          // flag "modifs non sauvegardées"
   ];
 
+  // v8.176 — Champs dont le SERVEUR est propriétaire : liaison IOBILL, état
+  // d'abonnement, droits. Ils sont écrits par les fonctions serveur (pont
+  // IOBILL, webhook Stripe, admin) avec la clé service_role ; le navigateur
+  // n'a qu'à en refléter la valeur, jamais à la réenregistrer.
+  //
+  // Sans cette barrière, n'importe quel appel de la forme
+  //   setDealer({ ...dealer, uneAutreChose })
+  // renvoyait l'objet garage ENTIER — donc une copie périmée de ces champs —
+  // et écrasait en base ce que le serveur venait d'écrire. C'est ainsi qu'une
+  // liaison IOBILL pouvait perdre son jeton juste après avoir été créée :
+  // la carte prévient le parent avec company_id / email / date, mais pas le
+  // jeton (le navigateur ne le connaît pas), et le parent renvoyait le tout.
+  // Le bouton Enregistrer des Paramètres se protégeait déjà, seul, de ce
+  // piège ; les huit autres points d'appel non. La protection est désormais
+  // ici, pour tout le monde.
+  const GARAGE_SERVER_OWNED_KEYS = [
+    "iobill_company_id", "iobill_api_token", "iobill_email",
+    "iobill_linked_at", "iobill_auto_push",
+    "is_admin", "is_active", "sub_status",
+    "stripe_customer_id", "stripe_subscription_id",
+    "subscribed_at", "payment_failed_at",
+    "user_id", "created_at", "_archived",
+  ];
+
   const saveDealer = async (data) => {
     if (isRealDemo) { setDemoDealer({ ...demoDealer, ...data }); return; }
     const updated = { ...garage, ...data };
-    setGarage(updated);
+    setGarage(updated);   // l'affichage local reflète tout, y compris le serveur
     // v8.49 — On strippe les clés UI-only avant l'envoi PostgREST
     const cleanData = { ...data };
     for (const k of GARAGE_UI_ONLY_KEYS) delete cleanData[k];
+    for (const k of GARAGE_SERVER_OWNED_KEYS) delete cleanData[k];
     if (!token || !garage?.id) return;
     if (Object.keys(cleanData).length === 0) return; // rien à persister
     try {
