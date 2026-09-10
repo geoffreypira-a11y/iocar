@@ -67,7 +67,7 @@ export default function IobillInvoiceSync({ token, order, garage, onSync }) {
 
   if (order?.type !== "facture" && order?.type !== "avoir") return null;
 
-  async function callBridge(action) {
+  async function callBridge(action, extra = {}) {
     setBusy(true); setError("");
     try {
       // v8.49 — Utilise toujours le token le plus récent (peut avoir été refreshé
@@ -77,7 +77,7 @@ export default function IobillInvoiceSync({ token, order, garage, onSync }) {
       const doFetch = (tok) => fetch("/api/iobill-bridge", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${tok}` },
-        body: JSON.stringify({ action, order_id: order.id })
+        body: JSON.stringify({ action, order_id: order.id, ...extra })
       });
 
       // v8.49.14 — Retry auto avec backoff exponentiel sur les erreurs réseau
@@ -166,7 +166,19 @@ export default function IobillInvoiceSync({ token, order, garage, onSync }) {
   }
   async function markPaid()  { await callBridge("mark_invoice_paid"); }
   // v8.41 — Pour les avoirs : action dédiée push_credit_note (route vers credit_notes IOBILL)
-  async function pushCreditNote() { await callBridge("push_credit_note"); }
+  //
+  // v8.186 — `mode: "issue"` explicite. Sans mode, le pont retombe sur son
+  // choix automatique : `calc.reste > 0.01 ? 'draft' : 'issued'`. L'avoir
+  // partait donc en BROUILLON tant que le remboursement n'était pas saisi, et
+  // le bouton « Forcer la transmission » ne forçait rien — il fallait
+  // enregistrer un paiement dans IO CAR pour obtenir une émission.
+  //
+  // Or l'effet fiscal d'un avoir tient à son ÉMISSION, pas au mouvement
+  // d'argent : la TVA se récupère dès que la facture est rectifiée
+  // (art. 272-1 du CGI). Le remboursement est un fait de trésorerie distinct.
+  // C'est la règle déjà appliquée à la création de l'avoir (v8.183) ; elle
+  // n'avait jamais été reportée ici.
+  async function pushCreditNote() { await callBridge("push_credit_note", { mode: "issue" }); }
 
   // Action à déclencher selon le type d'order
   // - facture : pushDraft (BC→Facture) ou markPaid (Livré)
