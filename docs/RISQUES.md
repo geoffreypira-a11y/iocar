@@ -37,6 +37,98 @@ mais que personne n'emprunte encore.
 
 ---
 
+## Zones ouvertes après coup
+
+**Isolation entre garages — close, propre.** RLS active sur les 52 tables des
+deux bases, au moins une politique sur chacune, et les règles filtrent bien par
+`auth.uid()`. Une seule faiblesse, de portée intra-ticket : la politique
+`ticket_messages_update_read` autorise l'abonné à modifier **n'importe quelle
+colonne** d'un message de son propre ticket — la RLS travaille à la ligne, pas
+à la colonne. Il pourrait réécrire une réponse de l'admin. Aucune fuite entre
+garages. Correctif en deux lignes de privilèges (`GRANT UPDATE (read_at)`), la
+seule colonne que le code met à jour.
+
+**Encaissements — justes.** Vérifié sur 864 combinaisons (acompte, reprise,
+paiements multiples, débours) : IO CAR et IO BILL comptent le **même encaissé**,
+zéro écart. La reprise est bien portée en règlement et non en réduction de prix.
+
+Un seul défaut, de libellé mais sur un document client : la facture portait
+« Valeur de reprise **déduite du total** » dans son bloc reprise, alors que le
+bloc des totaux du même document porte « Reprise véhicule (règlement en
+nature) » **après** le TOTAL TTC. Depuis la v8.154 la reprise n'est pas une
+réduction de prix — la base imposable reste le prix entier (art. 266-1-a du
+CGI). Écrire « déduite du total » laissait entendre une TVA calculée sur un
+prix diminué. Corrigé des deux côtés, document et champ de saisie.
+
+**CERFA — mesurés, et sains.** Les 24 champs de texte libre du 15776*02 ont été
+mesurés au point près : la fonction de remplissage réduit la police jusqu'à 5 pt
+pour faire tenir une valeur longue, et les seuls champs étroits sont le numéro
+de voie et le kilométrage, courts par nature. L'identité tient 60 caractères à
+pleine taille, 109 avant débordement. Aucun risque de troncature en usage réel.
+
+Un défaut en revanche : **rien ne signalait une donnée manquante**. `txt()` et
+`cases()` ignorent une valeur vide, si bien qu'un VIN ou un n° de formule absent
+laissait des cases blanches sans un mot. L'abonné le découvrait au refus de la
+préfecture, après le départ du client. Un bandeau nomme désormais ce qui manque
+— sans bloquer, car on imprime parfois sciemment un document à compléter à la
+main.
+
+**Purge RGPD — cassée, et heureusement.** `DEPLOIEMENT.md` prescrit de lancer
+`purge_livre_police_expired()` tous les mois. La fonction est fausse sur trois
+points, dont deux se compensent :
+
+1. elle **lève une erreur** — IO CAR stocke les dates en français
+   (« 25/09/2026 ») et le cast `::DATE` échoue avec le DateStyle par défaut de
+   PostgreSQL dès qu'un jour dépasse 12. Elle n'a donc probablement jamais
+   supprimé une seule ligne ;
+2. quand elle n'échoue pas, elle **inverse jour et mois** ;
+3. elle compte depuis l'**entrée** du véhicule, pas depuis sa sortie — un
+   véhicule resté six ans en stock et vendu hier aurait été effacé aussitôt.
+
+Corrigée : lecture explicite en `DD/MM/YYYY`, garde par expression régulière
+pour qu'une valeur malformée soit ignorée plutôt que de faire échouer la purge,
+et suppression cinq ans après la **sortie** uniquement. Un véhicule encore en
+stock reste au registre. La nouvelle version ne peut supprimer que **moins** de
+lignes que l'ancienne — et un aperçu, fourni en commentaire, liste ce qui
+partirait avant qu'on lance quoi que ce soit.
+
+**Stripe — signature irréprochable, deux points sur le cycle.** La vérification
+du webhook est exemplaire : `bodyParser` désactivé, corps brut, `constructEvent`
+avec le secret, 400 sur échec. Rien à redire.
+
+Deux points en revanche sur le cycle de vie :
+
+- **`invoice.payment_failed` coupe l'accès immédiatement** (`is_active: false`).
+  Stripe envoie cet événement dès le **premier** échec, avant ses relances
+  automatiques qui s'étalent sur deux à trois semaines. Une carte refusée un
+  jour pour provision insuffisante verrouille donc le garage — livre de police
+  et facturation compris — alors que le paiement passera peut-être le
+  lendemain. Le champ `sub_status: 'past_due'` est pourtant posé au même
+  endroit : c'est lui qui devrait porter l'alerte, la coupure revenant à
+  `customer.subscription.deleted`, que Stripe n'envoie qu'après l'échec de
+  toutes les relances. **Décision commerciale, non tranchée ici.**
+- **Un paiement pouvait être encaissé sans rien activer.** Le rattachement se
+  fait par e-mail ; si celui du garage a changé depuis l'inscription, aucune
+  ligne ne correspond — et une mise à jour qui ne touche zéro ligne n'est pas
+  une erreur pour PostgREST. L'abonné payait sans rien recevoir, sans trace.
+  Corrigé : le webhook lit les lignes touchées et journalise une alerte
+  explicite quand il n'y en a aucune.
+
+**Réception des factures d'achat — signature solide, rejeu possible.** La
+vérification Svix est bien faite : HMAC-SHA256, comparaison en temps constant
+avec contrôle de longueur, toutes les signatures fournies essayées.
+
+Mais rien ne vérifiait l'**âge** du message, et rien ne dédupliquait : Resend
+rejoue un webhook tant qu'il n'a pas reçu de 2xx, si bien qu'un simple timeout
+après l'enregistrement recréait les achats. **Des achats en double gonflent la
+TVA déductible** du bloc 3 de la déclaration — une erreur en faveur de
+l'exploitant, donc la mauvaise direction en contrôle. Ce n'est même pas une
+attaque : c'est le fonctionnement normal d'un webhook.
+
+Corrigé : tolérance de cinq minutes sur l'horodatage (recommandation Svix) et
+mémorisation de l'identifiant de message, unicisé en base. Un rejeu répond
+désormais 200 sans rien recréer.
+
 ## Ce qui est solide, et mérite d'être dit
 
 **La facture ordinaire.** Le chemin réellement emprunté est ressorti de l'audit

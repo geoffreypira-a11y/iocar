@@ -52,7 +52,12 @@ export default async function handler(req, res) {
           ? s.metadata.plan
           : ((s.amount_total || 0) > 10000 ? 'annual' : 'monthly');
 
-        const { error } = await supabase
+        // v8.191 — Le rattachement se fait par e-mail. Si l'e-mail du garage a
+        // changé depuis l'inscription, AUCUNE ligne ne correspond — et une mise
+        // à jour qui ne touche zéro ligne n'est pas une erreur pour PostgREST.
+        // L'abonné payait alors sans rien recevoir, sans la moindre trace.
+        // On lit les lignes touchées pour transformer ce silence en alerte.
+        const { data: touches, error } = await supabase
           .from('garages')
           .update({
             is_active:              true,
@@ -63,9 +68,17 @@ export default async function handler(req, res) {
             subscribed_at:          new Date().toISOString(),
             payment_failed_at:      null,
           })
-          .eq('email', email);
+          .eq('email', email)
+          .select('id');
 
         if (error) console.error('Update garage (checkout):', error);
+        else if (!touches || touches.length === 0) {
+          console.error(
+            '[stripe] ALERTE — paiement encaissé mais aucun garage ne porte cet e-mail.',
+            { email, customer: s.customer, subscription: s.subscription,
+              signup_email: s.metadata?.signup_email || null }
+          );
+        }
         break;
       }
 
@@ -107,16 +120,39 @@ export default async function handler(req, res) {
       // ensuite invoice.payment_succeeded qui remettra is_active=true.
       case 'invoice.payment_failed': {
         const inv = event.data.object;
+
+        // v8.191 — On ne coupe plus au PREMIER échec.
+        //
+        // Stripe envoie cet événement dès la première tentative refusée, puis
+        // relance automatiquement la carte pendant deux à trois semaines. Couper
+        // aussitôt verrouillait le garage — livre de police et facturation
+        // comprises — pour une provision insuffisante d'un jour.
+        //
+        // `attempt_count` est le nombre de tentatives sur CETTE facture : il
+        // repart à zéro au cycle suivant, si bien qu'on compte bien deux échecs
+        // consécutifs et non deux incidents étalés sur l'année.
+        //
+        // Au premier échec on marque `past_due` sans toucher à l'accès ; au
+        // second on coupe. Le rétablissement est automatique dès qu'un paiement
+        // passe (invoice.payment_succeeded), et l'exploitant peut débloquer à la
+        // main depuis l'admin si l'abonné l'appelle.
+        const echecs = Number(inv.attempt_count) || 1;
+        const patch = {
+          payment_failed_at: new Date().toISOString(),
+          sub_status:        'past_due',
+        };
+        if (echecs >= 2) patch.is_active = false;
+
         const { error } = await supabase
           .from('garages')
-          .update({
-            is_active:         false,
-            payment_failed_at: new Date().toISOString(),
-            sub_status:        'past_due',
-          })
+          .update(patch)
           .eq('stripe_customer_id', inv.customer);
 
         if (error) console.error('Update garage (payment_failed):', error);
+        else console.log(
+          `[stripe] échec de paiement n°${echecs} — ${echecs >= 2 ? 'accès coupé' : 'accès maintenu, garage marqué past_due'}`,
+          { customer: inv.customer }
+        );
         break;
       }
 
