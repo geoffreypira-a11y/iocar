@@ -92,6 +92,28 @@ stock reste au registre. La nouvelle version ne peut supprimer que **moins** de
 lignes que l'ancienne — et un aperçu, fourni en commentaire, liste ce qui
 partirait avant qu'on lance quoi que ce soit.
 
+**Stripe — signature irréprochable, deux points sur le cycle.** La vérification
+du webhook est exemplaire : `bodyParser` désactivé, corps brut, `constructEvent`
+avec le secret, 400 sur échec. Rien à redire.
+
+Deux points en revanche sur le cycle de vie :
+
+- **`invoice.payment_failed` coupe l'accès immédiatement** (`is_active: false`).
+  Stripe envoie cet événement dès le **premier** échec, avant ses relances
+  automatiques qui s'étalent sur deux à trois semaines. Une carte refusée un
+  jour pour provision insuffisante verrouille donc le garage — livre de police
+  et facturation compris — alors que le paiement passera peut-être le
+  lendemain. Le champ `sub_status: 'past_due'` est pourtant posé au même
+  endroit : c'est lui qui devrait porter l'alerte, la coupure revenant à
+  `customer.subscription.deleted`, que Stripe n'envoie qu'après l'échec de
+  toutes les relances. **Décision commerciale, non tranchée ici.**
+- **Un paiement pouvait être encaissé sans rien activer.** Le rattachement se
+  fait par e-mail ; si celui du garage a changé depuis l'inscription, aucune
+  ligne ne correspond — et une mise à jour qui ne touche zéro ligne n'est pas
+  une erreur pour PostgREST. L'abonné payait sans rien recevoir, sans trace.
+  Corrigé : le webhook lit les lignes touchées et journalise une alerte
+  explicite quand il n'y en a aucune.
+
 ## Ce qui est solide, et mérite d'être dit
 
 **La facture ordinaire.** Le chemin réellement emprunté est ressorti de l'audit

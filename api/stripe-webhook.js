@@ -52,7 +52,12 @@ export default async function handler(req, res) {
           ? s.metadata.plan
           : ((s.amount_total || 0) > 10000 ? 'annual' : 'monthly');
 
-        const { error } = await supabase
+        // v8.191 — Le rattachement se fait par e-mail. Si l'e-mail du garage a
+        // changé depuis l'inscription, AUCUNE ligne ne correspond — et une mise
+        // à jour qui ne touche zéro ligne n'est pas une erreur pour PostgREST.
+        // L'abonné payait alors sans rien recevoir, sans la moindre trace.
+        // On lit les lignes touchées pour transformer ce silence en alerte.
+        const { data: touches, error } = await supabase
           .from('garages')
           .update({
             is_active:              true,
@@ -63,9 +68,17 @@ export default async function handler(req, res) {
             subscribed_at:          new Date().toISOString(),
             payment_failed_at:      null,
           })
-          .eq('email', email);
+          .eq('email', email)
+          .select('id');
 
         if (error) console.error('Update garage (checkout):', error);
+        else if (!touches || touches.length === 0) {
+          console.error(
+            '[stripe] ALERTE — paiement encaissé mais aucun garage ne porte cet e-mail.',
+            { email, customer: s.customer, subscription: s.subscription,
+              signup_email: s.metadata?.signup_email || null }
+          );
+        }
         break;
       }
 
