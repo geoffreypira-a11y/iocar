@@ -1,0 +1,19 @@
+# Dépendances installées localement
+node_modules/
+
+# Sortie de build Vite (regénérée par Vercel à chaque déploiement)
+dist/
+
+# Variables d'environnement — ne JAMAIS versionner :
+# SUPABASE_SERVICE_ROLE_KEY, STRIPE_SECRET_KEY, CRON_SECRET, clé RapidAPI…
+.env
+.env.*
+!.env.example
+
+# Vercel
+.vercel/
+
+# Journaux et fichiers temporaires
+*.log
+npm-debug.log*
+.DS_Store
