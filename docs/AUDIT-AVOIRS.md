@@ -398,6 +398,48 @@ baissait jamais, et le client concerné restait en tête du classement.
 
 **Correctif** : les avoirs émis se déduisent des deux graphiques.
 
+## A14 — L'avoir n'avait pas de motif, et héritait des notes de la facture 🟠
+
+Le pont lisait `order.motif_avoir` :
+
+```js
+reason: sanitizeString(order.motif_avoir) || sanitizeString(order.notes) || null,
+```
+
+…mais ce champ n'existait **dans aucun formulaire**. Le motif retombait donc
+sur `order.notes`, que le clone emportait depuis la facture : les conditions de
+garantie et le délai de livraison s'imprimaient comme **motif de l'avoir**, sur
+le PDF IOBILL comme dans le Factur-X.
+
+Le sujet compte surtout pour l'**avoir partiel**, qui est un geste commercial :
+un avoir de 1 000 € au milieu d'une vente à 24 180 € ne s'explique pas sans son
+motif.
+
+**Correctif** : la modale d'avoir partiel demande un motif, obligatoire — il est
+imprimé sur le document IO CAR, transmis à IO BILL et porté dans le Factur-X.
+L'avoir total reçoit le motif qui se déduit (« Annulation de la facture … ») et
+garde son parcours en deux clics. Dans les deux cas les notes de la facture ne
+sont plus reprises.
+
+## Avoir partiel : ce que ça produit
+
+Geste commercial de 1 000 € sur une vente de 24 180 € TTC, marge d'origine
+4 000 € :
+
+| | Régime normal | Régime marge |
+|---|---|---|
+| HT de l'avoir | 833,33 € | 1 000,00 € |
+| TVA visible reprise | 166,67 € | 0,00 € |
+| TVA sur marge reprise | — | **166,67 €** |
+
+En marge, la marge tombe de 4 000 € à 3 000 € : 666,67 € de TVA due avant,
+500,00 € après — soit 166,67 € repris, ce que porte exactement l'avoir.
+
+**Limite en vigueur** : IO CAR n'autorise **qu'un seul avoir par facture** (le
+bouton disparaît dès qu'il en existe un). Un second geste commercial sur la
+même vente n'est donc pas possible aujourd'hui. C'est aussi ce qui protège le
+plafond de reprise de marge, calculé avoir par avoir.
+
 ## Ce qui, en revanche, était déjà juste
 
 Le tableau de bord **IO CAR** compte correctement : `tvaCollectee` et

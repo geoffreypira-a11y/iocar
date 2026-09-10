@@ -3663,6 +3663,12 @@ function AvoirChoiceModal({ order, totalTtc, onTotal, onPartiel, onCancel }) {
 
 function AvoirPartielModal({ order, totalTtc, onConfirm, onCancel }) {
   const [montant, setMontant] = useState("");
+  // v8.184 — Motif. Le champ `motif_avoir` était lu par le pont mais n'existait
+  // dans aucun formulaire : le motif imprimé sur l'avoir IOBILL retombait sur
+  // les notes de la facture, héritées du clone — soit, en pratique, ses
+  // conditions de garantie affichées comme motif d'annulation.
+  // Un avoir partiel est un geste commercial : c'est le motif qui le justifie.
+  const [motif, setMotif] = useState("");
   const [error, setError] = useState("");
 
   const handleConfirm = () => {
@@ -3675,7 +3681,11 @@ function AvoirPartielModal({ order, totalTtc, onConfirm, onCancel }) {
       setError(`Le montant ne peut pas dépasser le total TTC (${fmtDec(totalTtc)}).`);
       return;
     }
-    onConfirm(val);
+    if (!motif.trim()) {
+      setError("Indiquez le motif : il figure sur l'avoir remis au client.");
+      return;
+    }
+    onConfirm(val, motif.trim());
   };
 
   return (
@@ -3713,7 +3723,7 @@ function AvoirPartielModal({ order, totalTtc, onConfirm, onCancel }) {
             value={montant}
             onChange={e => { setMontant(e.target.value); setError(""); }}
             onKeyDown={e => { if (e.key === "Enter") handleConfirm(); }}
-            placeholder="Ex : 500.00"
+            placeholder="Ex : 1000.00"
             autoFocus
             style={{
               width: "100%",
@@ -3726,6 +3736,28 @@ function AvoirPartielModal({ order, totalTtc, onConfirm, onCancel }) {
               outline: "none",
             }}
           />
+          <label style={{ display: "block", fontSize: 13, color: "var(--muted)", margin: "14px 0 6px" }}>
+            Motif de l'avoir
+          </label>
+          <input
+            value={motif}
+            onChange={e => { setMotif(e.target.value); setError(""); }}
+            onKeyDown={e => { if (e.key === "Enter") handleConfirm(); }}
+            placeholder="Ex : geste commercial — remise en état à la charge du client"
+            style={{
+              width: "100%",
+              padding: "10px 12px",
+              fontSize: 14,
+              background: "rgba(255,255,255,.05)",
+              border: `1px solid ${error && !motif.trim() ? "var(--red)" : "rgba(255,255,255,.1)"}`,
+              borderRadius: 8,
+              color: "var(--text)",
+              outline: "none",
+            }}
+          />
+          <p style={{ fontSize: 11, color: "var(--muted)", margin: "6px 0 0 0", lineHeight: 1.5 }}>
+            Il figure sur l'avoir remis au client et sur celui transmis à l'administration.
+          </p>
           {error && (
             <p style={{ fontSize: 12, color: "var(--red)", margin: "8px 0 0 0" }}>{error}</p>
           )}
@@ -5456,6 +5488,15 @@ function PrintDoc({ order, dealer, onClose, viewMode, livrePolice }) {
               </div>
             )}
 
+            {/* v8.184 — Motif de l'avoir. C'est lui qui justifie le document :
+                sans motif imprimé, un avoir de 1 000 € au milieu d'une vente à
+                24 180 € ne s'explique pas. IOBILL l'imprime déjà de son côté. */}
+            {order.type === "avoir" && order.motif_avoir && (
+              <div className="pdoc-section" style={{ marginTop: 12, padding: "8px 14px", background: "#f9f8f5", borderRadius: 6, fontSize: 11, color: "#555", border: "1px solid #e8e8e8" }}>
+                <strong>Motif de l'avoir :</strong> {order.motif_avoir}
+              </div>
+            )}
+
             {/* Garantie véhicule */}
             {garantieLabel(order.garantie_mois) && (
               <div className="pdoc-section pdoc-garantie" style={{ marginTop: 12, padding: "8px 14px", background: "#f9f8f5", borderRadius: 6, fontSize: 11, color: "#555", border: "1px solid #e8e8e8" }}>
@@ -6568,6 +6609,13 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
               carte_grise: "0",
               remise_ttc: String(Number(o.remise_ttc || 0).toFixed(2)),
               avoir_partiel: false,
+              // v8.184 — Motif de l'avoir. Un avoir total annule la facture :
+              // le motif se déduit, inutile d'un champ de plus.
+              motif_avoir: `Annulation de la facture ${o.ref}`,
+              // Les notes de la facture (garantie, délai de livraison…) n'ont
+              // rien à faire sur un avoir — le clone les emportait, et le pont
+              // s'en servait comme motif faute de mieux.
+              notes: "",
               reprise_active: false,
               reprise_valeur: 0,
               acompte_ttc: 0,  // ⚠ Un avoir n'a pas d'acompte signature
@@ -6604,7 +6652,7 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
         <AvoirPartielModal
           order={avoirPartiel.order}
           totalTtc={avoirPartiel.totalTtc}
-          onConfirm={(montant) => {
+          onConfirm={(montant, motif) => {
             const o = avoirPartiel.order;
             const avoir = {
               ...o, id: uid(), type: "avoir",
@@ -6622,6 +6670,10 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
               carte_grise: "0",
               remise_ttc: "0",
               avoir_partiel: true,
+              // v8.184 — Motif saisi : un avoir partiel est un geste commercial,
+              // c'est lui qui le justifie auprès du client et de l'administration.
+              motif_avoir: motif,
+              notes: "",
               // En régime marge, baisser le prix de vente réduit la marge — donc
               // la TVA sur marge due. La marge d'origine n'est plus déductible
               // de l'avoir seul (son prix a été remplacé par le montant saisi) :
