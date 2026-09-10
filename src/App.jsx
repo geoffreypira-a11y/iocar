@@ -5109,6 +5109,13 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
 ═══════════════════════════════════════════════════════════════ */
 function PrintDoc({ order, dealer, onClose, viewMode, livrePolice }) {
   const c = calcOrder(order);
+  // v8.185 — Un avoir s'écrit en montants positifs, sous « TOTAL À DÉDUIRE ».
+  // calcOrder les rend signés (sign = -1) pour le tableau de bord, qui en a
+  // besoin ; le document, lui, porte le sens dans son titre et son libellé de
+  // total — comme le PDF IOBILL du même avoir.
+  const estAvoir = order.type === "avoir";
+  const mntDoc = (v) => (estAvoir ? Math.abs(v) : v);
+  const libelleTotal = estAvoir ? "TOTAL À DÉDUIRE" : "TOTAL TTC";
   const [sigVendeur, setSigVendeur] = useState(null);
   const [sigClient, setSigClient] = useState(null);
   const [sigMode, setSigMode] = useState("papier"); // BC par défaut papier
@@ -5428,6 +5435,13 @@ function PrintDoc({ order, dealer, onClose, viewMode, livrePolice }) {
                 Cohérent avec la présentation IOBILL. */}
             <div className="pdoc-totals">
               <div className="pdoc-totals-box">
+                {/* v8.185 — Sur un AVOIR, les montants s'écrivent en positif sous
+                    « TOTAL À DÉDUIRE », comme sur le PDF IOBILL. Le document
+                    imprimait jusqu'ici des lignes positives et des totaux
+                    négatifs : incohérence relevée par l'audit, et divergence
+                    avec l'avoir transmis au même client. Le sens de l'opération
+                    est porté par le titre AVOIR et par le libellé du total, pas
+                    par un signe moins au milieu d'une cascade. */}
                 {c.avecTva ? (
                   <>
                     {/* v8.178 — Cascade dans l'ordre où elle se lit et se
@@ -5438,15 +5452,15 @@ function PrintDoc({ order, dealer, onClose, viewMode, livrePolice }) {
                         le pont transmet à IOBILL puis à la PDP.
                         Le client négocie en TTC : on rappelle son montant. */}
                     {c.remAmt > 0 && <>
-                      <div className="pdoc-trow"><span>Sous-total HT</span><span>{fmtDec(c.htBrut)}</span></div>
+                      <div className="pdoc-trow"><span>Sous-total HT</span><span>{fmtDec(mntDoc(c.htBrut))}</span></div>
                       <div className="pdoc-trow" style={{ color: "#c79528" }}>
                         <span>Remise accordée <span style={{ fontSize: 9, opacity: 0.75 }}>(soit {fmtDec(c.remAmt)} TTC)</span></span>
-                        <span>{fmtDec(-c.remAmtHt)}</span>
+                        <span>{fmtDec(-Math.abs(c.remAmtHt))}</span>
                       </div>
                     </>}
-                    <div className="pdoc-trow"><span>{c.remAmt > 0 ? "Total HT net" : "Montant HT"}</span><span>{fmtDec(c.ht)}</span></div>
-                    <div className="pdoc-trow"><span>TVA {c.tvaPct || 20}%</span><span>{fmtDec(c.tvaAmt)}</span></div>
-                    <div className="pdoc-trow big"><span>TOTAL TTC</span><span>{fmtDec(c.ttc)}</span></div>
+                    <div className="pdoc-trow"><span>{c.remAmt > 0 ? "Total HT net" : "Montant HT"}</span><span>{fmtDec(mntDoc(c.ht))}</span></div>
+                    <div className="pdoc-trow"><span>TVA {c.tvaPct || 20}%</span><span>{fmtDec(mntDoc(c.tvaAmt))}</span></div>
+                    <div className="pdoc-trow big"><span>{libelleTotal}</span><span>{fmtDec(mntDoc(c.ttc))}</span></div>
                   </>
                 ) : (
                   <>
@@ -5458,17 +5472,17 @@ function PrintDoc({ order, dealer, onClose, viewMode, livrePolice }) {
                         TVA vient s'y ajouter, ou qu'il pourrait la déduire.
                         Seuls les frais sont un vrai HT, et leur ligne le dit. */}
                     {c.remAmt > 0 && <>
-                      <div className="pdoc-trow"><span>Sous-total</span><span>{fmtDec(c.htBrut)}</span></div>
-                      <div className="pdoc-trow" style={{ color: "#c79528" }}><span>Remise accordée</span><span>{fmtDec(-c.remAmtHt)}</span></div>
+                      <div className="pdoc-trow"><span>Sous-total</span><span>{fmtDec(mntDoc(c.htBrut))}</span></div>
+                      <div className="pdoc-trow" style={{ color: "#c79528" }}><span>Remise accordée</span><span>{fmtDec(-Math.abs(c.remAmtHt))}</span></div>
                     </>}
-                    <div className="pdoc-trow"><span>{c.remAmt > 0 ? "Net après remise" : "Sous-total"}</span><span>{fmtDec(c.ht)}</span></div>
-                    {c.tvaAmt > 0 && <div className="pdoc-trow"><span>TVA {c.tvaPct || 20}% (frais uniquement)</span><span>{fmtDec(c.tvaAmt)}</span></div>}
+                    <div className="pdoc-trow"><span>{c.remAmt > 0 ? "Net après remise" : "Sous-total"}</span><span>{fmtDec(mntDoc(c.ht))}</span></div>
+                    {Math.abs(c.tvaAmt) > 0 && <div className="pdoc-trow"><span>TVA {c.tvaPct || 20}% (frais uniquement)</span><span>{fmtDec(mntDoc(c.tvaAmt))}</span></div>}
                     {/* v8.178 — Le gris clair d'origine ne survivait ni à l'écran
                         ni à l'impression. v8.179 — Version courte : la case ne
                         fait que 260 px, la mention complète est en bande sous
                         les totaux. */}
                     <div className="pdoc-trow" style={{ fontSize: 10, color: "#5a5a66" }}><span>TVA sur la marge</span><span>Art. 297 A CGI</span></div>
-                    <div className="pdoc-trow big"><span>TOTAL TTC</span><span>{fmtDec(c.ttc)}</span></div>
+                    <div className="pdoc-trow big"><span>{libelleTotal}</span><span>{fmtDec(mntDoc(c.ttc))}</span></div>
                   </>
                 )}
                 {/* v8.49.11 — Bloc DÉBOURS + TOTAL À PAYER (art. 267 II 2° CGI)
