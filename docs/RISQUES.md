@@ -114,6 +114,21 @@ Deux points en revanche sur le cycle de vie :
   Corrigé : le webhook lit les lignes touchées et journalise une alerte
   explicite quand il n'y en a aucune.
 
+**Réception des factures d'achat — signature solide, rejeu possible.** La
+vérification Svix est bien faite : HMAC-SHA256, comparaison en temps constant
+avec contrôle de longueur, toutes les signatures fournies essayées.
+
+Mais rien ne vérifiait l'**âge** du message, et rien ne dédupliquait : Resend
+rejoue un webhook tant qu'il n'a pas reçu de 2xx, si bien qu'un simple timeout
+après l'enregistrement recréait les achats. **Des achats en double gonflent la
+TVA déductible** du bloc 3 de la déclaration — une erreur en faveur de
+l'exploitant, donc la mauvaise direction en contrôle. Ce n'est même pas une
+attaque : c'est le fonctionnement normal d'un webhook.
+
+Corrigé : tolérance de cinq minutes sur l'horodatage (recommandation Svix) et
+mémorisation de l'identifiant de message, unicisé en base. Un rejeu répond
+désormais 200 sans rien recréer.
+
 ## Ce qui est solide, et mérite d'être dit
 
 **La facture ordinaire.** Le chemin réellement emprunté est ressorti de l'audit
