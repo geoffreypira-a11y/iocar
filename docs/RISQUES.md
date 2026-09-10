@@ -37,6 +37,29 @@ mais que personne n'emprunte encore.
 
 ---
 
+## Zones ouvertes après coup
+
+**Isolation entre garages — close, propre.** RLS active sur les 52 tables des
+deux bases, au moins une politique sur chacune, et les règles filtrent bien par
+`auth.uid()`. Une seule faiblesse, de portée intra-ticket : la politique
+`ticket_messages_update_read` autorise l'abonné à modifier **n'importe quelle
+colonne** d'un message de son propre ticket — la RLS travaille à la ligne, pas
+à la colonne. Il pourrait réécrire une réponse de l'admin. Aucune fuite entre
+garages. Correctif en deux lignes de privilèges (`GRANT UPDATE (read_at)`), la
+seule colonne que le code met à jour.
+
+**Encaissements — justes.** Vérifié sur 864 combinaisons (acompte, reprise,
+paiements multiples, débours) : IO CAR et IO BILL comptent le **même encaissé**,
+zéro écart. La reprise est bien portée en règlement et non en réduction de prix.
+
+Un seul défaut, de libellé mais sur un document client : la facture portait
+« Valeur de reprise **déduite du total** » dans son bloc reprise, alors que le
+bloc des totaux du même document porte « Reprise véhicule (règlement en
+nature) » **après** le TOTAL TTC. Depuis la v8.154 la reprise n'est pas une
+réduction de prix — la base imposable reste le prix entier (art. 266-1-a du
+CGI). Écrire « déduite du total » laissait entendre une TVA calculée sur un
+prix diminué. Corrigé des deux côtés, document et champ de saisie.
+
 ## Ce qui est solide, et mérite d'être dit
 
 **La facture ordinaire.** Le chemin réellement emprunté est ressorti de l'audit

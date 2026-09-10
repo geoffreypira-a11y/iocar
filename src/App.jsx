@@ -4828,7 +4828,9 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
                   <input className="form-input" value={form.reprise_vin || ""} onChange={e => set("reprise_vin", e.target.value)} placeholder="17 caractères" />
                 </div>
                 <div className="form-group full">
-                  <label className="form-label" style={{ color: "var(--gold)" }}>Valeur de reprise TTC (€) · déduite du total</label>
+                  {/* v8.189 — Même correction que sur le document : la reprise
+                      vient en règlement, pas en réduction du prix. */}
+                  <label className="form-label" style={{ color: "var(--gold)" }}>Valeur de reprise TTC (€) · portée aux règlements</label>
                   <input
                     className="form-input"
                     type="number"
@@ -5608,7 +5610,17 @@ function PrintDoc({ order, dealer, onClose, viewMode, livrePolice }) {
                     <div style={{ gridColumn: "1 / -1" }}><span style={{ color: "#888" }}>N° de série : </span><strong style={{ fontFamily: "monospace" }}>{order.reprise_vin}</strong></div>
                   )}
                   <div style={{ gridColumn: "1 / -1", marginTop: 4, paddingTop: 6, borderTop: "1px solid #e8d9a8" }}>
-                    <span style={{ color: "#888" }}>Valeur de reprise déduite du total : </span>
+                    {/* v8.189 — « déduite du total » contredisait le bloc des
+                        totaux du même document, qui porte « Reprise véhicule
+                        (règlement en nature) » APRÈS le TOTAL TTC. Depuis la
+                        v8.154 la reprise n'est pas une réduction de prix : la
+                        base imposable reste le prix entier (art. 266-1-a du
+                        CGI, tout ce qui est reçu en contrepartie, paiement en
+                        nature compris). Écrire « déduite du total » laissait
+                        entendre que la TVA avait été calculée sur un prix
+                        diminué — ce qui n'est pas le cas, et se lit mal en
+                        contrôle. */}
+                    <span style={{ color: "#888" }}>Valeur de reprise, réglée en nature : </span>
                     <strong style={{ color: "#8a6a1a", fontSize: 12 }}>{fmtDec(parseFloat(order.reprise_valeur) || 0)}</strong>
                   </div>
                 </div>
