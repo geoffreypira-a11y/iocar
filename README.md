@@ -50,6 +50,10 @@ vercel.com → votre projet → Settings → Domains → Add → iocar.online
 
 ## Mémos techniques
 
+- [`docs/AUDIT-FACTURATION-COMPLET.md`](docs/AUDIT-FACTURATION-COMPLET.md) —
+  **l'audit de référence** : la chaîne facture et avoir reprise depuis le début
+  (septembre 2026), état de chaque maillon et ce qui reste ouvert. Les trois
+  documents ci-dessous en sont les annexes.
 - [`docs/AUDIT-AVOIRS.md`](docs/AUDIT-AVOIRS.md) — audit des avoirs (septembre
   2026) : calcul, alignement des deux documents, et transmission à la PDP.
 - [`docs/AUDIT-FACTURATION.md`](docs/AUDIT-FACTURATION.md) — audit de la chaîne
