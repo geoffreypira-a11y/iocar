@@ -60,6 +60,19 @@ réduction de prix — la base imposable reste le prix entier (art. 266-1-a du
 CGI). Écrire « déduite du total » laissait entendre une TVA calculée sur un
 prix diminué. Corrigé des deux côtés, document et champ de saisie.
 
+**CERFA — mesurés, et sains.** Les 24 champs de texte libre du 15776*02 ont été
+mesurés au point près : la fonction de remplissage réduit la police jusqu'à 5 pt
+pour faire tenir une valeur longue, et les seuls champs étroits sont le numéro
+de voie et le kilométrage, courts par nature. L'identité tient 60 caractères à
+pleine taille, 109 avant débordement. Aucun risque de troncature en usage réel.
+
+Un défaut en revanche : **rien ne signalait une donnée manquante**. `txt()` et
+`cases()` ignorent une valeur vide, si bien qu'un VIN ou un n° de formule absent
+laissait des cases blanches sans un mot. L'abonné le découvrait au refus de la
+préfecture, après le départ du client. Un bandeau nomme désormais ce qui manque
+— sans bloquer, car on imprime parfois sciemment un document à compléter à la
+main.
+
 ## Ce qui est solide, et mérite d'être dit
 
 **La facture ordinaire.** Le chemin réellement emprunté est ressorti de l'audit

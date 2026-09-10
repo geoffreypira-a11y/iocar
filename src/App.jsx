@@ -5953,6 +5953,31 @@ function CerfaDocs({ order, dealer, vehicles, clients, onUpdateOrder, onClose })
   const current = TABS.find(t => t.key === tab);
   const pdfUrl = urls[tab];
 
+  // v8.190 — Contrôle de complétude avant téléchargement.
+  //
+  // Un CERFA se remplissait sans un mot : `txt()` et `cases()` ignorent
+  // simplement une valeur vide, si bien qu'un VIN ou un n° de formule absent
+  // laissait des cases blanches. L'abonné ne le découvrait qu'au refus de la
+  // préfecture, après le départ du client.
+  //
+  // On ne bloque pas — il existe des cas où l'on imprime sciemment un document
+  // à compléter à la main — mais on nomme ce qui manque.
+  const manquants = (() => {
+    const m = [];
+    const vide = (x) => !String(x ?? "").trim();
+    if (vide(v.plate)) m.push("immatriculation du véhicule");
+    if (vide(v.vin)) m.push("n° de série (VIN)");
+    if (vide(v.date_mise_en_circulation)) m.push("date de 1ʳᵉ mise en circulation");
+    if (vide(v.numero_formule)) m.push("n° de formule de la carte grise");
+    if (vide(buildIdentite(clientParty))) m.push("identité de l'acquéreur");
+    const adr = parseAddressOf(clientParty || {});
+    if (vide(adr.cp) || vide(adr.ville)) m.push("adresse de l'acquéreur (code postal et commune)");
+    if (vide(dealer?.name)) m.push("raison sociale de la concession");
+    const adrG = splitPostalAddress(dealer?.address || "");
+    if (vide(adrG.cp) || vide(adrG.ville)) m.push("adresse de la concession (code postal et commune)");
+    return m;
+  })();
+
   return (
     <div className="modal-bg" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal" style={{ maxWidth: 1000, width: "98vw", height: "92vh", display: "flex", flexDirection: "column" }}>
@@ -5983,6 +6008,20 @@ function CerfaDocs({ order, dealer, vehicles, clients, onUpdateOrder, onClose })
             <button className="close-btn" onClick={onClose}>x</button>
           </div>
         </div>
+
+        {manquants.length > 0 && (
+          <div style={{
+            flexShrink: 0, margin: "0 16px 10px", padding: "10px 14px",
+            background: "rgba(229,151,60,.10)", border: "1px solid rgba(229,151,60,.35)",
+            borderRadius: 8, fontSize: 12, color: "var(--text)", lineHeight: 1.6,
+          }}>
+            <strong style={{ color: "var(--orange)" }}>
+              ⚠️ {manquants.length === 1 ? "Une information manque" : `${manquants.length} informations manquent`}
+            </strong>{" "}
+            — les cases correspondantes sortiront vides et la préfecture peut refuser le dossier :
+            <div style={{ marginTop: 4, color: "var(--muted2)" }}>{manquants.join(" · ")}</div>
+          </div>
+        )}
 
         {/* Onglets — les trois CERFA du dossier, tous préremplis depuis la facture */}
         <div className="tabs" style={{ flexShrink: 0, padding: "0 16px" }}>
