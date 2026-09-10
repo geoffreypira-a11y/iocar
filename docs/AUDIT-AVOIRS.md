@@ -421,6 +421,34 @@ L'avoir total reçoit le motif qui se déduit (« Annulation de la facture … �
 garde son parcours en deux clics. Dans les deux cas les notes de la facture ne
 sont plus reprises.
 
+## A15 — Motifs proposés, et référence de la facture toujours visible 🟡
+
+Deux demandes de l'exploitant après coup, toutes deux justes.
+
+**Motifs proposés.** Ressaisir un motif à chaque geste commercial est une perte
+de temps et une source d'incohérence. La modale propose désormais des amorces
+en un clic, dans cet ordre :
+
+1. les **désignations de la facture** — « Remise sur Peugeot 208 (AA-123-BB) »,
+   « Frais de mise à disposition », « Carte grise » — puisque le geste porte sur
+   l'une d'elles neuf fois sur dix, et qu'elles ne s'affichent que si la facture
+   les contient ;
+2. les cas courants — geste commercial, remise en état à la charge du client,
+   annulation partielle, erreur de facturation.
+
+Toutes restent modifiables : ce sont des amorces, pas une liste fermée.
+
+**Référence de la facture.** Elle ne figurait, sur le document IO CAR, que dans
+le bandeau des mentions en pied de page — en corps 10, gris. Le PDF IO BILL, lui,
+la porte en en-tête depuis A4. Les deux documents s'alignent : la facture
+d'origine s'affiche maintenant **en en-tête de l'avoir IO CAR**, sous le numéro
+et la date, en gras.
+
+Elle figure donc, sur chaque document, à trois endroits qui se répondent :
+l'en-tête, la désignation de la ligne (« Avoir sur VEH-2026-0107 — … ») et le
+bandeau des mentions. Elle voyage aussi dans le Factur-X (BT-25, cf. A3). Le
+bloc « Motif » ne la répète pas : quatre rappels sur un A4, c'était un de trop.
+
 ## Avoir partiel : ce que ça produit
 
 Geste commercial de 1 000 € sur une vente de 24 180 € TTC, marge d'origine

@@ -3669,6 +3669,28 @@ function AvoirPartielModal({ order, totalTtc, onConfirm, onCancel }) {
   // conditions de garantie affichées comme motif d'annulation.
   // Un avoir partiel est un geste commercial : c'est le motif qui le justifie.
   const [motif, setMotif] = useState("");
+
+  // v8.185 — Motifs proposés en un clic. Les premiers reprennent les
+  // DÉSIGNATIONS de la facture — c'est sur l'une d'elles que porte le geste
+  // neuf fois sur dix — les suivants sont les cas courants. Tous restent
+  // modifiables : ce sont des amorces, pas une liste fermée.
+  const motifsProposes = (() => {
+    const vd = order.vehicle_data || {};
+    const veh = [vd.marque, vd.modele, vd.finition].filter(Boolean).join(" ")
+      || order.vehicle_label || "";
+    const plate = vd.plate || order.vehicle_plate || "";
+    const liste = [];
+    if (veh) liste.push(`Remise sur ${veh}${plate ? ` (${plate})` : ""}`);
+    if ((parseFloat(order.frais_mise_dispo) || 0) > 0) liste.push("Frais de mise à disposition");
+    if ((parseFloat(order.carte_grise) || 0) > 0) liste.push("Carte grise");
+    liste.push(
+      "Geste commercial",
+      "Remise en état à la charge du client",
+      "Annulation partielle de la vente",
+      "Erreur de facturation",
+    );
+    return liste;
+  })();
   const [error, setError] = useState("");
 
   const handleConfirm = () => {
@@ -3755,7 +3777,22 @@ function AvoirPartielModal({ order, totalTtc, onConfirm, onCancel }) {
               outline: "none",
             }}
           />
-          <p style={{ fontSize: 11, color: "var(--muted)", margin: "6px 0 0 0", lineHeight: 1.5 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+            {motifsProposes.map(m => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => { setMotif(m); setError(""); }}
+                style={{
+                  fontSize: 11, padding: "4px 9px", borderRadius: 999, cursor: "pointer",
+                  background: motif === m ? "rgba(212,168,67,.18)" : "rgba(255,255,255,.04)",
+                  border: `1px solid ${motif === m ? "var(--gold)" : "rgba(255,255,255,.12)"}`,
+                  color: motif === m ? "var(--gold)" : "var(--muted2)",
+                }}
+              >{m}</button>
+            ))}
+          </div>
+          <p style={{ fontSize: 11, color: "var(--muted)", margin: "8px 0 0 0", lineHeight: 1.5 }}>
             Il figure sur l'avoir remis au client et sur celui transmis à l'administration.
           </p>
           {error && (
@@ -5212,7 +5249,16 @@ function PrintDoc({ order, dealer, onClose, viewMode, livrePolice }) {
                 <div className="pdoc-type">{order.type === "facture" ? "FACTURE" : order.type === "avoir" ? "AVOIR" : "BON DE COMMANDE"}</div>
                 <div className="pdoc-ref">N° {order.ref}</div>
                 <div className="pdoc-ref">Date : {order.date_creation}</div>
-                {order.date_echeance && <div className="pdoc-ref">Livraison le : {order.date_echeance}</div>}
+                {/* v8.185 — La facture annulée, en en-tête et non plus seulement
+                    dans le bandeau des mentions en pied de page. C'est la
+                    référence qu'on cherche en premier sur un avoir, et c'est là
+                    que le PDF IOBILL la porte : les deux documents s'alignent. */}
+                {order.type === "avoir" && order.facture_origine && (
+                  <div className="pdoc-ref" style={{ color: "#1a1a1a", fontWeight: 700 }}>
+                    Facture d'origine : {order.facture_origine}
+                  </div>
+                )}
+                {order.date_echeance && order.type !== "avoir" && <div className="pdoc-ref">Livraison le : {order.date_echeance}</div>}
 
                 {/* Bloc CLIENT directement sous FACTURE/Ref pour gagner de la place verticale */}
                 <div style={{ marginTop: 16, paddingTop: 12, borderTop: "1px solid #e8e8e8", textAlign: "right" }}>
@@ -5493,6 +5539,8 @@ function PrintDoc({ order, dealer, onClose, viewMode, livrePolice }) {
                 24 180 € ne s'explique pas. IOBILL l'imprime déjà de son côté. */}
             {order.type === "avoir" && order.motif_avoir && (
               <div className="pdoc-section" style={{ marginTop: 12, padding: "8px 14px", background: "#f9f8f5", borderRadius: 6, fontSize: 11, color: "#555", border: "1px solid #e8e8e8" }}>
+                {/* La facture concernée est déjà en en-tête, sur la ligne du
+                    tableau et dans le bandeau des mentions : inutile ici. */}
                 <strong>Motif de l'avoir :</strong> {order.motif_avoir}
               </div>
             )}
