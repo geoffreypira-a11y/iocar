@@ -6384,8 +6384,27 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
   // v8.41 — Helper réutilisable : pousse un avoir à IOBILL (draft ou finalize selon mode)
   // mode : 'draft' (à la création) ou 'finalize' (au remboursement complet, ou auto)
   const pushCreditNoteToIobill = (avoir, mode) => {
-    if (!token || !dealer?.iobill_auto_push || !dealer?.iobill_company_id) return;
-    if (!avoir.facture_origine) return;
+    // v8.186 — Ces trois sorties étaient muettes. Un avoir non transmis parce
+    // que la liaison est coupée ou l'envoi automatique désactivé restait
+    // marqué « Non transmise » sans que rien n'explique pourquoi. On inscrit
+    // désormais la raison dans `iobill_sync_error` : la pastille passe en
+    // « Échec transmission » et propose « Réessayer ».
+    const noteEchec = (raison) => setOrders(prev => (prev || []).map(x =>
+      x.id === avoir.id ? { ...x, iobill_sync_error: raison, iobill_synced_at: null } : x
+    ));
+    if (!token) return;
+    if (!avoir.facture_origine) {
+      noteEchec("Avoir sans facture d'origine — impossible de le transmettre.");
+      return;
+    }
+    if (!dealer?.iobill_company_id) {
+      noteEchec("Compte IO BILL non lié — voir Paramètres.");
+      return;
+    }
+    if (!dealer?.iobill_auto_push) {
+      noteEchec("Envoi automatique désactivé — utilisez « Transmettre l'avoir ».");
+      return;
+    }
     fetch("/api/iobill-bridge", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
@@ -6405,10 +6424,17 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
           } : x));
           console.log(`📝 Avoir ${j.status === 'draft' ? 'brouillon' : 'émis'} poussé à IOBILL :`, j.credit_note_number);
         } else if (j.error) {
-          console.warn("Push avoir IOBILL : erreur", j.error);
+          // Le détail compte : « Facture d'origine introuvable côté IOBILL »
+          // se corrige en transmettant la facture d'abord, ce qu'un simple
+          // « Non transmise » ne laissait pas deviner.
+          noteEchec(j.details ? `${j.error} — ${j.details}` : j.error);
+          console.warn("Push avoir IOBILL : erreur", j.error, j.details || "");
         }
       })
-      .catch(e => console.warn("Push avoir IOBILL : échec réseau", e));
+      .catch(e => {
+        noteEchec(`Échec réseau : ${e?.message || e}`);
+        console.warn("Push avoir IOBILL : échec réseau", e);
+      });
   };
 
   const save = (o) => {
@@ -6768,6 +6794,24 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
               iobill_pdf_url: null,
               iobill_sync_error: null,
               iobill_synced_at: null,
+              // v8.186 — Et les marqueurs PDP, oubliés par le reset ci-dessus.
+              //
+              // Le clone `{...o}` emportait `facturx_status` de la facture
+              // d'origine. Or l'écran calcule :
+              //
+              //   alreadyTransmitted = fxStatus === "transmitted" || …
+              //
+              // Un avoir né d'une facture transmise se croyait donc déjà chez
+              // la PDP : le bouton « Transmettre l'avoir » disparaissait,
+              // remplacé par « ✅ Dans le circuit SUPER PDP », alors que
+              // l'avoir n'était jamais parti. L'infobulle affichait les deux
+              // messages contradictoires à la fois, et l'avoir restait
+              // définitivement bloqué — sans erreur, sans recours.
+              facturx_status: null,
+              pdp_status: null,
+              pdp_transmission_id: null,
+              pdp_transmitted_at: null,
+              pdp_last_poll_at: null,
             };
             setOrders([...orders, avoir]);
             // v8.183 — L'avoir part à IO BILL dès sa création.
@@ -6833,6 +6877,24 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
               iobill_pdf_url: null,
               iobill_sync_error: null,
               iobill_synced_at: null,
+              // v8.186 — Et les marqueurs PDP, oubliés par le reset ci-dessus.
+              //
+              // Le clone `{...o}` emportait `facturx_status` de la facture
+              // d'origine. Or l'écran calcule :
+              //
+              //   alreadyTransmitted = fxStatus === "transmitted" || …
+              //
+              // Un avoir né d'une facture transmise se croyait donc déjà chez
+              // la PDP : le bouton « Transmettre l'avoir » disparaissait,
+              // remplacé par « ✅ Dans le circuit SUPER PDP », alors que
+              // l'avoir n'était jamais parti. L'infobulle affichait les deux
+              // messages contradictoires à la fois, et l'avoir restait
+              // définitivement bloqué — sans erreur, sans recours.
+              facturx_status: null,
+              pdp_status: null,
+              pdp_transmission_id: null,
+              pdp_transmitted_at: null,
+              pdp_last_poll_at: null,
             };
             setOrders([...orders, avoir]);
             // v8.183 — L'avoir part à IO BILL dès sa création.
