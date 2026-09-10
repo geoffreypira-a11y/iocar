@@ -1192,6 +1192,12 @@ function buildReprisePayment(order, sign = 1) {
 // qui doit figurer sur le document imprimé et dans la facture électronique.
 const DELAI_REGLEMENT_DEFAUT = 'Paiement comptant, au plus tard à la remise du véhicule.';
 
+// v8.186 — Un avoir ne se règle pas, il se rembourse. Le délai de règlement
+// d'une facture n'y a aucun sens : c'est le garage qui doit, et aucun véhicule
+// ne change de mains. Doit rester identique à MENTION_REGLEMENT_AVOIR dans
+// src/App.jsx — la même phrase doit figurer sur les deux documents.
+const MENTION_REGLEMENT_AVOIR = 'Montant à rembourser au client, ou à valoir sur une prochaine facture.';
+
 // v8.183 — Payload client, PARTAGÉ entre la facture et l'avoir.
 //
 // Les deux le construisaient séparément, et celui de l'avoir avait divergé :
@@ -1817,7 +1823,7 @@ function mapOrderToCreditNote(order, calc, overrideStatus = null) {
       livre_police: sanitizeString(order.livre_police_ref) || null
     },
     business_mentions: buildOrderSpecificMentions(order),
-    payment_terms: DELAI_REGLEMENT_DEFAUT,
+    payment_terms: MENTION_REGLEMENT_AVOIR,
     // v8.182 — Régime, pour que le PDF de l'avoir porte la mention art. 297 A
     // comme celui de la facture : `credit_notes` ne stockait aucun régime, la
     // mention y était donc toujours absente.

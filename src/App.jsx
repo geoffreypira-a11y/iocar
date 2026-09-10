@@ -735,6 +735,12 @@ const fmtDec = (n) => Number(n || 0).toLocaleString("fr-FR", { style: "currency"
 // le : » sur le document : c'est une date de livraison, pas une échéance de
 // paiement. Les mapper l'un sur l'autre transmettrait une date fausse.
 const DELAI_REGLEMENT_DEFAUT = "Paiement comptant, au plus tard à la remise du véhicule.";
+
+// v8.186 — Un avoir ne se règle pas, il se rembourse : « Paiement comptant, au
+// plus tard à la remise du véhicule » n'y a aucun sens, pas plus que les
+// pénalités de retard ou l'indemnité de recouvrement des conditions du garage.
+// C'est le garage qui doit de l'argent, et aucun véhicule ne change de mains.
+const MENTION_REGLEMENT_AVOIR = "Montant à rembourser au client, ou à valoir sur une prochaine facture.";
 const delaiReglement = (dealer) => String(dealer?.delai_reglement || "").trim() || DELAI_REGLEMENT_DEFAUT;
 
 // ─── DATES ──────────────────────────────────────────────────
@@ -5661,9 +5667,15 @@ function PrintDoc({ order, dealer, onClose, viewMode, livrePolice }) {
                     <strong style={{ color: "#888", letterSpacing: 1, textTransform: "uppercase", fontSize: 8 }}>Conditions de règlement</strong><br />
                     {/* v8.180 — Le délai de règlement est une mention obligatoire :
                         il s'affiche toujours, et avant le texte libre, qu'un
-                        concessionnaire a pu réécrire sans l'y remettre. */}
-                    <span style={{ color: "#555", fontWeight: 700 }}>{delaiReglement(dealer)}</span><br />
-                    {(dealer?.conditions_reglement || "TVA acquittée sur les encaissements.\nTout retard de paiement entraîne des pénalités au taux légal en vigueur (art. L441-10 C. com.).\nIndemnité forfaitaire de recouvrement : 40 €.").split("\n").map((l, i) => <span key={i}>{l}<br /></span>)}
+                        concessionnaire a pu réécrire sans l'y remettre.
+                        v8.186 — Sur un avoir, ni ce délai ni les conditions du
+                        garage (pénalités de retard, indemnité de recouvrement)
+                        n'ont de sens : c'est le garage qui doit. Le régime de
+                        TVA, lui, reste annoncé dans le bandeau au-dessus. */}
+                    <span style={{ color: "#555", fontWeight: 700 }}>
+                      {estAvoir ? MENTION_REGLEMENT_AVOIR : delaiReglement(dealer)}
+                    </span><br />
+                    {!estAvoir && (dealer?.conditions_reglement || "TVA acquittée sur les encaissements.\nTout retard de paiement entraîne des pénalités au taux légal en vigueur (art. L441-10 C. com.).\nIndemnité forfaitaire de recouvrement : 40 €.").split("\n").map((l, i) => <span key={i}>{l}<br /></span>)}
                   </div>
                   <div style={{ fontSize: 9, color: "#aaa", lineHeight: 1.8, flex: 1 }}>
                     <strong style={{ color: "#888", letterSpacing: 1, textTransform: "uppercase", fontSize: 8 }}>Informations complémentaires</strong><br />

@@ -449,6 +449,21 @@ l'en-tête, la désignation de la ligne (« Avoir sur VEH-2026-0107 — … ») 
 bandeau des mentions. Elle voyage aussi dans le Factur-X (BT-25, cf. A3). Le
 bloc « Motif » ne la répète pas : quatre rappels sur un A4, c'était un de trop.
 
+## A16 — Les conditions de règlement d'une facture sur un avoir 🟡
+
+Introduit par la correction F4 de l'audit facturation, puis recopié tel quel
+sur l'avoir : **« Paiement comptant, au plus tard à la remise du véhicule. »**
+figurait sur un document où c'est le garage qui doit, et où aucun véhicule ne
+change de mains.
+
+Les conditions libres du garage sont du même ordre : pénalités de retard et
+indemnité forfaitaire de recouvrement de 40 € n'ont aucun sens sur un avoir.
+
+**Correctif** : sur un avoir, les deux documents portent
+**« Montant à rembourser au client, ou à valoir sur une prochaine facture. »**
+— et le bloc de conditions libres du garage ne s'affiche pas. Le régime de TVA,
+lui, reste annoncé dans le bandeau des mentions au-dessus, où il figurait déjà.
+
 ## Avoir partiel : ce que ça produit
 
 Geste commercial de 1 000 € sur une vente de 24 180 € TTC, marge d'origine
