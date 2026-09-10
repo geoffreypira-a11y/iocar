@@ -50,6 +50,8 @@ vercel.com → votre projet → Settings → Domains → Add → iocar.online
 
 ## Mémos techniques
 
+- [`docs/AUDIT-AVOIRS.md`](docs/AUDIT-AVOIRS.md) — audit des avoirs (septembre
+  2026) : calcul, alignement des deux documents, et transmission à la PDP.
 - [`docs/AUDIT-FACTURATION.md`](docs/AUDIT-FACTURATION.md) — audit de la chaîne
   IO CAR → IO BILL (septembre 2026) : conformité des mentions, et comparaison au
   centime de ce qu'IO CAR imprime et de ce qu'IO BILL déclare.

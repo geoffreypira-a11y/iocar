@@ -735,6 +735,12 @@ const fmtDec = (n) => Number(n || 0).toLocaleString("fr-FR", { style: "currency"
 // le : » sur le document : c'est une date de livraison, pas une échéance de
 // paiement. Les mapper l'un sur l'autre transmettrait une date fausse.
 const DELAI_REGLEMENT_DEFAUT = "Paiement comptant, au plus tard à la remise du véhicule.";
+
+// v8.186 — Un avoir ne se règle pas, il se rembourse : « Paiement comptant, au
+// plus tard à la remise du véhicule » n'y a aucun sens, pas plus que les
+// pénalités de retard ou l'indemnité de recouvrement des conditions du garage.
+// C'est le garage qui doit de l'argent, et aucun véhicule ne change de mains.
+const MENTION_REGLEMENT_AVOIR = "Montant à rembourser au client, ou à valoir sur une prochaine facture.";
 const delaiReglement = (dealer) => String(dealer?.delai_reglement || "").trim() || DELAI_REGLEMENT_DEFAUT;
 
 // ─── DATES ──────────────────────────────────────────────────
@@ -3663,6 +3669,34 @@ function AvoirChoiceModal({ order, totalTtc, onTotal, onPartiel, onCancel }) {
 
 function AvoirPartielModal({ order, totalTtc, onConfirm, onCancel }) {
   const [montant, setMontant] = useState("");
+  // v8.184 — Motif. Le champ `motif_avoir` était lu par le pont mais n'existait
+  // dans aucun formulaire : le motif imprimé sur l'avoir IOBILL retombait sur
+  // les notes de la facture, héritées du clone — soit, en pratique, ses
+  // conditions de garantie affichées comme motif d'annulation.
+  // Un avoir partiel est un geste commercial : c'est le motif qui le justifie.
+  const [motif, setMotif] = useState("");
+
+  // v8.185 — Motifs proposés en un clic. Les premiers reprennent les
+  // DÉSIGNATIONS de la facture — c'est sur l'une d'elles que porte le geste
+  // neuf fois sur dix — les suivants sont les cas courants. Tous restent
+  // modifiables : ce sont des amorces, pas une liste fermée.
+  const motifsProposes = (() => {
+    const vd = order.vehicle_data || {};
+    const veh = [vd.marque, vd.modele, vd.finition].filter(Boolean).join(" ")
+      || order.vehicle_label || "";
+    const plate = vd.plate || order.vehicle_plate || "";
+    const liste = [];
+    if (veh) liste.push(`Remise sur ${veh}${plate ? ` (${plate})` : ""}`);
+    if ((parseFloat(order.frais_mise_dispo) || 0) > 0) liste.push("Frais de mise à disposition");
+    if ((parseFloat(order.carte_grise) || 0) > 0) liste.push("Carte grise");
+    liste.push(
+      "Geste commercial",
+      "Remise en état à la charge du client",
+      "Annulation partielle de la vente",
+      "Erreur de facturation",
+    );
+    return liste;
+  })();
   const [error, setError] = useState("");
 
   const handleConfirm = () => {
@@ -3675,7 +3709,11 @@ function AvoirPartielModal({ order, totalTtc, onConfirm, onCancel }) {
       setError(`Le montant ne peut pas dépasser le total TTC (${fmtDec(totalTtc)}).`);
       return;
     }
-    onConfirm(val);
+    if (!motif.trim()) {
+      setError("Indiquez le motif : il figure sur l'avoir remis au client.");
+      return;
+    }
+    onConfirm(val, motif.trim());
   };
 
   return (
@@ -3713,7 +3751,7 @@ function AvoirPartielModal({ order, totalTtc, onConfirm, onCancel }) {
             value={montant}
             onChange={e => { setMontant(e.target.value); setError(""); }}
             onKeyDown={e => { if (e.key === "Enter") handleConfirm(); }}
-            placeholder="Ex : 500.00"
+            placeholder="Ex : 1000.00"
             autoFocus
             style={{
               width: "100%",
@@ -3726,6 +3764,43 @@ function AvoirPartielModal({ order, totalTtc, onConfirm, onCancel }) {
               outline: "none",
             }}
           />
+          <label style={{ display: "block", fontSize: 13, color: "var(--muted)", margin: "14px 0 6px" }}>
+            Motif de l'avoir
+          </label>
+          <input
+            value={motif}
+            onChange={e => { setMotif(e.target.value); setError(""); }}
+            onKeyDown={e => { if (e.key === "Enter") handleConfirm(); }}
+            placeholder="Ex : geste commercial — remise en état à la charge du client"
+            style={{
+              width: "100%",
+              padding: "10px 12px",
+              fontSize: 14,
+              background: "rgba(255,255,255,.05)",
+              border: `1px solid ${error && !motif.trim() ? "var(--red)" : "rgba(255,255,255,.1)"}`,
+              borderRadius: 8,
+              color: "var(--text)",
+              outline: "none",
+            }}
+          />
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+            {motifsProposes.map(m => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => { setMotif(m); setError(""); }}
+                style={{
+                  fontSize: 11, padding: "4px 9px", borderRadius: 999, cursor: "pointer",
+                  background: motif === m ? "rgba(212,168,67,.18)" : "rgba(255,255,255,.04)",
+                  border: `1px solid ${motif === m ? "var(--gold)" : "rgba(255,255,255,.12)"}`,
+                  color: motif === m ? "var(--gold)" : "var(--muted2)",
+                }}
+              >{m}</button>
+            ))}
+          </div>
+          <p style={{ fontSize: 11, color: "var(--muted)", margin: "8px 0 0 0", lineHeight: 1.5 }}>
+            Il figure sur l'avoir remis au client et sur celui transmis à l'administration.
+          </p>
           {error && (
             <p style={{ fontSize: 12, color: "var(--red)", margin: "8px 0 0 0" }}>{error}</p>
           )}
@@ -5040,6 +5115,13 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
 ═══════════════════════════════════════════════════════════════ */
 function PrintDoc({ order, dealer, onClose, viewMode, livrePolice }) {
   const c = calcOrder(order);
+  // v8.185 — Un avoir s'écrit en montants positifs, sous « TOTAL À DÉDUIRE ».
+  // calcOrder les rend signés (sign = -1) pour le tableau de bord, qui en a
+  // besoin ; le document, lui, porte le sens dans son titre et son libellé de
+  // total — comme le PDF IOBILL du même avoir.
+  const estAvoir = order.type === "avoir";
+  const mntDoc = (v) => (estAvoir ? Math.abs(v) : v);
+  const libelleTotal = estAvoir ? "TOTAL À DÉDUIRE" : "TOTAL TTC";
   const [sigVendeur, setSigVendeur] = useState(null);
   const [sigClient, setSigClient] = useState(null);
   const [sigMode, setSigMode] = useState("papier"); // BC par défaut papier
@@ -5180,7 +5262,16 @@ function PrintDoc({ order, dealer, onClose, viewMode, livrePolice }) {
                 <div className="pdoc-type">{order.type === "facture" ? "FACTURE" : order.type === "avoir" ? "AVOIR" : "BON DE COMMANDE"}</div>
                 <div className="pdoc-ref">N° {order.ref}</div>
                 <div className="pdoc-ref">Date : {order.date_creation}</div>
-                {order.date_echeance && <div className="pdoc-ref">Livraison le : {order.date_echeance}</div>}
+                {/* v8.185 — La facture annulée, en en-tête et non plus seulement
+                    dans le bandeau des mentions en pied de page. C'est la
+                    référence qu'on cherche en premier sur un avoir, et c'est là
+                    que le PDF IOBILL la porte : les deux documents s'alignent. */}
+                {order.type === "avoir" && order.facture_origine && (
+                  <div className="pdoc-ref" style={{ color: "#1a1a1a", fontWeight: 700 }}>
+                    Facture d'origine : {order.facture_origine}
+                  </div>
+                )}
+                {order.date_echeance && order.type !== "avoir" && <div className="pdoc-ref">Livraison le : {order.date_echeance}</div>}
 
                 {/* Bloc CLIENT directement sous FACTURE/Ref pour gagner de la place verticale */}
                 <div style={{ marginTop: 16, paddingTop: 12, borderTop: "1px solid #e8e8e8", textAlign: "right" }}>
@@ -5295,11 +5386,20 @@ function PrintDoc({ order, dealer, onClose, viewMode, livrePolice }) {
                     donc exactement le « Sous-total HT » des totaux. */}
                 <tr>
                   <td style={{ fontSize: 11 }}>
-                    VENTE VÉHICULE - {(() => {
+                    {/* v8.182 — Sur un AVOIR, « VENTE VÉHICULE » était un
+                        contresens : le document annule la vente, il ne la
+                        constate pas. Même libellé que celui transmis à IOBILL
+                        (mapOrderToCreditNote), pour que les deux documents se
+                        lisent pareil. */}
+                    {(() => {
                       const vd = order.vehicle_data || {};
                       const vehLabel = [vd.marque, vd.modele, vd.finition].filter(Boolean).join(" ") || (order.vehicle_label || "Véhicule");
                       const plate = vd.plate || order.vehicle_plate || "";
-                      return plate ? `${vehLabel} (${plate})` : vehLabel;
+                      const designation = plate ? `${vehLabel} (${plate})` : vehLabel;
+                      if (order.type !== "avoir") return `VENTE VÉHICULE - ${designation}`;
+                      return order.facture_origine
+                        ? `Avoir sur ${order.facture_origine} — ${designation}`
+                        : `Avoir — ${designation}`;
                     })()}
                   </td>
                   <td style={{ textAlign: "center", fontSize: 11 }}>1</td>
@@ -5341,6 +5441,13 @@ function PrintDoc({ order, dealer, onClose, viewMode, livrePolice }) {
                 Cohérent avec la présentation IOBILL. */}
             <div className="pdoc-totals">
               <div className="pdoc-totals-box">
+                {/* v8.185 — Sur un AVOIR, les montants s'écrivent en positif sous
+                    « TOTAL À DÉDUIRE », comme sur le PDF IOBILL. Le document
+                    imprimait jusqu'ici des lignes positives et des totaux
+                    négatifs : incohérence relevée par l'audit, et divergence
+                    avec l'avoir transmis au même client. Le sens de l'opération
+                    est porté par le titre AVOIR et par le libellé du total, pas
+                    par un signe moins au milieu d'une cascade. */}
                 {c.avecTva ? (
                   <>
                     {/* v8.178 — Cascade dans l'ordre où elle se lit et se
@@ -5351,15 +5458,15 @@ function PrintDoc({ order, dealer, onClose, viewMode, livrePolice }) {
                         le pont transmet à IOBILL puis à la PDP.
                         Le client négocie en TTC : on rappelle son montant. */}
                     {c.remAmt > 0 && <>
-                      <div className="pdoc-trow"><span>Sous-total HT</span><span>{fmtDec(c.htBrut)}</span></div>
+                      <div className="pdoc-trow"><span>Sous-total HT</span><span>{fmtDec(mntDoc(c.htBrut))}</span></div>
                       <div className="pdoc-trow" style={{ color: "#c79528" }}>
                         <span>Remise accordée <span style={{ fontSize: 9, opacity: 0.75 }}>(soit {fmtDec(c.remAmt)} TTC)</span></span>
-                        <span>{fmtDec(-c.remAmtHt)}</span>
+                        <span>{fmtDec(-Math.abs(c.remAmtHt))}</span>
                       </div>
                     </>}
-                    <div className="pdoc-trow"><span>{c.remAmt > 0 ? "Total HT net" : "Montant HT"}</span><span>{fmtDec(c.ht)}</span></div>
-                    <div className="pdoc-trow"><span>TVA {c.tvaPct || 20}%</span><span>{fmtDec(c.tvaAmt)}</span></div>
-                    <div className="pdoc-trow big"><span>TOTAL TTC</span><span>{fmtDec(c.ttc)}</span></div>
+                    <div className="pdoc-trow"><span>{c.remAmt > 0 ? "Total HT net" : "Montant HT"}</span><span>{fmtDec(mntDoc(c.ht))}</span></div>
+                    <div className="pdoc-trow"><span>TVA {c.tvaPct || 20}%</span><span>{fmtDec(mntDoc(c.tvaAmt))}</span></div>
+                    <div className="pdoc-trow big"><span>{libelleTotal}</span><span>{fmtDec(mntDoc(c.ttc))}</span></div>
                   </>
                 ) : (
                   <>
@@ -5371,17 +5478,17 @@ function PrintDoc({ order, dealer, onClose, viewMode, livrePolice }) {
                         TVA vient s'y ajouter, ou qu'il pourrait la déduire.
                         Seuls les frais sont un vrai HT, et leur ligne le dit. */}
                     {c.remAmt > 0 && <>
-                      <div className="pdoc-trow"><span>Sous-total</span><span>{fmtDec(c.htBrut)}</span></div>
-                      <div className="pdoc-trow" style={{ color: "#c79528" }}><span>Remise accordée</span><span>{fmtDec(-c.remAmtHt)}</span></div>
+                      <div className="pdoc-trow"><span>Sous-total</span><span>{fmtDec(mntDoc(c.htBrut))}</span></div>
+                      <div className="pdoc-trow" style={{ color: "#c79528" }}><span>Remise accordée</span><span>{fmtDec(-Math.abs(c.remAmtHt))}</span></div>
                     </>}
-                    <div className="pdoc-trow"><span>{c.remAmt > 0 ? "Net après remise" : "Sous-total"}</span><span>{fmtDec(c.ht)}</span></div>
-                    {c.tvaAmt > 0 && <div className="pdoc-trow"><span>TVA {c.tvaPct || 20}% (frais uniquement)</span><span>{fmtDec(c.tvaAmt)}</span></div>}
+                    <div className="pdoc-trow"><span>{c.remAmt > 0 ? "Net après remise" : "Sous-total"}</span><span>{fmtDec(mntDoc(c.ht))}</span></div>
+                    {Math.abs(c.tvaAmt) > 0 && <div className="pdoc-trow"><span>TVA {c.tvaPct || 20}% (frais uniquement)</span><span>{fmtDec(mntDoc(c.tvaAmt))}</span></div>}
                     {/* v8.178 — Le gris clair d'origine ne survivait ni à l'écran
                         ni à l'impression. v8.179 — Version courte : la case ne
                         fait que 260 px, la mention complète est en bande sous
                         les totaux. */}
                     <div className="pdoc-trow" style={{ fontSize: 10, color: "#5a5a66" }}><span>TVA sur la marge</span><span>Art. 297 A CGI</span></div>
-                    <div className="pdoc-trow big"><span>TOTAL TTC</span><span>{fmtDec(c.ttc)}</span></div>
+                    <div className="pdoc-trow big"><span>{libelleTotal}</span><span>{fmtDec(mntDoc(c.ttc))}</span></div>
                   </>
                 )}
                 {/* v8.49.11 — Bloc DÉBOURS + TOTAL À PAYER (art. 267 II 2° CGI)
@@ -5444,6 +5551,32 @@ function PrintDoc({ order, dealer, onClose, viewMode, livrePolice }) {
                 <strong>Régime particulier — Biens d'occasion.</strong> Véhicule soumis à la TVA sur la marge
                 (art. 297 A du CGI) : la TVA n'est pas mentionnée sur la présente facture et n'est pas
                 récupérable par l'acquéreur (art. 297 E du CGI).
+              </div>
+            )}
+
+            {/* v8.187 — Ce que veulent dire les montants ci-dessus.
+                Un avoir porte des montants POSITIFS : c'est la convention de la
+                facturation électronique, et elle n'est pas négociable — la PDP
+                rejette les lignes à montant négatif (EN 16931, BR-27). Le sens
+                est porté par le titre AVOIR, par « TOTAL À DÉDUIRE » et par le
+                TypeCode 381 du Factur-X.
+                Reste que « TVA 20 % — 166,67 € » sans signe se lit mal quand on
+                n'a pas ce contexte. Une phrase le donne. */}
+            {estAvoir && (
+              <div style={{ marginTop: -14, marginBottom: 14, textAlign: "right", fontSize: 10, color: "#6b6b78", fontStyle: "italic" }}>
+                Les montants ci-dessus viennent en déduction
+                {order.facture_origine ? ` de la facture ${order.facture_origine}` : ""}.
+              </div>
+            )}
+
+            {/* v8.184 — Motif de l'avoir. C'est lui qui justifie le document :
+                sans motif imprimé, un avoir de 1 000 € au milieu d'une vente à
+                24 180 € ne s'explique pas. IOBILL l'imprime déjà de son côté. */}
+            {order.type === "avoir" && order.motif_avoir && (
+              <div className="pdoc-section" style={{ marginTop: 12, padding: "8px 14px", background: "#f9f8f5", borderRadius: 6, fontSize: 11, color: "#555", border: "1px solid #e8e8e8" }}>
+                {/* La facture concernée est déjà en en-tête, sur la ligne du
+                    tableau et dans le bandeau des mentions : inutile ici. */}
+                <strong>Motif de l'avoir :</strong> {order.motif_avoir}
               </div>
             )}
 
@@ -5549,9 +5682,15 @@ function PrintDoc({ order, dealer, onClose, viewMode, livrePolice }) {
                     <strong style={{ color: "#888", letterSpacing: 1, textTransform: "uppercase", fontSize: 8 }}>Conditions de règlement</strong><br />
                     {/* v8.180 — Le délai de règlement est une mention obligatoire :
                         il s'affiche toujours, et avant le texte libre, qu'un
-                        concessionnaire a pu réécrire sans l'y remettre. */}
-                    <span style={{ color: "#555", fontWeight: 700 }}>{delaiReglement(dealer)}</span><br />
-                    {(dealer?.conditions_reglement || "TVA acquittée sur les encaissements.\nTout retard de paiement entraîne des pénalités au taux légal en vigueur (art. L441-10 C. com.).\nIndemnité forfaitaire de recouvrement : 40 €.").split("\n").map((l, i) => <span key={i}>{l}<br /></span>)}
+                        concessionnaire a pu réécrire sans l'y remettre.
+                        v8.186 — Sur un avoir, ni ce délai ni les conditions du
+                        garage (pénalités de retard, indemnité de recouvrement)
+                        n'ont de sens : c'est le garage qui doit. Le régime de
+                        TVA, lui, reste annoncé dans le bandeau au-dessus. */}
+                    <span style={{ color: "#555", fontWeight: 700 }}>
+                      {estAvoir ? MENTION_REGLEMENT_AVOIR : delaiReglement(dealer)}
+                    </span><br />
+                    {!estAvoir && (dealer?.conditions_reglement || "TVA acquittée sur les encaissements.\nTout retard de paiement entraîne des pénalités au taux légal en vigueur (art. L441-10 C. com.).\nIndemnité forfaitaire de recouvrement : 40 €.").split("\n").map((l, i) => <span key={i}>{l}<br /></span>)}
                   </div>
                   <div style={{ fontSize: 9, color: "#aaa", lineHeight: 1.8, flex: 1 }}>
                     <strong style={{ color: "#888", letterSpacing: 1, textTransform: "uppercase", fontSize: 8 }}>Informations complémentaires</strong><br />
@@ -6544,10 +6683,28 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
               facture_origine: o.ref,
               paiements: [],
               statut: null,
-              prix_ht: String(Number(avoirChoice.totalTtc).toFixed(2)),
-              frais_mise_dispo: "0",
+              // v8.182 — Un avoir TOTAL est la facture au signe près, débours
+              // exclus : on conserve donc sa structure — prix véhicule, remise
+              // et frais — au lieu de tout écraser dans un montant global.
+              //
+              // C'est ce qui permet de reprendre la BONNE TVA. Écrasée en une
+              // ligne unique, la ventilation était perdue : en régime marge le
+              // tout passait à 0 %, et les 30 € de TVA des frais — bien réels,
+              // les frais restant taxables — n'étaient jamais repris.
+              //
+              // Seule la carte grise est mise à zéro : elle n'est pas remboursée.
+              prix_ht: String(Number(o.prix_ht || 0).toFixed(2)),
+              frais_mise_dispo: String(Number(o.frais_mise_dispo || 0).toFixed(2)),
               carte_grise: "0",
-              remise_ttc: "0",
+              remise_ttc: String(Number(o.remise_ttc || 0).toFixed(2)),
+              avoir_partiel: false,
+              // v8.184 — Motif de l'avoir. Un avoir total annule la facture :
+              // le motif se déduit, inutile d'un champ de plus.
+              motif_avoir: `Annulation de la facture ${o.ref}`,
+              // Les notes de la facture (garantie, délai de livraison…) n'ont
+              // rien à faire sur un avoir — le clone les emportait, et le pont
+              // s'en servait comme motif faute de mieux.
+              notes: "",
               reprise_active: false,
               reprise_valeur: 0,
               acompte_ttc: 0,  // ⚠ Un avoir n'a pas d'acompte signature
@@ -6562,6 +6719,15 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
               iobill_synced_at: null,
             };
             setOrders([...orders, avoir]);
+            // v8.183 — L'avoir part à IO BILL dès sa création.
+            //
+            // Il n'y était poussé que depuis la modale de paiement, et
+            // seulement une fois intégralement remboursé. Un avoir créé puis
+            // laissé tel quel — le cas courant — n'atteignait donc jamais
+            // IO BILL : la vente annulée restait déclarée, avec sa TVA et son
+            // chiffre d'affaires. Or la TVA se récupère dès la rectification de
+            // la facture (art. 272-1 du CGI), pas au remboursement.
+            pushCreditNoteToIobill(avoir, 'issue');
             setAvoirChoice(null);
           }}
           onPartiel={() => {
@@ -6575,7 +6741,7 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
         <AvoirPartielModal
           order={avoirPartiel.order}
           totalTtc={avoirPartiel.totalTtc}
-          onConfirm={(montant) => {
+          onConfirm={(montant, motif) => {
             const o = avoirPartiel.order;
             const avoir = {
               ...o, id: uid(), type: "avoir",
@@ -6585,10 +6751,26 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
               facture_origine: o.ref,
               paiements: [],
               statut: null,
+              // v8.182 — Avoir PARTIEL : le montant saisi vient en réduction du
+              // prix du véhicule. Une seule ligne, donc, au régime de la vente.
+              // (Un avoir total, lui, reproduit la structure de la facture.)
               prix_ht: String(Number(montant).toFixed(2)),
               frais_mise_dispo: "0",
               carte_grise: "0",
               remise_ttc: "0",
+              avoir_partiel: true,
+              // v8.184 — Motif saisi : un avoir partiel est un geste commercial,
+              // c'est lui qui le justifie auprès du client et de l'administration.
+              motif_avoir: motif,
+              notes: "",
+              // En régime marge, baisser le prix de vente réduit la marge — donc
+              // la TVA sur marge due. La marge d'origine n'est plus déductible
+              // de l'avoir seul (son prix a été remplacé par le montant saisi) :
+              // on la fige ici, elle servira de plafond à la reprise.
+              avoir_marge_origine: String(Math.max(0,
+                (Number(o.prix_ht || 0) - Number(o.remise_ttc || 0))
+                - (Number(o.vehicle_data?.prix_achat) || 0)
+              ).toFixed(2)),
               reprise_active: false,
               reprise_valeur: 0,
               acompte_ttc: 0,  // ⚠ Un avoir n'a pas d'acompte signature
@@ -6602,6 +6784,15 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
               iobill_synced_at: null,
             };
             setOrders([...orders, avoir]);
+            // v8.183 — L'avoir part à IO BILL dès sa création.
+            //
+            // Il n'y était poussé que depuis la modale de paiement, et
+            // seulement une fois intégralement remboursé. Un avoir créé puis
+            // laissé tel quel — le cas courant — n'atteignait donc jamais
+            // IO BILL : la vente annulée restait déclarée, avec sa TVA et son
+            // chiffre d'affaires. Or la TVA se récupère dès la rectification de
+            // la facture (art. 272-1 du CGI), pas au remboursement.
+            pushCreditNoteToIobill(avoir, 'issue');
             setAvoirPartiel(null);
           }}
           onCancel={() => setAvoirPartiel(null)}
@@ -6724,7 +6915,16 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
                         return <button className="btn btn-ghost btn-xs" title="Créer un avoir" onClick={() => {
                           // v8.49.11 — Un avoir rembourse ce que le client a payé
                           // (grandTotal), y compris les débours refacturés.
-                          const totalTtc = calcOrder(o).grandTotal;
+                          // v8.182 — Non : la carte grise n'est PAS remboursée.
+                          // Une fois faite, l'argent est parti au Trésor Public
+                          // et le véhicule est immatriculé au nom du client.
+                          // L'avoir porte donc sur le TTC seul. Y verser les
+                          // débours les rendait taxables (art. 267 II 2° CGI) :
+                          // l'avoir reprenait une TVA jamais collectée.
+                          // Le cas d'une annulation AVANT la carte grise se
+                          // règle hors facture — un débours restitué n'a ni
+                          // base taxable ni ligne de facture.
+                          const totalTtc = calcOrder(o).ttc;
                           setAvoirChoice({ order: o, totalTtc });
                         }}>↩️</button>;
                       })()}
