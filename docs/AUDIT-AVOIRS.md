@@ -464,6 +464,27 @@ indemnité forfaitaire de recouvrement de 40 € n'ont aucun sens sur un avoir.
 — et le bloc de conditions libres du garage ne s'affiche pas. Le régime de TVA,
 lui, reste annoncé dans le bandeau des mentions au-dessus, où il figurait déjà.
 
+## A17 — Les montants positifs d'un avoir se lisaient mal 🟡
+
+Un avoir porte des montants **positifs**. Ce n'est pas un choix de mise en
+forme : la PDP rejette les lignes à montant négatif (EN 16931, **BR-27**) — le
+même motif qui avait fait sortir la reprise des lignes de facture en v8.150. Le
+sens de l'opération est donc porté ailleurs : le titre **AVOIR**, la ligne
+**« Total à déduire »**, et le **TypeCode 381** du Factur-X.
+
+Reste que « TVA 20 % — 166,67 € » sans signe se lit mal quand on n'a pas ce
+contexte : le lecteur croit devoir cette TVA au lieu de la récupérer.
+L'exploitant lui-même y a buté ; le client aussi y buterait.
+
+**Correctif** : une phrase, sous le bloc des totaux, dans les mêmes termes sur
+les deux documents —
+
+> *Les montants ci-dessus viennent en déduction de la facture VEH-2026-0107.*
+
+Aucun montant, aucun calcul, aucune donnée transmise n'est touché. Vérifié que
+les factures — IO CAR comme IO BILL, natives comme issues du pont — sont
+inchangées.
+
 ## Avoir partiel : ce que ça produit
 
 Geste commercial de 1 000 € sur une vente de 24 180 € TTC, marge d'origine

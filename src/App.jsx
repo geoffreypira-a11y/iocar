@@ -5554,6 +5554,21 @@ function PrintDoc({ order, dealer, onClose, viewMode, livrePolice }) {
               </div>
             )}
 
+            {/* v8.187 — Ce que veulent dire les montants ci-dessus.
+                Un avoir porte des montants POSITIFS : c'est la convention de la
+                facturation électronique, et elle n'est pas négociable — la PDP
+                rejette les lignes à montant négatif (EN 16931, BR-27). Le sens
+                est porté par le titre AVOIR, par « TOTAL À DÉDUIRE » et par le
+                TypeCode 381 du Factur-X.
+                Reste que « TVA 20 % — 166,67 € » sans signe se lit mal quand on
+                n'a pas ce contexte. Une phrase le donne. */}
+            {estAvoir && (
+              <div style={{ marginTop: -14, marginBottom: 14, textAlign: "right", fontSize: 10, color: "#6b6b78", fontStyle: "italic" }}>
+                Les montants ci-dessus viennent en déduction
+                {order.facture_origine ? ` de la facture ${order.facture_origine}` : ""}.
+              </div>
+            )}
+
             {/* v8.184 — Motif de l'avoir. C'est lui qui justifie le document :
                 sans motif imprimé, un avoir de 1 000 € au milieu d'une vente à
                 24 180 € ne s'explique pas. IOBILL l'imprime déjà de son côté. */}
