@@ -194,7 +194,16 @@ Dans Stripe :
 
 ### 10. Purge RGPD — Livre de Police 5 ans
 
-Tous les mois, lancer manuellement dans SQL Editor :
+⚠️ **Appliquer d'abord `supabase/migration_purge_lp_corrigee.sql`.** La version
+d'origine comptait depuis la date d'ENTRÉE — un véhicule vendu hier après six ans
+de stock aurait été effacé — et échouait de toute façon sur le format de date
+français. La version corrigée purge cinq ans après la **sortie**, et ignore les
+entrées encore en stock.
+
+Avant toute purge, lancer l'aperçu qui figure en commentaire à la fin de ce
+fichier : il liste ce qui serait supprimé, sans rien supprimer.
+
+Puis, tous les mois, dans SQL Editor :
 ```sql
 SELECT public.purge_livre_police_expired();
 ```

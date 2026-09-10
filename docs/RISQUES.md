@@ -73,6 +73,25 @@ préfecture, après le départ du client. Un bandeau nomme désormais ce qui man
 — sans bloquer, car on imprime parfois sciemment un document à compléter à la
 main.
 
+**Purge RGPD — cassée, et heureusement.** `DEPLOIEMENT.md` prescrit de lancer
+`purge_livre_police_expired()` tous les mois. La fonction est fausse sur trois
+points, dont deux se compensent :
+
+1. elle **lève une erreur** — IO CAR stocke les dates en français
+   (« 25/09/2026 ») et le cast `::DATE` échoue avec le DateStyle par défaut de
+   PostgreSQL dès qu'un jour dépasse 12. Elle n'a donc probablement jamais
+   supprimé une seule ligne ;
+2. quand elle n'échoue pas, elle **inverse jour et mois** ;
+3. elle compte depuis l'**entrée** du véhicule, pas depuis sa sortie — un
+   véhicule resté six ans en stock et vendu hier aurait été effacé aussitôt.
+
+Corrigée : lecture explicite en `DD/MM/YYYY`, garde par expression régulière
+pour qu'une valeur malformée soit ignorée plutôt que de faire échouer la purge,
+et suppression cinq ans après la **sortie** uniquement. Un véhicule encore en
+stock reste au registre. La nouvelle version ne peut supprimer que **moins** de
+lignes que l'ancienne — et un aperçu, fourni en commentaire, liste ce qui
+partirait avant qu'on lance quoi que ce soit.
+
 ## Ce qui est solide, et mérite d'être dit
 
 **La facture ordinaire.** Le chemin réellement emprunté est ressorti de l'audit
