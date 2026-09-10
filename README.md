@@ -50,6 +50,8 @@ vercel.com → votre projet → Settings → Domains → Add → iocar.online
 
 ## Mémos techniques
 
+- [`docs/ETAT.md`](docs/ETAT.md) — **où on en est** : les deux bases, ce qui est
+  déployé, ce qui est passé en SQL, ce qui reste ouvert. À lire en premier.
 - [`docs/AUDIT-FACTURATION-COMPLET.md`](docs/AUDIT-FACTURATION-COMPLET.md) —
   **l'audit de référence** : la chaîne facture et avoir reprise depuis le début
   (septembre 2026), état de chaque maillon et ce qui reste ouvert. Les trois
