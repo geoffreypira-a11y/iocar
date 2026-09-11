@@ -2,6 +2,7 @@
 // Route selon req.body.action : list | export | backup | toggle_active | set_plan | update_rapidapi | extend_trial | set_exempt
 // Tout passe par la clé service_role côté serveur après vérification is_admin.
 import { verifyUser, setCors } from './_lib/auth.js';
+import { saveBackup, KEEP_DAYS } from './_lib/backup.js';
 
 export default async function handler(req, res) {
   setCors(res);
@@ -342,59 +343,15 @@ export default async function handler(req, res) {
       }
 
       // ─── BACKUP → STORAGE PRIVÉ ─────────────────────────────
+      // Délègue à api/_lib/backup.js, partagé avec le cron quotidien
+      // (api/backup-cron.js), pour que les deux chemins sauvegardent
+      // exactement le même contenu.
       case 'backup_save': {
-        const tables = ['vehicles', 'orders', 'clients', 'livre_police'];
-        const { data: garages } = await supabase.from('garages').select('*');
-
-        const backup = {
-          version: '1.0',
-          backup_date: new Date().toISOString(),
-          backup_type: 'manual',
-          total_garages: garages?.length || 0,
-          garages: [],
-        };
-
-        for (const g of garages || []) {
-          const gData = {
-            id: g.id, name: g.name, email: g.email,
-            siret: g.siret, plan: g.plan, is_active: g.is_active,
-            created_at: g.created_at, data: {}
-          };
-          for (const t of tables) {
-            const { data: rows } = await supabase
-              .from(t).select('*').eq('garage_id', g.id).order('created_at', { ascending: true });
-            gData.data[t] = rows || [];
-          }
-          backup.garages.push(gData);
+        try {
+          return res.status(200).json(await saveBackup('manual'));
+        } catch (e) {
+          return res.status(500).json({ error: e?.message || 'Échec de la sauvegarde' });
         }
-
-        const json = JSON.stringify(backup);
-        const filename = `backup_${new Date().toISOString().slice(0,10)}.json`;
-
-        // Upload dans le bucket 'backups' (privé, aucun user n'y a accès — seul service_role)
-        const { error: upErr } = await supabase.storage
-          .from('backups')
-          .upload(filename, json, {
-            contentType: 'application/json',
-            upsert: true,
-          });
-
-        if (upErr) return res.status(500).json({ error: upErr.message });
-
-        // Upload aussi en 'backup_latest.json' pour le check rapide
-        await supabase.storage
-          .from('backups')
-          .upload('backup_latest.json', json, {
-            contentType: 'application/json',
-            upsert: true,
-          });
-
-        return res.status(200).json({
-          ok: true,
-          filename,
-          total_garages: backup.total_garages,
-          size_kb: Math.round(json.length / 1024),
-        });
       }
 
       // ─── TÉLÉCHARGER LE DERNIER BACKUP ──────────────────────
@@ -412,10 +369,20 @@ export default async function handler(req, res) {
       // ─── INFOS DU DERNIER BACKUP ────────────────────────────
       case 'backup_info': {
         const { data: files } = await supabase.storage
-          .from('backups')
-          .list('', { limit: 100 });
-        const latest = files?.find(f => f.name === 'backup_latest.json');
-        return res.status(200).json({ backup: latest || null });
+          .from('backups').list('', { limit: 1000 });
+        const latest = (files || []).find(f => f.name === 'backup_latest.json') || null;
+        // Historique daté réellement conservé — c'est lui qui permet de
+        // remonter à un jour précis, pas backup_latest.json qui est écrasé.
+        const dated = (files || [])
+          .map(f => f.name)
+          .filter(n => /^backup_\d{4}-\d{2}-\d{2}/.test(n || ''))
+          .sort().reverse();
+        return res.status(200).json({
+          backup: latest,
+          history: dated,
+          history_count: dated.length,
+          keep_days: KEEP_DAYS,
+        });
       }
 
       // ─── TICKETS DE SUPPORT ─────────────────────────────────

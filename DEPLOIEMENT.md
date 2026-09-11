@@ -208,7 +208,11 @@ Puis, tous les mois, dans SQL Editor :
 SELECT public.purge_livre_police_expired();
 ```
 
-Ou automatiser via un cron Vercel (plan Pro Vercel requis).
+Ou automatiser via un cron Vercel — **le plan Hobby suffit**, contrairement à ce
+qui était écrit ici : IO BILL en fait tourner un depuis des mois, et IO CAR
+sauvegarde par ce biais depuis le 10/09/2026. La vraie contrainte du plan Hobby
+est ailleurs : **12 fonctions serverless par déploiement**, et le projet y est
+presque. Voir `docs/SAUVEGARDES.md`.
 
 ---
 
@@ -236,7 +240,11 @@ supabase/
 
 ## 🗑 Fichiers supprimés
 
-- `api/backup-cron.js` : remplacé par `api/admin.js` (action `backup_save`)
+- ~~`api/backup-cron.js` : remplacé par `api/admin.js` (action `backup_save`)~~
+  — **Faux depuis le 10/09/2026.** Le fichier n'avait jamais été supprimé, et
+  l'action `backup_save` exige `verifyUser()` : un cron n'a pas de session et ne
+  pouvait donc pas l'appeler. `api/backup-cron.js` est désormais réécrit et
+  sauvegarde réellement, chaque jour à 3h. Voir `docs/SAUVEGARDES.md`.
 - `api/report-plate-usage.js` : intégré dans `api/lookup-plate.js` (plus de surface d'attaque séparée)
 
 ---

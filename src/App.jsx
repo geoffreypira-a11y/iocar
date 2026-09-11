@@ -11248,7 +11248,23 @@ function AdminPage({ token }) {
     try {
       const r = await adminCall("backup_save");
       await checkBackup();
-      alert(`✅ Sauvegarde créée — ${r.total_garages} garages — ${r.size_kb} KB`);
+      // On affiche le manifeste : combien de lignes ont RÉELLEMENT été
+      // capturées, table par table. Une sauvegarde qui repart avec zéro
+      // ligne de livre de police est inutilisable, et sans ce détail rien
+      // ne le laissait voir.
+      const m = r.manifest || {};
+      const detail = Object.keys(m).sort()
+        .filter((k) => m[k] > 0)
+        .map((k) => `  ${k} : ${m[k]}`)
+        .join("\n");
+      const vides = Object.keys(m).sort().filter((k) => !m[k]);
+      alert(
+        `✅ Sauvegarde créée\n${r.filename}\n` +
+        `${r.total_garages} garages · ${r.size_kb} KB\n\n` +
+        `Contenu :\n${detail || "  (aucune donnée)"}` +
+        (vides.length ? `\n\nTables vides : ${vides.join(", ")}` : "") +
+        (r.purged ? `\n\n${r.purged} sauvegarde(s) de plus de 30 jours purgée(s).` : "")
+      );
     } catch(e) {
       alert("Erreur sauvegarde : " + e.message);
     }
