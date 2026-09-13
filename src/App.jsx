@@ -6481,6 +6481,48 @@ function PVLivraisonDoc({ entry, dealer, onSave, onClose }) {
   );
 }
 
+// v8.195 — Verrou d'inaltérabilité d'un avoir.
+//
+// IO BILL protège ses documents par des déclencheurs en base
+// (protect_issued_invoice, protect_issued_lines, chaîne de hachage). IO CAR
+// n'a rien de tel : toute la protection tenait dans le rendu React, et elle
+// ne couvrait que la SUPPRESSION d'un avoir émis. On pouvait donc rouvrir et
+// modifier un avoir déjà transmis à l'administration — la copie IO CAR
+// divergeait alors en silence de celle d'IO BILL et de celle de la PDP.
+//
+// Deux degrés, parce que les conséquences ne sont pas les mêmes :
+//
+//   "pdp"    — le document est parti à l'administration. Il est définitif pour
+//              tout le monde, mode admin compris : plus personne ne peut le
+//              faire revenir. Rectifier passe par un nouveau document.
+//   "iobill" — émis chez IO BILL, pas encore transmis. Sa numérotation est
+//              verrouillée par la chaîne de hachage ; l'admin garde la main
+//              pour un dépannage, l'abonné non.
+//
+// Retourne null si rien ne s'oppose à la modification.
+function verrouAvoir(o) {
+  if (!o || o.type !== "avoir") return null;
+  const transmisPdp = !!(o.pdp_transmission_id || o.pdp_transmitted_at)
+    || ["transmitted", "accepted", "payment_sent", "paid"].includes(o.facturx_status);
+  if (transmisPdp) return "pdp";
+  if (o.iobill_status === "issued") return "iobill";
+  return null;
+}
+
+const MESSAGE_VERROU = {
+  pdp:
+    "❌ Cet avoir a été transmis à l'administration fiscale.\n\n" +
+    "Un document transmis est définitif — ni modifiable, ni supprimable, par personne. " +
+    "C'est une obligation légale, et la plateforme en conserve sa propre copie.\n\n" +
+    "Pour corriger une erreur, il faut émettre un nouveau document. " +
+    "Parlez-en à votre expert-comptable.",
+  iobill:
+    "❌ Cet avoir est déjà émis dans IO BILL.\n\n" +
+    "Sa numérotation est verrouillée par la chaîne de hachage : la séquence doit " +
+    "rester continue, sans rupture (art. 242 nonies A CGI).\n\n" +
+    "Si vous avez fait une erreur, contactez votre expert-comptable.",
+};
+
 function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKey, usage, setUsage, clients, setClients, viewMode, token, livrePolice }) {
   const [tab, setTabLocal] = useState("all");
   const [modal, setModal] = useState(null);
@@ -7191,10 +7233,30 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
                           setOrders(orders.map(x => x.id === o.id ? updated : x));
                         }}>💸 Remboursé</button>
                       )}
-                      {/* Modifier : bloqué sur les factures sauf admin */}
-                      {(o.type !== "facture" || viewMode === "admin") && (
-                        <button className="btn btn-ghost btn-xs" onClick={() => setModal(o)}>✏️</button>
-                      )}
+                      {/* Modifier : bloqué sur les factures sauf admin.
+                          v8.195 — Et sur les avoirs émis ou transmis, qui
+                          n'avaient AUCUN verrou en modification : on pouvait
+                          rouvrir un avoir déjà chez l'administration. */}
+                      {(() => {
+                        const verrou = verrouAvoir(o);
+                        // Le verrou PDP vaut pour tout le monde : une fois le
+                        // document parti, personne ne peut le faire revenir.
+                        const bloque = verrou === "pdp" || (verrou === "iobill" && viewMode !== "admin");
+                        if (bloque) {
+                          return (
+                            <button
+                              className="btn btn-ghost btn-xs"
+                              style={{ opacity: 0.3, cursor: "not-allowed" }}
+                              title={verrou === "pdp"
+                                ? "Avoir transmis à l'administration — document définitif"
+                                : "Avoir émis — numérotation verrouillée"}
+                              onClick={() => alert(MESSAGE_VERROU[verrou])}
+                            >✏️</button>
+                          );
+                        }
+                        if (o.type === "facture" && viewMode !== "admin") return null;
+                        return <button className="btn btn-ghost btn-xs" onClick={() => setModal(o)}>✏️</button>;
+                      })()}
                       {/* v8.49.13 — Supprimer :
                           - Factures : bloqué (sauf admin) — comme avant
                           - Avoirs : bloqué dès qu'ils sont émis (iobill_status='issued')
@@ -7202,17 +7264,19 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
                             transmis à IOBILL. Le supprimer créerait un trou dans la
                             numérotation séquentielle (art. 242 nonies A CGI).
                           - BC : toujours possible (pas encore fiscal). */}
-                      {o.type === "avoir" && o.iobill_status === "issued" && viewMode !== "admin" ? (
+                      {/* v8.195 — Le verrou ne regardait que `iobill_status`,
+                          et l'admin le contournait toujours. Un avoir transmis
+                          à la PDP est désormais indestructible pour tous, et
+                          l'état « transmis » est lu sur les marqueurs PDP en
+                          plus du statut IO BILL. */}
+                      {(() => {
+                        const verrou = verrouAvoir(o);
+                        return verrou === "pdp" || (verrou === "iobill" && viewMode !== "admin");
+                      })() ? (
                         <button
                           className="btn btn-danger btn-xs"
                           style={{ opacity: 0.3, cursor: "not-allowed" }}
-                          onClick={() => alert(
-                            "❌ Impossible de supprimer cet avoir.\n\n" +
-                            "Il est déjà émis (chaîne de hashs verrouillée) et transmis à IO BILL.\n" +
-                            "Un avoir émis est un document comptable définitif — obligation fiscale " +
-                            "(art. 242 nonies A CGI : numérotation sans rupture).\n\n" +
-                            "Si vous avez fait une erreur, contactez votre expert-comptable."
-                          )}
+                          onClick={() => alert(MESSAGE_VERROU[verrouAvoir(o)])}
                         >🗑</button>
                       ) : (o.type !== "facture" || viewMode === "admin") && (
                         <button className="btn btn-danger btn-xs" onClick={() => setPendingDelete({ id: o.id, label: o.ref })}>🗑</button>
