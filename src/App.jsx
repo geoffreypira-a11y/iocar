@@ -2504,29 +2504,35 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
 //                   renseignements, mais reste hors registre, hors bon de
 //                   commande et hors facture tant qu'il n'est pas acquis.
 function VehicleTypeModal({ onChoose, onClose }) {
-  const Choix = ({ emoji, titre, desc, onClick, accent }) => (
-    <button
+  const Choix = ({ emoji, titre, desc, accent, onClick }) => (
+    <div
       onClick={onClick}
-      className="card card-pad"
       style={{
-        textAlign: "left", cursor: "pointer", width: "100%",
-        border: `1px solid ${accent}`, background: "transparent",
-        display: "flex", gap: 14, alignItems: "flex-start", padding: 16
+        display: "flex", gap: 14, alignItems: "flex-start",
+        padding: 16, borderRadius: 10, cursor: "pointer",
+        border: `1px solid ${accent}`,
+        background: "rgba(255,255,255,0.02)",
+        transition: "background 120ms"
       }}
+      onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; }}
+      onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,255,255,0.02)"; }}
     >
       <div style={{ fontSize: 26, lineHeight: 1 }}>{emoji}</div>
       <div>
-        <div style={{ fontFamily: "Syne", fontWeight: 700, fontSize: 15, color: accent, marginBottom: 4 }}>{titre}</div>
+        <div style={{ fontFamily: "Syne, sans-serif", fontWeight: 700, fontSize: 15, color: accent, marginBottom: 4 }}>
+          {titre}
+        </div>
         <div style={{ fontSize: 12, color: "var(--muted)", lineHeight: 1.5 }}>{desc}</div>
       </div>
-    </button>
+    </div>
   );
+
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" style={{ maxWidth: 560 }} onClick={e => e.stopPropagation()}>
-        <div className="modal-header">
+    <div className="modal-bg" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal modal-sm" onClick={e => e.stopPropagation()}>
+        <div className="modal-hd">
           <span className="modal-title">Quel type de véhicule ?</span>
-          <button className="modal-close" onClick={onClose}>✕</button>
+          <button className="close-btn" onClick={onClose}>×</button>
         </div>
         <div className="modal-body" style={{ display: "grid", gap: 12 }}>
           <Choix
