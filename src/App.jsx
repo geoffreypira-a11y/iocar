@@ -3701,15 +3701,26 @@ function FleetPage({ vehicles, setVehicles, orders, setOrders, apiKey, usage, se
                           onClick={() => {
                             if (!window.confirm(
                               `Intégrer « ${v.marque} ${v.modele} ${v.plate ? "(" + v.plate + ")" : ""} » au livre de police ?\n\n` +
-                              "Le véhicule cesse d'être en dépôt-vente : son entrée au registre est créée, " +
-                              "et il devient commandable et facturable."
+                              "Le véhicule cesse d'être en dépôt-vente : son entrée au registre est créée " +
+                              `à la date d'aujourd'hui (${today()}), et il devient commandable et facturable.`
                             )) return;
                             // On retire l'id du ref de surveillance pour que l'effet
                             // d'auto-création le traite comme un nouvel arrivant et
                             // construise l'entrée avec toute sa logique habituelle
                             // (fournisseur, prix d'achat, reprise…).
                             prevVehicleIdsRef.current.delete(v.id);
-                            save({ ...v, depot_vente: false });
+                            // La date d'entrée au registre est celle de l'ACQUISITION,
+                            // pas celle du dépôt : le véhicule n'entrait pas dans le
+                            // stock du garage quand son propriétaire le lui a confié.
+                            // L'effet d'auto-création lit `date_entree`, on la recale
+                            // donc au jour de l'intégration — et on garde la date du
+                            // dépôt de côté, elle raconte l'histoire du véhicule.
+                            save({
+                              ...v,
+                              depot_vente: false,
+                              depot_vente_depuis: v.depot_vente_depuis || v.date_entree || null,
+                              date_entree: today(),
+                            });
                           }}
                         >📜 Intégrer au LP</button>
                       )}
