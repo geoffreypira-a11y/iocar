@@ -2494,7 +2494,62 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
 /* ═══════════════════════════════════════════════════════════════
    VEHICLE FORM MODAL
 ═══════════════════════════════════════════════════════════════ */
-function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garageId, viewMode }) {
+// v8.192 — Choix du type de véhicule, à l'ouverture de l'ajout.
+//
+// Deux natures très différentes derrière la même fiche :
+//   • OCCASION    — le garage en est propriétaire. Entrée au livre de police,
+//                   commandable, facturable. Comportement historique, inchangé.
+//   • DÉPÔT-VENTE — le véhicule appartient à un tiers. Il figure dans la flotte
+//                   pour ses documents administratifs et sa fiche de
+//                   renseignements, mais reste hors registre, hors bon de
+//                   commande et hors facture tant qu'il n'est pas acquis.
+function VehicleTypeModal({ onChoose, onClose }) {
+  const Choix = ({ emoji, titre, desc, onClick, accent }) => (
+    <button
+      onClick={onClick}
+      className="card card-pad"
+      style={{
+        textAlign: "left", cursor: "pointer", width: "100%",
+        border: `1px solid ${accent}`, background: "transparent",
+        display: "flex", gap: 14, alignItems: "flex-start", padding: 16
+      }}
+    >
+      <div style={{ fontSize: 26, lineHeight: 1 }}>{emoji}</div>
+      <div>
+        <div style={{ fontFamily: "Syne", fontWeight: 700, fontSize: 15, color: accent, marginBottom: 4 }}>{titre}</div>
+        <div style={{ fontSize: 12, color: "var(--muted)", lineHeight: 1.5 }}>{desc}</div>
+      </div>
+    </button>
+  );
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" style={{ maxWidth: 560 }} onClick={e => e.stopPropagation()}>
+        <div className="modal-header">
+          <span className="modal-title">Quel type de véhicule ?</span>
+          <button className="modal-close" onClick={onClose}>✕</button>
+        </div>
+        <div className="modal-body" style={{ display: "grid", gap: 12 }}>
+          <Choix
+            emoji="🚗"
+            titre="Véhicule d'occasion"
+            desc="Le véhicule vous appartient. Entrée automatique au livre de police, commandable et facturable."
+            accent="var(--gold, #d4a843)"
+            onClick={() => onChoose(false)}
+          />
+          <Choix
+            emoji="🤝"
+            titre="Dépôt-vente"
+            desc="Le véhicule appartient à un tiers. Il apparaît dans la flotte pour ses documents administratifs et sa fiche de renseignements — sans entrée au livre de police, ni bon de commande, ni facture. Vous pourrez l'intégrer au registre plus tard si vous l'achetez."
+            accent="var(--muted, #8a8f98)"
+            onClick={() => onChoose(true)}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function VehicleModal({ vehicle, depotVente = false, onSave, onClose, apiKey, usage, setUsage, garageId, viewMode }) {
   const isEdit = !!vehicle?.id;
   // ─── BROUILLON ───────────────────────────────────────────
   // Comme pour OrderForm : sauvegarde auto en localStorage en mode création,
@@ -2629,6 +2684,11 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
         : 0,
       prix_vente: parseFloat(form.prix_vente) || 0,   // toujours sauvegardé
       kilometrage: parseInt(form.kilometrage) || 0,
+      // v8.192 — Nature du véhicule. À la création, elle vient du choix fait
+      // juste avant l'ouverture ; en modification, on conserve celle du
+      // véhicule — on ne bascule pas un dépôt-vente par mégarde en éditant sa
+      // fiche, ça se fait par le bouton « Intégrer au LP » de la Flotte.
+      depot_vente: isEdit ? !!form.depot_vente : !!depotVente,
       options: form.options ? String(form.options).split(",").map(s => s.trim()).filter(Boolean) : [],
     });
     // Purge du brouillon après sauvegarde réussie (mode création uniquement)
@@ -2674,7 +2734,10 @@ function VehicleModal({ vehicle, onSave, onClose, apiKey, usage, setUsage, garag
       )}
       <div className="modal modal-lg">
         <div className="modal-hd">
-          <span className="modal-title">{vehicle ? "Modifier le véhicule" : "Ajouter un véhicule"}</span>
+          <span className="modal-title">
+            {vehicle ? "Modifier le véhicule" : "Ajouter un véhicule"}
+            {depotVente && <span style={{ color: "var(--muted)", fontWeight: 400, marginLeft: 8 }}>· 🤝 Dépôt-vente</span>}
+          </span>
           <button className="close-btn" onClick={onClose}>×</button>
         </div>
         <div className="modal-body">
@@ -3186,6 +3249,11 @@ function FleetPage({ vehicles, setVehicles, orders, setOrders, apiKey, usage, se
   const [filter, setFilter] = useState("all");
   const [pendingDelete, setPendingDelete] = useState(null); // {id, label} | null
   const [showDemoLimit, setShowDemoLimit] = useState(false);
+  // v8.192 — Dépôt-vente. Le véhicule n'appartient pas au garage : il n'a rien
+  // à faire au livre de police tant qu'il n'est pas acquis, et ne peut être ni
+  // commandé ni facturé. On demande donc le type AVANT d'ouvrir la modale.
+  const [askType, setAskType] = useState(false);
+  const [nouveauDepot, setNouveauDepot] = useState(false);
 
   // ── AUTO-CRÉATION LP : surveille les véhicules et crée les entrées manquantes ──
   const prevVehicleIdsRef = React.useRef(new Set());
@@ -3201,6 +3269,10 @@ function FleetPage({ vehicles, setVehicles, orders, setOrders, apiKey, usage, se
         let updated = false;
         
         for (const v of newVehicles) {
+          // v8.192 — Un dépôt-vente n'entre pas au registre : il ne nous
+          // appartient pas. Il y entrera le jour où on l'achète, par le bouton
+          // « Intégrer au livre de police » de la Flotte.
+          if (v.depot_vente) continue;
           const alreadyInLP = lpCopy.find(e => 
             (v.plate && e.immat && e.immat === v.plate) || 
             (v.id && e.vehicle_id && e.vehicle_id === v.id)
@@ -3481,7 +3553,13 @@ function FleetPage({ vehicles, setVehicles, orders, setOrders, apiKey, usage, se
 
   return (
     <div className="page">
-      {modal && <VehicleModal vehicle={modal === "add" ? null : modal} onSave={save} onClose={() => setModal(null)} apiKey={apiKey} usage={usage} setUsage={setUsage} garageId={garageId} viewMode={viewMode} />}
+      {askType && (
+        <VehicleTypeModal
+          onChoose={(depot) => { setNouveauDepot(depot); setAskType(false); setModal("add"); }}
+          onClose={() => setAskType(false)}
+        />
+      )}
+      {modal && <VehicleModal vehicle={modal === "add" ? null : modal} depotVente={modal === "add" ? nouveauDepot : !!modal.depot_vente} onSave={save} onClose={() => setModal(null)} apiKey={apiKey} usage={usage} setUsage={setUsage} garageId={garageId} viewMode={viewMode} />}
       {fiche && <VehicleFiche v={fiche} dealer={dealer} onClose={() => setFiche(null)} />}
       {pendingDelete && (
         <ConfirmModal
@@ -3501,7 +3579,7 @@ function FleetPage({ vehicles, setVehicles, orders, setOrders, apiKey, usage, se
         </div>
         <button className="btn btn-primary" onClick={() => {
           if (viewMode === "trial" && vehicles.length >= DEMO_LIMITS.vehicles) { setShowDemoLimit(true); return; }
-          setModal("add");
+          setAskType(true);
         }}>+ Ajouter un véhicule</button>
       </div>
 
@@ -3560,7 +3638,14 @@ function FleetPage({ vehicles, setVehicles, orders, setOrders, apiKey, usage, se
                   </td>
                   <td style={{ fontFamily: "DM Mono", fontWeight: 700, color: "var(--gold)" }}>{fmt(v.prix_vente)}</td>
                   <td style={{ fontFamily: "DM Mono", color: marge >= 0 ? "var(--green)" : "var(--red)", fontWeight: 600 }}>{fmt(marge)}</td>
-                  <td><span className={`badge ${STATUTS_FLEET[v.statut]?.cls || "badge-muted"}`}>{STATUTS_FLEET[v.statut]?.label}</span></td>
+                  <td>
+                    <span className={`badge ${STATUTS_FLEET[v.statut]?.cls || "badge-muted"}`}>{STATUTS_FLEET[v.statut]?.label}</span>
+                    {v.depot_vente && (
+                      <span className="badge badge-muted" style={{ marginLeft: 6 }} title="Véhicule en dépôt-vente : hors livre de police, non facturable">
+                        🤝 Dépôt-vente
+                      </span>
+                    )}
+                  </td>
                   <td>
                     <div style={{ display: "flex", gap: 6 }}>
                       <button className="btn btn-ghost btn-xs" onClick={() => setFiche(v)}>🏷 Fiche</button>
@@ -3608,6 +3693,37 @@ function FleetPage({ vehicles, setVehicles, orders, setOrders, apiKey, usage, se
                           </button>
                         );
                       })()}
+                      {v.depot_vente && (
+                        <button
+                          className="btn btn-ghost btn-xs"
+                          style={{ color: "var(--gold)" }}
+                          title="Ce véhicule vous appartient désormais : créer son entrée au livre de police"
+                          onClick={() => {
+                            if (!window.confirm(
+                              `Intégrer « ${v.marque} ${v.modele} ${v.plate ? "(" + v.plate + ")" : ""} » au livre de police ?\n\n` +
+                              "Le véhicule cesse d'être en dépôt-vente : son entrée au registre est créée " +
+                              `à la date d'aujourd'hui (${today()}), et il devient commandable et facturable.`
+                            )) return;
+                            // On retire l'id du ref de surveillance pour que l'effet
+                            // d'auto-création le traite comme un nouvel arrivant et
+                            // construise l'entrée avec toute sa logique habituelle
+                            // (fournisseur, prix d'achat, reprise…).
+                            prevVehicleIdsRef.current.delete(v.id);
+                            // La date d'entrée au registre est celle de l'ACQUISITION,
+                            // pas celle du dépôt : le véhicule n'entrait pas dans le
+                            // stock du garage quand son propriétaire le lui a confié.
+                            // L'effet d'auto-création lit `date_entree`, on la recale
+                            // donc au jour de l'intégration — et on garde la date du
+                            // dépôt de côté, elle raconte l'histoire du véhicule.
+                            save({
+                              ...v,
+                              depot_vente: false,
+                              depot_vente_depuis: v.depot_vente_depuis || v.date_entree || null,
+                              date_entree: today(),
+                            });
+                          }}
+                        >📜 Intégrer au LP</button>
+                      )}
                       <button className="btn btn-ghost btn-xs" onClick={() => setModal(v)}>✏️</button>
                       {v.statut === "vendu" ? (
                         <button className="btn btn-danger btn-xs" style={{ opacity: 0.3, cursor: "not-allowed" }} onClick={() => alert("Impossible de supprimer un véhicule vendu non livré.\nPassez-le en « Livré » d'abord.")}>🗑</button>
@@ -4617,7 +4733,9 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
               <label className="form-label">Sélectionner depuis la flotte</label>
               <select className="form-input" value={form.vehicle_id} onChange={e => selectVehicle(e.target.value)}>
                 <option value="">— Choisir un véhicule —</option>
-                {vehicles.map(v => <option key={v.id} value={v.id}>{v.plate} · {v.marque} {v.modele} {v.finition} ({getYear(v)})</option>)}
+                {/* v8.192 — Les dépôts-vente ne sont ni commandables ni
+                    facturables : ils n'appartiennent pas au garage. */}
+                {vehicles.filter(v => !v.depot_vente).map(v => <option key={v.id} value={v.id}>{v.plate} · {v.marque} {v.modele} {v.finition} ({getYear(v)})</option>)}
               </select>
             </div>
             <div className="form-group full">
@@ -9056,7 +9174,10 @@ function LivrePoliceModal({ entry, nextNum, vehicles, onSave, onClose }) {
               <label className="form-label">Importer depuis la flotte</label>
               <select className="form-input" onChange={e => fillFromVehicle(e.target.value)} style={{ marginTop: 4 }}>
                 <option value="">— Choisir un véhicule —</option>
-                {vehicles.map(v => <option key={v.id} value={v.id}>{v.plate} · {v.marque} {v.modele} ({getYear(v)})</option>)}
+                {/* v8.192 — Un dépôt-vente n'entre au registre que par le
+                    bouton « Intégrer au LP » de la Flotte, qui lève aussi son
+                    drapeau. L'importer ici laisserait les deux incohérents. */}
+                {vehicles.filter(v => !v.depot_vente).map(v => <option key={v.id} value={v.id}>{v.plate} · {v.marque} {v.modele} ({getYear(v)})</option>)}
               </select>
             </div>
           )}
