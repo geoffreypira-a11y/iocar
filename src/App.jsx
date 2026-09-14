@@ -2555,6 +2555,223 @@ function VehicleTypeModal({ onChoose, onClose }) {
   );
 }
 
+// Sous-blocs du popup d'intégration. Ils vivent au niveau module et non dans
+// le corps du composant : définis à l'intérieur, leur identité aurait changé à
+// chaque rendu et React aurait démonté les <input> à chaque frappe, faisant
+// sauter le curseur au bout d'un caractère.
+function BlocIntegration({ accent, fond, titre, children }) {
+  return (
+    <div style={{
+      background: fond, border: `1px solid ${accent}`, borderRadius: 10,
+      padding: "12px 16px", marginBottom: 12
+    }}>
+      <div style={{ fontSize: 10, letterSpacing: 2, textTransform: "uppercase", color: accent, fontWeight: 700, marginBottom: 8 }}>
+        {titre}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function MontantIntegration({ valeur, onChange, couleur }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <input className="form-input" type="number" placeholder="0" value={valeur}
+        onChange={e => onChange(e.target.value)}
+        style={{ fontSize: 20, fontWeight: 700, fontFamily: "Syne", color: couleur, maxWidth: 170 }} />
+      <span style={{ fontSize: 17, color: "var(--muted)" }}>€</span>
+    </div>
+  );
+}
+
+// v8.193 — INTÉGRATION D'UN DÉPÔT-VENTE AU LIVRE DE POLICE
+//
+// Le jour où le garage rachète un véhicule qu'il détenait en dépôt, les
+// données d'acquisition naissent : elles n'existaient pas au dépôt, et c'est
+// précisément pour ça que la fiche ne les demandait pas. On les réclame ici,
+// au moment exact où elles ont un sens — sans quoi l'entrée au registre
+// serait créée avec un prix d'achat vide et un régime TVA arbitraire.
+//
+// Le régime commande la forme du prix d'achat, exactement comme dans la fiche
+// véhicule : un seul montant en TVA sur la marge (rien n'y est déductible),
+// un couple TTC/HT synchronisé en TVA normale, où c'est le HT qui constitue
+// le coût réel retenu au registre.
+function IntegrationLpModal({ vehicle, onConfirm, onClose }) {
+  // C'est le déposant qui décide du régime : un particulier ne facture pas de
+  // TVA, donc marge (art. 297 A CGI) ; un professionnel assujetti la facture,
+  // donc normale. Simple présélection — un pro peut lui-même revendre sous la
+  // marge, auquel cas il n'y a pas de TVA à déduire non plus.
+  const deposantPro = (vehicle.fournisseur?.type || "particulier") === "professionnel";
+  const [regime, setRegime] = useState(deposantPro ? "normal" : "margin_297a");
+  // Le prix de vente a été saisi au dépôt, mais des mois ont pu passer : le
+  // déposant l'a peut-être baissé faute d'acheteur. On le préremplit sans
+  // l'imposer, c'est le prix du jour qui compte.
+  const [prixVente, setPrixVente] = useState(vehicle.prix_vente ? String(vehicle.prix_vente) : "");
+  const [prixAchat, setPrixAchat] = useState("");
+  const [prixAchatHt, setPrixAchatHt] = useState("");
+  const [modeReglement, setModeReglement] = useState(vehicle.fournisseur?.mode_reglement || "Virement");
+
+  const normale = regime !== "margin_297a";
+
+  const majTtc = (val) => {
+    setPrixAchat(val);
+    const ttc = parseFloat(val);
+    setPrixAchatHt(ttc > 0 ? String(round2(ttc / TVA_VEHICULE)) : "");
+  };
+  const majHt = (val) => {
+    setPrixAchatHt(val);
+    const ht = parseFloat(val);
+    setPrixAchat(ht > 0 ? String(round2(ht * TVA_VEHICULE)) : "");
+  };
+  const basculerRegime = (next) => {
+    setRegime(next);
+    const ttc = parseFloat(prixAchat) || 0;
+    setPrixAchatHt(next === "margin_297a" || ttc <= 0 ? "" : String(round2(ttc / TVA_VEHICULE)));
+  };
+
+  const achat = parseFloat(prixAchat) || 0;
+  const vente = parseFloat(prixVente) || 0;
+  const pret = achat > 0 && vente > 0;
+
+  const nom = [vehicle.marque, vehicle.modele].filter(Boolean).join(" ");
+  const deposant = [vehicle.fournisseur?.nom, vehicle.fournisseur?.prenom].filter(Boolean).join(" ");
+  // Mêmes exigences que l'effet d'auto-création du registre : sans nom ni
+  // numéro de pièce, l'entrée part marquée incomplète — et en silence. Mieux
+  // vaut le dire ici, tant que la bascule n'est pas faite.
+  const identiteManquante = !vehicle.fournisseur?.nom || !vehicle.fournisseur?.piece_id;
+
+  return (
+    <div className="modal-bg" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal modal-md" onClick={e => e.stopPropagation()}>
+        <div className="modal-hd">
+          <span className="modal-title">📜 Intégrer au livre de police</span>
+          <button className="close-btn" onClick={onClose}>×</button>
+        </div>
+        <div className="modal-body">
+          <div style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.6, marginBottom: 16 }}>
+            Vous rachetez <strong style={{ color: "var(--text)" }}>{nom}</strong>
+            {vehicle.plate ? <> ({vehicle.plate})</> : null}
+            {deposant ? <> à <strong style={{ color: "var(--text)" }}>{deposant}</strong></> : null}.
+            Ces informations n'existaient pas tant que le véhicule était en dépôt — elles naissent aujourd'hui,
+            avec l'acquisition.
+          </div>
+
+          {identiteManquante && (
+            <div style={{
+              background: "rgba(229,151,60,.1)", border: "1px solid rgba(229,151,60,.35)",
+              borderRadius: 8, padding: "10px 14px", fontSize: 12, color: "var(--muted)",
+              lineHeight: 1.6, marginBottom: 16
+            }}>
+              ⚠️ <strong style={{ color: "var(--text)" }}>Identité du déposant incomplète.</strong>{" "}
+              Le registre exige le nom du cédant et le numéro de la pièce présentée (art. R.321-3 du Code pénal).
+              L'entrée sera créée, mais signalée incomplète. Fermez ce popup et complétez la fiche du véhicule
+              pour qu'elle parte en règle.
+            </div>
+          )}
+
+          {/* RÉGIME TVA — il commande la forme du prix d'achat juste en dessous */}
+          <BlocIntegration
+            accent={normale ? "var(--gold)" : "rgba(229,151,60,.9)"}
+            fond={normale ? "rgba(212,168,67,.06)" : "rgba(229,151,60,.08)"}
+            titre="Régime TVA à la revente"
+          >
+            <div style={{ display: "flex", gap: 8 }}>
+              {[["normal", "📑 TVA normale"], ["margin_297a", "🧾 TVA sur la marge"]].map(([val, lib]) => (
+                <button key={val}
+                  className={`btn btn-sm ${regime === val ? "btn-primary" : "btn-ghost"}`}
+                  style={{ flex: 1 }}
+                  onClick={() => basculerRegime(val)}
+                >{lib}</button>
+              ))}
+            </div>
+            <div style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.5, marginTop: 8 }}>
+              {normale
+                ? "Le déposant vous facture la TVA et vous la déduisez. Elle sera détaillée sur la facture client."
+                : "Le déposant ne facture pas de TVA (particulier ou non-assujetti). Elle ne sera pas mentionnée sur la facture client (art. 297 A CGI)."}
+            </div>
+            {deposantPro !== normale && (
+              <div style={{ fontSize: 11, color: "var(--orange, #e5973c)", marginTop: 6 }}>
+                ⚠️ Le déposant est enregistré comme {deposantPro ? "professionnel" : "particulier"} : ce régime n'est pas celui attendu par défaut.
+              </div>
+            )}
+          </BlocIntegration>
+
+          {/* PRIX D'ACHAT — un montant en marge, deux synchronisés en normale */}
+          <BlocIntegration accent="var(--red)" fond="rgba(229,92,92,.07)" titre={`Prix d'achat${normale ? " TTC" : ""} — ce que vous versez au déposant`}>
+            <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
+              <MontantIntegration valeur={prixAchat} onChange={normale ? majTtc : setPrixAchat} couleur="var(--red)" />
+              {normale && (
+                <div>
+                  <div style={{ fontSize: 10, letterSpacing: 1.5, textTransform: "uppercase", color: "var(--muted2)", fontWeight: 700, marginBottom: 4 }}>
+                    dont HT
+                  </div>
+                  <MontantIntegration valeur={prixAchatHt} onChange={majHt} couleur="var(--muted2)" />
+                </div>
+              )}
+            </div>
+            {normale && achat > 0 && (
+              <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 6 }}>
+                TVA récupérable {fmtDec(achat - (parseFloat(prixAchatHt) || 0))} · c'est le HT qui part au Livre de Police
+              </div>
+            )}
+          </BlocIntegration>
+
+          {/* PRIX DE VENTE — prérempli depuis la fiche, modifiable */}
+          <BlocIntegration accent="var(--green)" fond="rgba(62,207,122,.06)" titre="Prix de vente TTC">
+            <MontantIntegration valeur={prixVente} onChange={setPrixVente} couleur="var(--green)" />
+            {pret && (
+              <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 6 }}>
+                Marge prévue{normale ? " TTC" : ""} :{" "}
+                <strong style={{ color: vente - achat >= 0 ? "var(--green)" : "var(--red)" }}>
+                  {fmt(vente - achat)}
+                </strong>
+                {" "}(hors frais)
+              </div>
+            )}
+          </BlocIntegration>
+
+          <div className="form-group" style={{ marginBottom: 16 }}>
+            <label className="form-label">Mode de règlement du déposant</label>
+            <select className="form-input" value={modeReglement} onChange={e => setModeReglement(e.target.value)}>
+              {["Virement", "Chèque", "Espèces", "Financement", "Reprise (compensation)"].map(x => <option key={x}>{x}</option>)}
+            </select>
+          </div>
+
+          <div style={{
+            background: "rgba(212,168,67,.07)", border: "1px solid var(--border2)",
+            borderRadius: 8, padding: "10px 14px", fontSize: 12, color: "var(--muted)", lineHeight: 1.6, marginBottom: 16
+          }}>
+            Le véhicule entrera au registre <strong style={{ color: "var(--text)" }}>à la date du jour ({today()})</strong>,
+            celle de l'acquisition — pas celle du dépôt, qui sera conservée à part. Il deviendra commandable et facturable.
+            Une entrée au livre de police ne se reprend pas : vérifiez les montants avant de valider.
+          </div>
+
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", alignItems: "center" }}>
+            {!pret && (
+              <span style={{ fontSize: 11, color: "var(--muted)", marginRight: "auto" }}>
+                Prix d'achat et prix de vente sont requis pour créer l'entrée.
+              </span>
+            )}
+            <button className="btn btn-ghost btn-sm" onClick={onClose}>Annuler</button>
+            <button
+              className="btn btn-primary btn-sm"
+              disabled={!pret}
+              style={!pret ? { opacity: 0.4, cursor: "not-allowed" } : undefined}
+              onClick={() => pret && onConfirm({
+                vat_regime: regime,
+                prix_vente: vente,
+                prix_achat: achat,
+                prix_achat_ht: normale ? (parseFloat(prixAchatHt) || 0) : 0,
+                mode_reglement: modeReglement,
+              })}
+            >📜 Intégrer au registre</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function VehicleModal({ vehicle, depotVente = false, onSave, onClose, apiKey, usage, setUsage, garageId, viewMode }) {
   const isEdit = !!vehicle?.id;
   // ─── BROUILLON ───────────────────────────────────────────
@@ -2682,10 +2899,13 @@ function VehicleModal({ vehicle, depotVente = false, onSave, onClose, apiKey, us
       ...form,
       id: form.id || uid(),
       plate: (form.plate || "").toUpperCase().replace(/\s/g, ""),
-      prix_achat: form.includeTreso ? (parseFloat(form.prix_achat) || 0) : 0,
+      // v8.193 — Un dépôt-vente n'a pas de prix d'achat : le garage ne l'a pas
+      // acheté. Les champs sont masqués, on force les montants à zéro plutôt
+      // que de laisser passer une valeur résiduelle de la saisie.
+      prix_achat: depotVente ? 0 : (form.includeTreso ? (parseFloat(form.prix_achat) || 0) : 0),
       // v8.167 — Le HT n'a de sens qu'en TVA normale ; en marge il vaut 0 pour
       // que prixAchatReel() retienne bien le montant payé.
-      prix_achat_ht: form.includeTreso && isTvaNormale(form)
+      prix_achat_ht: !depotVente && form.includeTreso && isTvaNormale(form)
         ? (parseFloat(prixAchatHtAffiche) || 0)
         : 0,
       prix_vente: parseFloat(form.prix_vente) || 0,   // toujours sauvegardé
@@ -2762,6 +2982,8 @@ function VehicleModal({ vehicle, depotVente = false, onSave, onClose, apiKey, us
             </div>
           </div>
 
+          {/* v8.193 — En dépôt-vente il n'y a pas d'acquisition : ni régime TVA, ni prix d'achat. Les deux blocs sont demandés au rachat, par le popup « Intégrer au LP ». */}
+          {!depotVente && (<>
           {/* v8.39 — RÉGIME TVA — défini à l'acquisition, hérité au BC */}
           <div style={{
             background: form.vat_regime === "margin_297a" ? "rgba(229,151,60,.08)" : "rgba(212,168,67,.06)",
@@ -2805,6 +3027,7 @@ function VehicleModal({ vehicle, depotVente = false, onSave, onClose, apiKey, us
               }} />
             </div>
           </div>
+          </>)}
 
           {/* PRIX DE VENTE — toujours visible */}
           <div style={{
@@ -2858,6 +3081,8 @@ function VehicleModal({ vehicle, depotVente = false, onSave, onClose, apiKey, us
             })()}
           </div>
 
+          {/* v8.193 — Masqué en dépôt-vente : rien n'est décaissé au dépôt. */}
+          {!depotVente && (<>
           {/* TRÉSORERIE — Optionnelle (prix d'achat seulement) */}
           <div style={{ marginBottom: 20 }}>
             <div
@@ -2927,6 +3152,7 @@ function VehicleModal({ vehicle, depotVente = false, onSave, onClose, apiKey, us
               </div>
             )}
           </div>
+          </>)}
 
           {/* v8.138 — Fournisseur : à qui le véhicule a été acheté. Préremplit le
               vendeur dans le Livre de Police (traçabilité anti-recel).
@@ -2937,7 +3163,9 @@ function VehicleModal({ vehicle, depotVente = false, onSave, onClose, apiKey, us
               On la demande donc ici, au moment où le véhicule entre. */}
           <div style={{ marginBottom: 16, padding: 14, borderRadius: 10, background: "rgba(212,168,67,.05)", border: "1px solid var(--border2)" }}>
             <div style={{ fontSize: 10, letterSpacing: 2, textTransform: "uppercase", color: "var(--gold)", fontWeight: 700, marginBottom: 10 }}>
-              Fournisseur — à qui vous avez acheté le véhicule <span style={{ color: "var(--muted)", fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>(préremplit le Livre de Police)</span>
+              {depotVente
+                ? <>Déposant — qui vous a confié le véhicule <span style={{ color: "var(--muted)", fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>(deviendra le fournisseur si vous le rachetez)</span></>
+                : <>Fournisseur — à qui vous avez acheté le véhicule <span style={{ color: "var(--muted)", fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>(préremplit le Livre de Police)</span></>}
             </div>
             <div className="form-grid">
               <div className="form-group">
@@ -3016,15 +3244,21 @@ function VehicleModal({ vehicle, depotVente = false, onSave, onClose, apiKey, us
                 <input className="form-input" value={form.fournisseur?.piece_autorite || ""} onChange={e => setFourn("piece_autorite", e.target.value)} placeholder="ex : Préfecture du Rhône" />
               </div>
 
-              <div className="form-group full">
-                <label className="form-label">Mode de règlement</label>
-                <select className="form-input" value={form.fournisseur?.mode_reglement || "Virement"} onChange={e => setFourn("mode_reglement", e.target.value)}>
-                  {["Virement", "Chèque", "Espèces", "Financement", "Reprise (compensation)"].map(x => <option key={x}>{x}</option>)}
-                </select>
-              </div>
+              {/* v8.193 — Rien n'est réglé au dépôt : le mode de règlement est
+                  demandé au rachat, par le popup « Intégrer au LP ». */}
+              {!depotVente && (
+                <div className="form-group full">
+                  <label className="form-label">Mode de règlement</label>
+                  <select className="form-input" value={form.fournisseur?.mode_reglement || "Virement"} onChange={e => setFourn("mode_reglement", e.target.value)}>
+                    {["Virement", "Chèque", "Espèces", "Financement", "Reprise (compensation)"].map(x => <option key={x}>{x}</option>)}
+                  </select>
+                </div>
+              )}
             </div>
             <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 8, lineHeight: 1.5 }}>
-              Le Livre de Police doit identifier la personne qui vous a cédé le véhicule et la pièce présentée (art. R.321-3 du Code pénal). Ce que vous saisissez ici remplit l'entrée du registre, il n'y a plus rien à recompléter ensuite.
+              {depotVente
+                ? "Le véhicule n'entre pas au registre tant qu'il est en dépôt. Mais si vous le rachetez un jour, c'est cette identité et cette pièce qui rempliront l'entrée (art. R.321-3 du Code pénal) — autant les relever maintenant, pendant que le déposant est devant vous. Elles vous serviront aussi au mandat de vente."
+                : "Le Livre de Police doit identifier la personne qui vous a cédé le véhicule et la pièce présentée (art. R.321-3 du Code pénal). Ce que vous saisissez ici remplit l'entrée du registre, il n'y a plus rien à recompléter ensuite."}
             </div>
           </div>
 
@@ -3032,7 +3266,7 @@ function VehicleModal({ vehicle, depotVente = false, onSave, onClose, apiKey, us
             {[["marque", "Marque *"], ["modele", "Modèle *"], ["finition", "Finition"], ["genre", "Genre national"], ["date_mise_en_circulation", "Date 1ère MEC"],
               ["motorisation", "Motorisation"], ["puissance_cv", "Puissance (ch)", "number"], ["puissance_fiscale", "Puissance fiscale (CV)", "number"], ["co2", "CO₂ (g/km)", "number"], ["boite", "Boîte"],
               ["couleur", "Couleur ext."], ["couleur_int", "Couleur int."], ["kilometrage", "Kilométrage", "number"],
-              ["vin", "N° VIN"], ["date_entree", "Date d'entrée (achat)"], ["carburant", "Carburant"]].map(([k, label, type]) => (
+              ["vin", "N° VIN"], ["date_entree", depotVente ? "Date de dépôt" : "Date d'entrée (achat)"], ["carburant", "Carburant"]].map(([k, label, type]) => (
                 <div className="form-group" key={k}>
                   <label className="form-label" style={k === "numero_formule" ? { color: "var(--gold)" } : undefined}>{label}</label>
                   <input className="form-input" type={type || "text"} value={form[k] || ""} onChange={e => set(k, e.target.value)} />
@@ -3260,6 +3494,8 @@ function FleetPage({ vehicles, setVehicles, orders, setOrders, apiKey, usage, se
   // commandé ni facturé. On demande donc le type AVANT d'ouvrir la modale.
   const [askType, setAskType] = useState(false);
   const [nouveauDepot, setNouveauDepot] = useState(false);
+  // v8.193 — Véhicule en cours d'intégration au registre (null = popup fermé).
+  const [integration, setIntegration] = useState(null);
 
   // ── AUTO-CRÉATION LP : surveille les véhicules et crée les entrées manquantes ──
   const prevVehicleIdsRef = React.useRef(new Set());
@@ -3565,6 +3801,40 @@ function FleetPage({ vehicles, setVehicles, orders, setOrders, apiKey, usage, se
           onClose={() => setAskType(false)}
         />
       )}
+      {integration && (
+        <IntegrationLpModal
+          vehicle={integration}
+          onClose={() => setIntegration(null)}
+          onConfirm={(acquisition) => {
+            const v = integration;
+            setIntegration(null);
+            // On retire l'id du ref de surveillance pour que l'effet
+            // d'auto-création le traite comme un nouvel arrivant et
+            // construise l'entrée avec toute sa logique habituelle
+            // (fournisseur, prix d'achat, reprise…).
+            prevVehicleIdsRef.current.delete(v.id);
+            // La date d'entrée au registre est celle de l'ACQUISITION,
+            // pas celle du dépôt : le véhicule n'entrait pas dans le
+            // stock du garage quand son propriétaire le lui a confié.
+            // L'effet d'auto-création lit `date_entree`, on la recale
+            // donc au jour de l'intégration — et on garde la date du
+            // dépôt de côté, elle raconte l'histoire du véhicule.
+            save({
+              ...v,
+              depot_vente: false,
+              depot_vente_depuis: v.depot_vente_depuis || v.date_entree || null,
+              date_entree: today(),
+              vat_regime: acquisition.vat_regime,
+              prix_achat: acquisition.prix_achat,
+              prix_achat_ht: acquisition.prix_achat_ht,
+              prix_vente: acquisition.prix_vente,
+              // Le déposant devient le fournisseur : même bloc d'identité,
+              // complété du règlement qui n'avait pas lieu d'être au dépôt.
+              fournisseur: { ...(v.fournisseur || {}), mode_reglement: acquisition.mode_reglement },
+            });
+          }}
+        />
+      )}
       {modal && <VehicleModal vehicle={modal === "add" ? null : modal} depotVente={modal === "add" ? nouveauDepot : !!modal.depot_vente} onSave={save} onClose={() => setModal(null)} apiKey={apiKey} usage={usage} setUsage={setUsage} garageId={garageId} viewMode={viewMode} />}
       {fiche && <VehicleFiche v={fiche} dealer={dealer} onClose={() => setFiche(null)} />}
       {pendingDelete && (
@@ -3704,30 +3974,12 @@ function FleetPage({ vehicles, setVehicles, orders, setOrders, apiKey, usage, se
                           className="btn btn-ghost btn-xs"
                           style={{ color: "var(--gold)" }}
                           title="Ce véhicule vous appartient désormais : créer son entrée au livre de police"
-                          onClick={() => {
-                            if (!window.confirm(
-                              `Intégrer « ${v.marque} ${v.modele} ${v.plate ? "(" + v.plate + ")" : ""} » au livre de police ?\n\n` +
-                              "Le véhicule cesse d'être en dépôt-vente : son entrée au registre est créée " +
-                              `à la date d'aujourd'hui (${today()}), et il devient commandable et facturable.`
-                            )) return;
-                            // On retire l'id du ref de surveillance pour que l'effet
-                            // d'auto-création le traite comme un nouvel arrivant et
-                            // construise l'entrée avec toute sa logique habituelle
-                            // (fournisseur, prix d'achat, reprise…).
-                            prevVehicleIdsRef.current.delete(v.id);
-                            // La date d'entrée au registre est celle de l'ACQUISITION,
-                            // pas celle du dépôt : le véhicule n'entrait pas dans le
-                            // stock du garage quand son propriétaire le lui a confié.
-                            // L'effet d'auto-création lit `date_entree`, on la recale
-                            // donc au jour de l'intégration — et on garde la date du
-                            // dépôt de côté, elle raconte l'histoire du véhicule.
-                            save({
-                              ...v,
-                              depot_vente: false,
-                              depot_vente_depuis: v.depot_vente_depuis || v.date_entree || null,
-                              date_entree: today(),
-                            });
-                          }}
+                          // v8.193 — Une simple confirmation ne suffisait pas :
+                          // l'entrée au registre se créait avec un prix d'achat
+                          // vide et le régime TVA par défaut, puisque ces champs
+                          // n'existent pas sur une fiche de dépôt-vente. On les
+                          // demande dans un popup avant de basculer.
+                          onClick={() => setIntegration(v)}
                         >📜 Intégrer au LP</button>
                       )}
                       <button className="btn btn-ghost btn-xs" onClick={() => setModal(v)}>✏️</button>
