@@ -2602,7 +2602,15 @@ function IntegrationLpModal({ vehicle, onConfirm, onClose }) {
   // donc normale. Simple présélection — un pro peut lui-même revendre sous la
   // marge, auquel cas il n'y a pas de TVA à déduire non plus.
   const deposantPro = (vehicle.fournisseur?.type || "particulier") === "professionnel";
-  const [regime, setRegime] = useState(deposantPro ? "normal" : "margin_297a");
+  // v8.197 — La fiche du dépôt-vente porte désormais un régime, choisi en
+  // connaissance du déposant. C'est un meilleur point de départ que la
+  // déduction depuis son seul « Type » : on part de lui, et on ne retombe sur
+  // le statut du déposant que pour un véhicule qui n'en porterait pas.
+  // Le régime validé ici écrase celui de la fiche — c'est le jour de l'achat
+  // qui fait foi, pas celui du dépôt.
+  const [regime, setRegime] = useState(
+    vehicle.vat_regime || (deposantPro ? "normal" : "margin_297a")
+  );
   // Le prix de vente a été saisi au dépôt, mais des mois ont pu passer : le
   // déposant l'a peut-être baissé faute d'acheteur. On le préremplit sans
   // l'imposer, c'est le prix du jour qui compte.
@@ -2797,7 +2805,12 @@ function VehicleModal({ vehicle, depotVente = false, onSave, onClose, apiKey, us
     // v8.135 — Toggle "Prix d'achat" actif par défaut sur une nouvelle entrée.
     includeTreso: true,
     // v8.39 — Régime TVA : 'normal' (défaut) ou 'margin_297a' (achat à particulier)
-    vat_regime: "normal",
+    // v8.197 — En dépôt-vente, le défaut est la marge : le déposant est un
+    // particulier dans l'écrasante majorité des cas (le champ « Type » vaut
+    // d'ailleurs « Particulier » par défaut), et un particulier ne facture
+    // pas de TVA. Garder « normal » ferait réapparaître la mention
+    // « TVA récupérable » sur l'affichette de qui ne touche pas au toggle.
+    vat_regime: depotVente ? "margin_297a" : "normal",
   });
   const [loading, setLoading] = useState(false);
 
@@ -2982,8 +2995,15 @@ function VehicleModal({ vehicle, depotVente = false, onSave, onClose, apiKey, us
             </div>
           </div>
 
-          {/* v8.193 — En dépôt-vente il n'y a pas d'acquisition : ni régime TVA, ni prix d'achat. Les deux blocs sont demandés au rachat, par le popup « Intégrer au LP ». */}
-          {!depotVente && (<>
+          {/* v8.193 — En dépôt-vente il n'y a pas d'acquisition : le prix
+              d'achat est donc demandé au rachat, par le popup « Intégrer au LP ».
+              v8.197 — Le régime TVA, lui, revient sur la fiche. Le masquer
+              laissait `vat_regime` à sa valeur par défaut « normal », et
+              l'affichette annonçait « TVA récupérable » sur un véhicule que le
+              garage ne possède pas — mention trompeuse pour un acheteur
+              professionnel, et interdite en régime de marge (art. 297 E CGI).
+              Le popup d'intégration l'écrase au rachat : c'est la valeur du
+              jour de l'achat qui fait foi. */}
           {/* v8.39 — RÉGIME TVA — défini à l'acquisition, hérité au BC */}
           <div style={{
             background: form.vat_regime === "margin_297a" ? "rgba(229,151,60,.08)" : "rgba(212,168,67,.06)",
@@ -3002,9 +3022,13 @@ function VehicleModal({ vehicle, depotVente = false, onSave, onClose, apiKey, us
                   : "TVA normale (20% sur prix total)"}
               </div>
               <div style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.4 }}>
-                {form.vat_regime === "margin_297a"
-                  ? "Acheté à un particulier ou non-assujetti. La TVA ne sera pas mentionnée sur la facture client."
-                  : "Acheté à un pro avec TVA déductible. La TVA sera détaillée sur la facture client."}
+                {depotVente
+                  ? (form.vat_regime === "margin_297a"
+                      ? "Déposé par un particulier ou un non-assujetti. Aucune TVA ne sera mentionnée sur l'affichette (art. 297 E CGI). Modifiable au rachat."
+                      : "Déposé par un professionnel assujetti. L'affichette indiquera le prix HT et la TVA récupérable. Modifiable au rachat.")
+                  : (form.vat_regime === "margin_297a"
+                      ? "Acheté à un particulier ou non-assujetti. La TVA ne sera pas mentionnée sur la facture client."
+                      : "Acheté à un pro avec TVA déductible. La TVA sera détaillée sur la facture client.")}
               </div>
             </div>
             <div style={{
@@ -3027,7 +3051,6 @@ function VehicleModal({ vehicle, depotVente = false, onSave, onClose, apiKey, us
               }} />
             </div>
           </div>
-          </>)}
 
           {/* PRIX DE VENTE — toujours visible */}
           <div style={{
