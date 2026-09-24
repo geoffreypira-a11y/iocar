@@ -335,6 +335,8 @@ async function handlePushInvoice(garage, supabase, body, res) {
     });
   }
 
+  if (!order.iobill_invoice_id && await refuserSiMargeSansPrixAchat(supabase, order, res)) return;
+
   // ─── MAPPING ─────────────────────────────────────────────────
   const mappedInvoice = mapOrderToInvoice(order, calc);
 
@@ -414,6 +416,8 @@ async function handlePushInvoiceDraft(garage, supabase, body, res) {
       invoice_number: order.iobill_invoice_number
     });
   }
+
+  if (await refuserSiMargeSansPrixAchat(supabase, order, res)) return;
 
   // Calc sans vérifier reste — on accepte une facture non payée (c'est draft)
   const calc = calcOrderBackend(order);
@@ -497,6 +501,8 @@ async function handlePushInvoiceIssued(garage, supabase, body, res) {
       invoice_number: order.iobill_invoice_number
     });
   }
+
+  if (await refuserSiMargeSansPrixAchat(supabase, order, res)) return;
 
   const calc = calcOrderBackend(order);
 
@@ -616,6 +622,9 @@ async function handleMarkInvoicePaid(garage, supabase, body, res) {
       reste: calc.reste
     });
   }
+
+  // Seulement si la facture n'est pas encore sur IOBILL (cas 2 ci-dessous).
+  if (!order.iobill_invoice_id && await refuserSiMargeSansPrixAchat(supabase, order, res)) return;
 
   const mappedInvoice = mapOrderToInvoice(order, calc);
   // Status reste 'paid' (valeur par défaut du mapping)
@@ -763,6 +772,8 @@ async function handlePushCreditNote(garage, supabase, body, res) {
       status: order.iobill_status
     });
   }
+
+  if (!order.iobill_invoice_id && await refuserSiMargeSansPrixAchat(supabase, order, res)) return;
 
   const mappedCreditNote = mapOrderToCreditNote(order, calc, targetStatus);
 
@@ -1280,13 +1291,49 @@ function buildClientPayload(order) {
 // Sans elle, la marge valait tout le prix de vente et la TVA sur marge était
 // surévaluée. Ordre : prix saisi, valeur de reprise embarquée dans la facture,
 // puis — factures créées avant que la facture ne l'embarque — le prix porté au
-// Livre de Police pour une entrée réglée en reprise.
+// Livre de Police (cf. loadOrder).
 function prixAchatMarge(order) {
-  const v = order.vehicle_data || {};
-  const achat = Number(v.prix_achat) || 0;
+  const achat = prixAchatEmbarque(order.vehicle_data);
   if (achat > 0) return achat;
-  if (v.origine === 'reprise') return Number(v.valeur_reprise) || 0;
-  return Number(order.livre_police_prix_reprise) || 0;
+  return Number(order.livre_police_prix_achat) || 0;
+}
+
+// Prix d'achat tel que la facture le porte elle-même — même règle que
+// coutAchatFlotte() côté application, qui s'en sert pour figer la marge
+// d'origine d'un avoir partiel.
+function prixAchatEmbarque(v) {
+  const achat = Number(v?.prix_achat) || 0;
+  if (achat > 0) return achat;
+  if (v?.origine === 'reprise') return Number(v?.valeur_reprise) || 0;
+  return 0;
+}
+
+// Garde-fou TVA sur marge : un véhicule vendu en régime marge dont on ne
+// connaît pas le prix d'achat verrait sa TVA calculée sur TOUT le prix de
+// vente. Plutôt que de transmettre une TVA surévaluée, on refuse l'envoi en
+// disant quoi compléter. Ne s'applique qu'à la création du document dans
+// IOBILL : un document déjà transmis n'est jamais bloqué.
+function motifMargeSansPrixAchat(order) {
+  if (order.avec_tva !== false) return null;
+  const v = order.vehicle_data || {};
+  if (!order.vehicle_id && !v.plate && !v.marque) return null;
+  if (prixAchatMarge(order) > 0) return null;
+  return "Prix d'achat du véhicule introuvable : en TVA sur marge, la TVA serait calculée "
+    + "sur tout le prix de vente. Renseignez le prix d'achat de ce véhicule au Livre de Police "
+    + "(pour une reprise : la valeur de reprise), puis relancez la transmission à IO BILL.";
+}
+
+async function refuserSiMargeSansPrixAchat(supabase, order, res) {
+  const motif = motifMargeSansPrixAchat(order);
+  if (!motif) return false;
+  // Même canal que les autres échecs : la pastille IOBILL de la facture
+  // affiche la raison, y compris quand l'envoi était automatique.
+  await supabase.from('orders').update({
+    iobill_sync_error: motif,
+    iobill_synced_at: null
+  }).eq('id', order.id);
+  res.status(400).json({ error: motif, code: 'MARGE_SANS_PRIX_ACHAT' });
+  return true;
 }
 
 function mapOrderToInvoice(order, calc) {
@@ -1792,7 +1839,12 @@ function mapOrderToCreditNote(order, calc, overrideStatus = null) {
   let purchase_price_cents = 0, marge_cents = 0, tva_marge_cents = 0;
   if (!avecTva) {
     const prixAchat = prixAchatMarge(order);
-    const margeOrigine = Number(order.avoir_marge_origine);
+    // La marge d'origine a été figée avec le prix que la facture embarquait.
+    // Si le prix retenu ici est plus élevé (reprise retrouvée au Livre de
+    // Police), la marge figée était trop haute d'autant.
+    const margeFigee = Number(order.avoir_marge_origine);
+    const ecartAchat = Math.max(0, prixAchat - prixAchatEmbarque(v));
+    const margeOrigine = Number.isFinite(margeFigee) ? Math.max(0, margeFigee - ecartAchat) : NaN;
     const margeReprise = order.avoir_partiel
       ? Math.min(ttcAmount, Number.isFinite(margeOrigine) ? margeOrigine : 0)
       : vehiculeTtc - prixAchat;
@@ -2016,9 +2068,12 @@ async function loadOrder(supabase, orderId, garageId) {
   const order = flattenOrder(row);
   const lpEntry = await loadLivrePoliceEntry(supabase, garageId, order);
   order.livre_police_ref = formatLivrePoliceRef(lpEntry?.num_ordre);
-  // Valeur de reprise au registre : sert de prix d'achat à la TVA sur marge
-  // quand la facture ne l'embarque pas (cf. prixAchatMarge).
-  order.livre_police_prix_reprise = lpEntry?.mode_reglement === 'Reprise (compensation)'
+  // Prix d'achat au registre : sert à la TVA sur marge quand la facture ne
+  // l'embarque pas (cf. prixAchatMarge). Retenu pour une reprise, ou quand il
+  // est exprimé en TTC — le montant payé, base de la marge. Un prix HT est
+  // celui d'un achat en TVA normale, il ne vaut pas pour une marge.
+  order.livre_police_prix_achat = lpEntry
+    && (lpEntry.mode_reglement === 'Reprise (compensation)' || lpEntry.prix_achat_base !== 'HT')
     ? (Number(lpEntry.prix_achat) || 0)
     : 0;
   return { error: null, order };
