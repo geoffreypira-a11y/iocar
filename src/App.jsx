@@ -4587,6 +4587,71 @@ function garantieLabel(mois) {
 /* ═══════════════════════════════════════════════════════════════
    ORDER / INVOICE FORM
 ═══════════════════════════════════════════════════════════════ */
+// Sélecteur de véhicule de la flotte avec recherche — même principe que la
+// recherche client CRM. Remplace un <select> devenu illisible au-delà de
+// quelques dizaines de véhicules. `onSelect("")` retire le véhicule.
+function VehiclePicker({ vehicles, value, onSelect }) {
+  const [search, setSearch] = useState("");
+  const [open, setOpen] = useState(!value);
+  const selected = value ? vehicles.find(v => v.id === value) : null;
+  // Plaque comparée sans espaces ni tirets : « AB123CD » trouve « AB-123-CD ».
+  const norm = (x) => String(x || "").toLowerCase().replace(/[\s-]/g, "");
+  const q = norm(search);
+  const filtered = !q ? vehicles : vehicles.filter(v =>
+    norm(`${v.plate} ${v.marque} ${v.modele} ${v.finition} ${v.vin} ${getYear(v)}`).includes(q)
+  );
+  const label = (v) => [v.marque, v.modele, v.finition].filter(Boolean).join(" ");
+
+  if (selected && !open) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "rgba(62,207,122,.08)", border: "1px solid rgba(62,207,122,.2)", borderRadius: 8 }}>
+        <span style={{ fontSize: 18 }}>🚗</span>
+        <div style={{ flex: 1, fontSize: 13, minWidth: 0 }}>
+          <strong>{selected.plate || "—"}</strong>
+          <span style={{ marginLeft: 8 }}>{label(selected)}</span>
+          {getYear(selected) && <span style={{ color: "var(--muted)", marginLeft: 6, fontSize: 11 }}>({getYear(selected)})</span>}
+        </div>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setSearch(""); setOpen(true); }}>Changer</button>
+        <button type="button" className="btn btn-ghost btn-sm" title="Retirer le véhicule" onClick={() => { onSelect(""); setSearch(""); setOpen(true); }}>✕</button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ background: "var(--card2)", borderRadius: 10, border: "1px solid var(--border)", padding: 12 }}>
+      <input className="form-input" placeholder="Rechercher un véhicule : plaque, marque, modèle, VIN…" value={search}
+        onChange={e => setSearch(e.target.value)} style={{ marginBottom: 8 }} />
+      <div style={{ maxHeight: 220, overflowY: "auto", display: "flex", flexDirection: "column", gap: 4 }}>
+        {filtered.length === 0 ? (
+          <div style={{ textAlign: "center", padding: "16px 12px", fontSize: 12, color: "var(--muted)" }}>
+            {vehicles.length === 0 ? "Aucun véhicule dans la flotte" : <>Aucun véhicule trouvé pour <strong>"{search}"</strong></>}
+          </div>
+        ) : filtered.map(v => (
+          <div key={v.id} onClick={() => { onSelect(v.id); setOpen(false); }}
+            style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 6, cursor: "pointer", background: "var(--card)", border: `1px solid ${v.id === value ? "var(--gold)" : "var(--border2)"}` }}
+            onMouseEnter={e => e.currentTarget.style.borderColor = "var(--gold)"}
+            onMouseLeave={e => e.currentTarget.style.borderColor = v.id === value ? "var(--gold)" : "var(--border2)"}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>{v.plate || "—"} · {label(v)}</div>
+              <div style={{ fontSize: 11, color: "var(--muted)" }}>
+                {[getYear(v), v.kilometrage ? `${Number(v.kilometrage).toLocaleString("fr-FR")} km` : "", parseFloat(v.prix_vente) > 0 ? fmt(parseFloat(v.prix_vente)) : ""].filter(Boolean).join(" · ") || "—"}
+              </div>
+            </div>
+            {STATUTS_FLEET[v.statut] && (
+              <span className={`badge ${STATUTS_FLEET[v.statut].cls}`} style={{ fontSize: 10, flexShrink: 0 }}>{STATUTS_FLEET[v.statut].label}</span>
+            )}
+          </div>
+        ))}
+      </div>
+      {selected && (
+        <div style={{ textAlign: "right", marginTop: 8 }}>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setOpen(false)}>Annuler</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClients, orders, setVehiclesRaw, usage, setUsage }) {
   const isEdit = !!order?.id;
   // ─── BROUILLON ───────────────────────────────────────────
@@ -5087,12 +5152,13 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
           <div className="form-grid" style={{ marginBottom: 20 }}>
             <div className="form-group full">
               <label className="form-label">Sélectionner depuis la flotte</label>
-              <select className="form-input" value={form.vehicle_id} onChange={e => selectVehicle(e.target.value)}>
-                <option value="">— Choisir un véhicule —</option>
-                {/* v8.192 — Les dépôts-vente ne sont ni commandables ni
-                    facturables : ils n'appartiennent pas au garage. */}
-                {vehicles.filter(v => !v.depot_vente).map(v => <option key={v.id} value={v.id}>{v.plate} · {v.marque} {v.modele} {v.finition} ({getYear(v)})</option>)}
-              </select>
+              {/* v8.192 — Les dépôts-vente ne sont ni commandables ni
+                  facturables : ils n'appartiennent pas au garage. */}
+              <VehiclePicker
+                vehicles={vehicles.filter(v => !v.depot_vente)}
+                value={form.vehicle_id}
+                onSelect={selectVehicle}
+              />
             </div>
             <div className="form-group full">
               <label className="form-label">Libellé véhicule</label>
