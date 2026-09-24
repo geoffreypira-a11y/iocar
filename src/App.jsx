@@ -861,6 +861,28 @@ function coutAchatFlotte(v) {
   return 0;
 }
 
+// TVA sur marge (art. 297 A) contenue dans le prix d'un véhicule vendu en
+// régime marge — invisible sur la facture (art. 297 E) mais à retirer pour
+// obtenir un CA HT. Même calcul que le pont IOBILL (mapOrderToInvoice /
+// mapOrderToCreditNote), en valeur absolue : le signe d'un avoir est porté
+// par l'appelant. `prixAchat` : cf. coutAchatFlotte, complété du Livre de Police.
+function tvaSurMarge(o, prixAchat) {
+  if (o.avec_tva !== false) return 0;
+  const ttcAmount = Math.abs(parseFloat(o.prix_ht) || 0);
+  const vehiculeTtc = Math.max(0, ttcAmount - Math.abs(parseFloat(o.remise_ttc) || 0));
+  let marge;
+  if (o.type === "avoir" && o.avoir_partiel) {
+    // Marge figée à la création de l'avoir, corrigée si le prix d'achat
+    // retrouvé dépasse celui que la facture embarquait.
+    const figee = Number(o.avoir_marge_origine);
+    const ecart = Math.max(0, prixAchat - coutAchatFlotte(o.vehicle_data));
+    marge = Math.min(ttcAmount, Number.isFinite(figee) ? Math.max(0, figee - ecart) : 0);
+  } else {
+    marge = vehiculeTtc - prixAchat;
+  }
+  return marge > 0 ? round2(marge * 20 / 120) : 0;
+}
+
 // Renvoie l'état du quota pour un usage donné :
 //   { used, remaining, isFree, payantes, montantHT, color, text }
 // "text" est prêt à afficher sous un bouton (ex: "7/10 gratuites" ou "12/10 · 0,40 € à facturer").
@@ -1665,7 +1687,8 @@ function CarteGriseCalc({ vehicleData, clientAddress, onApply, standalone }) {
 function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUsage, livrePolice, dealer, setDealer }) {
   // ─── FILTRE PÉRIODE ─────────────────────────────────────────
   // Le filtre s'applique UNIQUEMENT à : 🏷 Vendus et ✅ Encaissé.
-  // Les autres KPIs (stock, BC en cours, à encaisser, solde tréso, activité, suivi)
+  // Les autres KPIs (stock, BC en cours, à encaisser, engagé en flotte, CA de
+  // l'année, activité, suivi)
   // restent des INSTANTANÉS — c'est-à-dire la photo de l'instant présent, indépendante
   // de la période choisie.
   const [period, setPeriod] = useState("month");
@@ -1688,20 +1711,6 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
   const aEncaisser = orders.reduce((s, o) => {
     if (o.type === "avoir") return s;
     return s + Math.max(0, calcOrder(o).reste);
-  }, 0);
-
-  // ENCAISSÉ TOTAL (instantané, toutes périodes) — utilisé uniquement pour le Solde tréso.
-  // Identique au calcul filtré ci-dessous, mais sans la condition inPeriod.
-  const encaisseTotal = orders.reduce((s, o) => {
-    const sign = o.type === "avoir" ? -1 : 1;
-    let local = 0;
-    if (o.type !== "avoir") {
-      local += parseFloat(o.acompte_ttc) || 0;
-    }
-    for (const p of (o.paiements || [])) {
-      local += parseFloat(p.montant) || 0;
-    }
-    return s + local * sign;
   }, 0);
 
   // ENCAISSÉ — filtré par période (date des paiements, et date de création pour l'acompte).
@@ -1760,10 +1769,43 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
   // ACHATS véhicules — instantané, tous les véhicules en stock + frais docs.
   const totalAchats = vehicles.reduce((s, v) => s + (parseFloat(v.prix_achat) || 0), 0);
   const totalFraisDocs = vehicles.reduce((s, v) => s + (v.documents || []).reduce((s2, d) => s2 + (parseFloat(d.montant) || 0), 0), 0);
-  // Solde tréso : INSTANTANÉ PUR — encaissé total (toutes périodes) − achats totaux.
-  // Indépendant du sélecteur de période : c'est la photo réelle de la trésorerie à date.
-  const soldeTreso = encaisseTotal - totalAchats - totalFraisDocs;
-  const tresoPositive = soldeTreso >= 0;
+  // Trésorerie ENGAGÉE dans la flotte : ce que le stock actuel a coûté (achats +
+  // frais). Remplace l'ancien « Solde tréso » (encaissé total − achats du stock),
+  // qui mélangeait des ventes de toujours avec le seul stock présent et
+  // s'affichait en négatif alors que cet argent est immobilisé en véhicules,
+  // pas perdu.
+  const engageFlotte = totalAchats + totalFraisDocs;
+
+  // CA DE L'ANNÉE CIVILE — factures émises moins avoirs, hors débours (la
+  // carte grise refacturée n'est pas du chiffre d'affaires, art. 267 II 2°).
+  // Les BC ne sont pas encore des ventes. Indépendant du sélecteur de période.
+  // HT : en régime marge, le prix du véhicule contient une TVA sur marge
+  // invisible qu'on retire, calculée sur le prix d'achat retenu par le pont
+  // IOBILL (saisi, valeur de reprise, ou à défaut Livre de Police).
+  const prixAchatVente = (o) => {
+    const p = coutAchatFlotte(o.vehicle_data);
+    if (p > 0) return p;
+    const lp = livrePolice || [];
+    const plate = o.vehicle_plate || o.vehicle_data?.plate;
+    const e = (o.vehicle_id && lp.find(x => x.vehicle_id === o.vehicle_id))
+      || (plate && lp.find(x => x.immat === plate));
+    if (e && (e.mode_reglement === "Reprise (compensation)" || e.prix_achat_base !== "HT")) {
+      return parseFloat(e.prix_achat) || 0;
+    }
+    return 0;
+  };
+  const caAnnee = (prev) => orders.reduce((acc, o) => {
+    if (o.type !== "facture" && o.type !== "avoir") return acc;
+    const dans = prev ? inPreviousPeriod(o.date_creation, "year") : inPeriod(o.date_creation, "year");
+    if (!dans) return acc;
+    const c = calcOrder(o);
+    const sign = o.type === "avoir" ? -1 : 1;
+    const tvaMarge = o.avec_tva === false ? tvaSurMarge(o, prixAchatVente(o)) : 0;
+    return { ht: acc.ht + (c.ht || 0) - sign * tvaMarge, ttc: acc.ttc + (c.ttc || 0) };
+  }, { ht: 0, ttc: 0 });
+  const caAnnuel = caAnnee(false);
+  const caAnnuelPrev = caAnnee(true);
+  const anneeCourante = new Date().getFullYear();
 
   // ─── STOCK DORMANT ──────────────────────────────────────────
   // Véhicules disponibles classés par âge en stock (date_entree). On garde le top 5.
@@ -1936,9 +1978,9 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
   // Note : si encaisse est négatif (cas extrême : plus de remboursements que d'encaissements
   // dans la période), on le force à 0 dans le camembert pour ne pas afficher de tranche.
   const pieEncaisse = Math.max(0, encaisse);
-  const pieTotal = totalAchats + pieEncaisse + aEncaisser;
+  const pieTotal = engageFlotte + pieEncaisse + aEncaisser;
   const pieData = [
-    { name: "Avance tréso (achats)", value: totalAchats, color: "#e55c5c" },
+    { name: "Engagé en flotte", value: engageFlotte, color: "#e55c5c" },
     { name: "Encaissé", value: pieEncaisse, color: "#3ecf7a" },
     { name: "À encaisser", value: aEncaisser, color: "#e5973c" },
   ].filter(d => d.value > 0);
@@ -1966,12 +2008,8 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
           </div>
         </div>
       ))}
-      <div style={{ marginTop: 6, paddingTop: 10, borderTop: "1px solid rgba(255,255,255,.06)" }}>
-        <div style={{ fontSize: 10, letterSpacing: 1.5, textTransform: "uppercase", color: "#6b6a7a", marginBottom: 4 }}>Solde net tréso</div>
-        <div style={{ fontSize: 18, fontWeight: 800, fontFamily: "Syne", color: tresoPositive ? "#3ecf7a" : "#e55c5c" }}>{fmt(soldeTreso)}</div>
-        {aEncaisser > 0.01 && (
-          <div style={{ fontSize: 11, color: "#d4a843", marginTop: 4 }}>Projection : {fmt(soldeTreso + aEncaisser)}</div>
-        )}
+      <div style={{ marginTop: 6, paddingTop: 10, borderTop: "1px solid rgba(255,255,255,.06)", fontSize: 11, color: "#6b6a7a", maxWidth: 220 }}>
+        « Engagé en flotte » : prix d'achat + frais des véhicules en stock. De l'argent immobilisé, qui revient à la vente.
       </div>
     </div>
   );
@@ -2122,10 +2160,18 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
           <div className="kpi-val" style={{ color: aEncaisser > 0.01 ? "var(--orange)" : "var(--green)" }}>{fmt(aEncaisser)}</div>
           <div className="kpi-foot">{aEncaisser > 0.01 ? "solde restant dû" : "tout soldé ✓"}</div>
         </div>
-        <div className="kpi" style={{ border: `1px solid ${tresoPositive ? "rgba(62,207,122,.3)" : "rgba(229,92,92,.3)"}`, background: tresoPositive ? "rgba(62,207,122,.04)" : "rgba(229,92,92,.04)" }}>
-          <div className="kpi-label" style={{ color: tresoPositive ? "var(--green)" : "var(--red)" }}>🏦 Solde tréso</div>
-          <div className="kpi-val" style={{ color: tresoPositive ? "var(--green)" : "var(--red)" }}>{fmt(soldeTreso)}</div>
-          <div className="kpi-foot">encaissé − achats</div>
+        <div className="kpi" onClick={() => setTab("fleet")} style={{ cursor: "pointer" }}>
+          <div className="kpi-label">🏦 Engagé en flotte</div>
+          <div className="kpi-val gold">{fmt(engageFlotte)}</div>
+          <div className="kpi-foot">achats + frais du stock</div>
+        </div>
+        <div className="kpi" onClick={() => setTab("orders")} style={{ cursor: "pointer" }}>
+          <div className="kpi-label">📈 CA HT {anneeCourante}</div>
+          <div className="kpi-val green">{fmt(caAnnuel.ht)}</div>
+          <div className="kpi-foot">{fmt(caAnnuel.ttc)} TTC · hors carte grise</div>
+          {caAnnuelPrev.ht !== 0 && (
+            <div className="kpi-foot" style={{ color: "var(--muted)" }}>{anneeCourante - 1} : {fmt(caAnnuelPrev.ht)} HT</div>
+          )}
         </div>
       </div>
       </>}
@@ -2237,7 +2283,7 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
         <div className="card" style={{ borderLeft: "3px solid var(--gold)" }}>
           <div className="card-pad" style={{ borderBottom: "1px solid var(--border2)" }}>
             <div style={{ fontWeight: 700, fontSize: 14 }}>🏦 Répartition trésorerie</div>
-            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>Avance achats · Encaissé · À encaisser</div>
+            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>Engagé en flotte · Encaissé · À encaisser</div>
           </div>
           <div style={{ padding: "20px 24px" }}>
             {pieData.length === 0 ? (
