@@ -1274,6 +1274,21 @@ function buildClientPayload(order) {
   return clientPayload;
 }
 
+// Prix d'achat retenu pour la TVA sur marge (art. 297 A). Un véhicule entré
+// par REPRISE a prix_achat = 0 dans la flotte (aucun décaissement, hors
+// trésorerie) : son prix d'achat est la valeur de reprise, payée en nature.
+// Sans elle, la marge valait tout le prix de vente et la TVA sur marge était
+// surévaluée. Ordre : prix saisi, valeur de reprise embarquée dans la facture,
+// puis — factures créées avant que la facture ne l'embarque — le prix porté au
+// Livre de Police pour une entrée réglée en reprise.
+function prixAchatMarge(order) {
+  const v = order.vehicle_data || {};
+  const achat = Number(v.prix_achat) || 0;
+  if (achat > 0) return achat;
+  if (v.origine === 'reprise') return Number(v.valeur_reprise) || 0;
+  return Number(order.livre_police_prix_reprise) || 0;
+}
+
 function mapOrderToInvoice(order, calc) {
   const avecTva = order.avec_tva !== false;
   const tvaPct = avecTva ? (Number(order.tva_pct) || 20) : 0;
@@ -1309,7 +1324,7 @@ function mapOrderToInvoice(order, calc) {
   let marge_cents = 0;
   let tva_marge_cents = 0;
   if (!avecTva) {
-    const prixAchat = Number(v.prix_achat) || 0;
+    const prixAchat = prixAchatMarge(order);
     purchase_price_cents = Math.round(prixAchat * 100 * sign);
     const marge = baseApresRem - prixAchat;
     // v8.65 — On stocke la marge EXACTE (marge_cents), pas seulement sa TVA :
@@ -1776,7 +1791,7 @@ function mapOrderToCreditNote(order, calc, overrideStatus = null) {
   //                   limite de la marge d'origine figée à la création.
   let purchase_price_cents = 0, marge_cents = 0, tva_marge_cents = 0;
   if (!avecTva) {
-    const prixAchat = Number(v.prix_achat) || 0;
+    const prixAchat = prixAchatMarge(order);
     const margeOrigine = Number(order.avoir_marge_origine);
     const margeReprise = order.avoir_partiel
       ? Math.min(ttcAmount, Number.isFinite(margeOrigine) ? margeOrigine : 0)
@@ -1957,7 +1972,7 @@ function formatLivrePoliceRef(numOrdre) {
   return Number.isFinite(n) ? `VO#${String(n).padStart(4, '0')}` : null;
 }
 
-async function loadLivrePoliceRef(supabase, garageId, order) {
+async function loadLivrePoliceEntry(supabase, garageId, order) {
   const vehicleId = order?.vehicle_id || order?.vehicle_data?.id || null;
   const plate = order?.vehicle_plate || order?.vehicle_data?.plate || null;
   if (!vehicleId && !plate) return null;
@@ -1981,7 +1996,7 @@ async function loadLivrePoliceRef(supabase, garageId, order) {
         .limit(1);
       row = data && data[0];
     }
-    return formatLivrePoliceRef(row?.data?.num_ordre);
+    return row?.data || null;
   } catch (e) {
     // Le registre est un confort d'affichage : son absence ne doit jamais
     // empêcher une facture de partir.
@@ -1999,7 +2014,13 @@ async function loadOrder(supabase, orderId, garageId) {
     .single();
   if (error || !row) return { error: error || new Error('not found'), order: null };
   const order = flattenOrder(row);
-  order.livre_police_ref = await loadLivrePoliceRef(supabase, garageId, order);
+  const lpEntry = await loadLivrePoliceEntry(supabase, garageId, order);
+  order.livre_police_ref = formatLivrePoliceRef(lpEntry?.num_ordre);
+  // Valeur de reprise au registre : sert de prix d'achat à la TVA sur marge
+  // quand la facture ne l'embarque pas (cf. prixAchatMarge).
+  order.livre_police_prix_reprise = lpEntry?.mode_reglement === 'Reprise (compensation)'
+    ? (Number(lpEntry.prix_achat) || 0)
+    : 0;
   return { error: null, order };
 }
 

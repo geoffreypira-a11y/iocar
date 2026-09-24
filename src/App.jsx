@@ -4735,6 +4735,10 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
         // v8.63 (P2a) — prix d'achat embarqué pour permettre au pont de calculer
         // la TVA sur marge (art. 297 A). Seul IOCAR connaît ce prix.
         prix_achat: v.prix_achat,
+        // Véhicule entré par reprise : prix_achat vaut 0 (hors trésorerie), la
+        // valeur de reprise sert de prix d'achat pour la TVA sur marge.
+        origine: v.origine || "",
+        valeur_reprise: v.valeur_reprise || 0,
       },
       prix_ht: f.prix_ht || v.prix_vente || "",
       // Hérite régime TVA et synchronise avec_tva (sauf si l'user a déjà fait un choix manuel)
@@ -7330,7 +7334,7 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
               // on la fige ici, elle servira de plafond à la reprise.
               avoir_marge_origine: String(Math.max(0,
                 (Number(o.prix_ht || 0) - Number(o.remise_ttc || 0))
-                - (Number(o.vehicle_data?.prix_achat) || 0)
+                - coutAchatFlotte(o.vehicle_data)
               ).toFixed(2)),
               reprise_active: false,
               reprise_valeur: 0,
