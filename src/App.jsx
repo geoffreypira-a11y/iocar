@@ -9600,6 +9600,8 @@ function LivrePoliceModal({ entry, nextNum, vehicles, onSave, onClose }) {
     return () => clearTimeout(t);
   }, [form, isEdit]);
 
+  // Véhicule dont on vient d'importer les données (affichage du sélecteur).
+  const [importVehicleId, setImportVehicleId] = useState("");
   const fillFromVehicle = (vid) => {
     const v = vehicles?.find(x => x.id === vid);
     if (!v) return;
@@ -9658,13 +9660,18 @@ function LivrePoliceModal({ entry, nextNum, vehicles, onSave, onClose }) {
           {vehicles?.length > 0 && (
             <div style={{ marginBottom: 16 }}>
               <label className="form-label">Importer depuis la flotte</label>
-              <select className="form-input" onChange={e => fillFromVehicle(e.target.value)} style={{ marginTop: 4 }}>
-                <option value="">— Choisir un véhicule —</option>
-                {/* v8.192 — Un dépôt-vente n'entre au registre que par le
-                    bouton « Intégrer au LP » de la Flotte, qui lève aussi son
-                    drapeau. L'importer ici laisserait les deux incohérents. */}
-                {vehicles.filter(v => !v.depot_vente).map(v => <option key={v.id} value={v.id}>{v.plate} · {v.marque} {v.modele} ({getYear(v)})</option>)}
-              </select>
+              {/* v8.192 — Un dépôt-vente n'entre au registre que par le
+                  bouton « Intégrer au LP » de la Flotte, qui lève aussi son
+                  drapeau. L'importer ici laisserait les deux incohérents. */}
+              {/* Import ponctuel : retirer le véhicule du sélecteur ne vide
+                  pas les champs déjà remplis, comme avec l'ancien menu. */}
+              <div style={{ marginTop: 4 }}>
+                <VehiclePicker
+                  vehicles={vehicles.filter(v => !v.depot_vente)}
+                  value={importVehicleId}
+                  onSelect={id => { setImportVehicleId(id); if (id) fillFromVehicle(id); }}
+                />
+              </div>
             </div>
           )}
 
