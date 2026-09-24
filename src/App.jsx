@@ -2144,7 +2144,17 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
       <div style={{ fontSize: 10, letterSpacing: 1.5, textTransform: "uppercase", color: "var(--muted)", marginBottom: 8, textAlign: "center" }}>
         📸 État actuel · instantané
       </div>
-      <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(180px, 220px))", justifyContent: "center", marginBottom: 24 }}>
+      {/* CA en premier ; les cinq cartes occupent toute la largeur et passent
+          à la ligne sur petit écran. */}
+      <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", marginBottom: 24 }}>
+        <div className="kpi" onClick={() => setTab("orders")} style={{ cursor: "pointer" }}>
+          <div className="kpi-label">📈 CA HT {anneeCourante}</div>
+          <div className="kpi-val green">{fmt(caAnnuel.ht)}</div>
+          <div className="kpi-foot">{fmt(caAnnuel.ttc)} TTC · hors carte grise</div>
+          {caAnnuelPrev.ht !== 0 && (
+            <div className="kpi-foot" style={{ color: "var(--muted)" }}>{anneeCourante - 1} : {fmt(caAnnuelPrev.ht)} HT</div>
+          )}
+        </div>
         <div className="kpi" onClick={() => setTab("fleet")} style={{ cursor: "pointer" }}>
           <div className="kpi-label">🚗 En stock</div>
           <div className="kpi-val gold">{dispo}</div>
@@ -2164,14 +2174,6 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
           <div className="kpi-label">🏦 Engagé en flotte</div>
           <div className="kpi-val gold">{fmt(engageFlotte)}</div>
           <div className="kpi-foot">achats + frais du stock</div>
-        </div>
-        <div className="kpi" onClick={() => setTab("orders")} style={{ cursor: "pointer" }}>
-          <div className="kpi-label">📈 CA HT {anneeCourante}</div>
-          <div className="kpi-val green">{fmt(caAnnuel.ht)}</div>
-          <div className="kpi-foot">{fmt(caAnnuel.ttc)} TTC · hors carte grise</div>
-          {caAnnuelPrev.ht !== 0 && (
-            <div className="kpi-foot" style={{ color: "var(--muted)" }}>{anneeCourante - 1} : {fmt(caAnnuelPrev.ht)} HT</div>
-          )}
         </div>
       </div>
       </>}
