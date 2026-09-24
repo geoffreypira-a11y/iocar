@@ -850,6 +850,17 @@ function prixAchatReel(v) {
   return ht > 0 ? ht : round2(ttc / TVA_VEHICULE);
 }
 
+// Coût d'acquisition TTC servant à la MARGE affichée en Flotte.
+// Un véhicule entré par reprise a prix_achat = 0 (aucun cash décaissé, donc
+// hors trésorerie) : sa valeur de reprise est pourtant bien son coût, comme au
+// Livre de Police. Un prix d'achat saisi à la main reste prioritaire.
+function coutAchatFlotte(v) {
+  const achat = parseFloat(v?.prix_achat) || 0;
+  if (achat > 0) return achat;
+  if (v?.origine === "reprise") return parseFloat(v?.valeur_reprise) || 0;
+  return 0;
+}
+
 // Renvoie l'état du quota pour un usage donné :
 //   { used, remaining, isFree, payantes, montantHT, color, text }
 // "text" est prêt à afficher sous un bouton (ex: "7/10 gratuites" ou "12/10 · 0,40 € à facturer").
@@ -3072,9 +3083,12 @@ function VehicleModal({ vehicle, depotVente = false, onSave, onClose, apiKey, us
                 <span style={{ fontSize: 18, color: "var(--muted)" }}>€</span>
               </div>
             </div>
-            {parseFloat(form.prix_vente) > 0 && form.includeTreso && parseFloat(form.prix_achat) > 0 && (() => {
+            {parseFloat(form.prix_vente) > 0 && coutAchatFlotte({ ...form, prix_achat: form.includeTreso ? form.prix_achat : 0 }) > 0 && (() => {
               const totalDocs = (form.documents || []).reduce((s, d) => s + (parseFloat(d.montant) || 0), 0);
-              const coutTotal = parseFloat(form.prix_achat) + totalDocs;
+              // Reprise : la valeur de reprise sert de coût, sans passer en trésorerie.
+              const achatSaisi = form.includeTreso ? (parseFloat(form.prix_achat) || 0) : 0;
+              const coutAchat = coutAchatFlotte({ ...form, prix_achat: achatSaisi });
+              const coutTotal = coutAchat + totalDocs;
               const marge = parseFloat(form.prix_vente) - coutTotal;
               return (
                 <div style={{ textAlign: "center", padding: "8px 14px", background: "var(--card2)", borderRadius: 8, border: "1px solid var(--border2)" }}>
@@ -3084,7 +3098,7 @@ function VehicleModal({ vehicle, depotVente = false, onSave, onClose, apiKey, us
                   </div>
                   {totalDocs > 0 && (
                     <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 4 }}>
-                      Achat {fmt(parseFloat(form.prix_achat))} + Frais {fmt(totalDocs)} = Coût total {fmt(coutTotal)}
+                      {achatSaisi > 0 ? "Achat" : "Reprise"} {fmt(coutAchat)} + Frais {fmt(totalDocs)} = Coût total {fmt(coutTotal)}
                     </div>
                   )}
                   {/* v8.167 — En TVA normale, la TVA est déductible à l'achat et
@@ -3093,7 +3107,12 @@ function VehicleModal({ vehicle, depotVente = false, onSave, onClose, apiKey, us
                       de remplacer un chiffre que l'abonné a l'habitude de lire.
                       Hors frais : leur TVA dépend de chaque poste (la carte
                       grise, par exemple, est un débours non récupérable). */}
-                  {isTvaNormale(form) && (
+                  {achatSaisi <= 0 && (
+                    <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 4 }}>
+                      Base : valeur de reprise {fmt(coutAchat)} · hors trésorerie
+                    </div>
+                  )}
+                  {isTvaNormale(form) && achatSaisi > 0 && (
                     <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 4 }}>
                       Sur le véhicule seul : {fmt(parseFloat(form.prix_vente) / TVA_VEHICULE)} HT − {fmt(prixAchatReel(form))} HT
                       = <strong style={{ color: "var(--muted2)" }}>{fmt(parseFloat(form.prix_vente) / TVA_VEHICULE - prixAchatReel(form))} HT</strong>
@@ -3905,8 +3924,11 @@ function FleetPage({ vehicles, setVehicles, orders, setOrders, apiKey, usage, se
             )}
             {filtered.map(v => {
               const totalDocs = (v.documents || []).reduce((s, d) => s + (parseFloat(d.montant) || 0), 0);
-              const coutTotal = (parseFloat(v.prix_achat) || 0) + totalDocs;
+              const coutAchat = coutAchatFlotte(v);
+              const coutTotal = coutAchat + totalDocs;
               const marge = (parseFloat(v.prix_vente) || 0) - coutTotal;
+              // Reprise : le coût vient de la valeur de reprise, hors trésorerie.
+              const achatReprise = !(parseFloat(v.prix_achat) > 0) && coutAchat > 0;
               const lpEntry = livrePolice?.find(e => e.vehicle_id === v.id || e.immat === v.plate);
               const lpIncomplete = lpEntry?._incomplete || !lpEntry;
               return (
@@ -3930,7 +3952,10 @@ function FleetPage({ vehicles, setVehicles, orders, setOrders, apiKey, usage, se
                     <div style={{ fontSize: 11, color: "var(--muted)" }}>{v.carburant} · {v.puissance_cv}ch</div>
                   </td>
                   <td style={{ fontFamily: "DM Mono", fontSize: 12 }}>{Number(v.kilometrage || 0).toLocaleString("fr-FR")}</td>
-                  <td style={{ fontFamily: "DM Mono", fontSize: 12 }}>{fmt(v.prix_achat)}</td>
+                  <td style={{ fontFamily: "DM Mono", fontSize: 12 }}>
+                    {fmt(coutAchat)}
+                    {achatReprise && <div style={{ fontSize: 9, color: "var(--muted)" }} title="Valeur de reprise : sert à la marge, n'entre pas en trésorerie">reprise · hors tréso</div>}
+                  </td>
                   <td style={{ fontFamily: "DM Mono", fontSize: 12, color: totalDocs > 0 ? "var(--orange)" : "var(--muted)" }}>
                     {totalDocs > 0 ? fmt(totalDocs) : "—"}
                     {(v.documents || []).length > 0 && <div style={{ fontSize: 9, color: "var(--muted)" }}>{(v.documents || []).length} doc{(v.documents || []).length > 1 ? "s" : ""}</div>}
@@ -4710,6 +4735,10 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
         // v8.63 (P2a) — prix d'achat embarqué pour permettre au pont de calculer
         // la TVA sur marge (art. 297 A). Seul IOCAR connaît ce prix.
         prix_achat: v.prix_achat,
+        // Véhicule entré par reprise : prix_achat vaut 0 (hors trésorerie), la
+        // valeur de reprise sert de prix d'achat pour la TVA sur marge.
+        origine: v.origine || "",
+        valeur_reprise: v.valeur_reprise || 0,
       },
       prix_ht: f.prix_ht || v.prix_vente || "",
       // Hérite régime TVA et synchronise avec_tva (sauf si l'user a déjà fait un choix manuel)
@@ -7305,7 +7334,7 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
               // on la fige ici, elle servira de plafond à la reprise.
               avoir_marge_origine: String(Math.max(0,
                 (Number(o.prix_ht || 0) - Number(o.remise_ttc || 0))
-                - (Number(o.vehicle_data?.prix_achat) || 0)
+                - coutAchatFlotte(o.vehicle_data)
               ).toFixed(2)),
               reprise_active: false,
               reprise_valeur: 0,
