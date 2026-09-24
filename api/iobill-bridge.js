@@ -1190,7 +1190,7 @@ function buildReprisePayment(order, sign = 1) {
   return {
     amount_cents: Math.round(reprise * 100 * sign),
     method: 'other',
-    paid_at: toIsoDate(order.date_facture || order.date_creation),
+    paid_at: dateDocumentStricte(order),
     notes: plate ? `Reprise véhicule ${plate}` : 'Reprise véhicule',
     reference: desc
   };
@@ -1442,7 +1442,7 @@ function mapOrderToInvoice(order, calc) {
       // v8.146 — Moyen de l'acompte choisi à la création (order.acompte_mode),
       // fallback 'cash' si non renseigné (anciennes commandes).
       method: order.acompte_mode ? mapPaymentMethod(order.acompte_mode) : 'cash',
-      paid_at: toIsoDate(order.date_facture || order.date_creation),
+      paid_at: dateDocumentStricte(order),
       notes: 'Acompte versé à la signature (IO CAR)',
       reference: order.ref ? sanitizeString(`Acompte ${order.ref}`) : null
     });
@@ -1478,7 +1478,7 @@ function mapOrderToInvoice(order, calc) {
   return {
     external_id: order.id,
     number: sanitizeString(order.ref) || `IOCAR-${String(order.id || '').slice(0, 8).toUpperCase()}`,
-    issue_date: toIsoDate(order.date_facture || order.date_creation),
+    issue_date: dateDocumentStricte(order),
     // ⚠️ Toujours 'paid' : on n'a pushé que parce que calc.reste <= 0.01
     status: 'paid',
     // v8.180 — Mention obligatoire, jusqu'ici absente du Factur-X : le
@@ -1861,7 +1861,7 @@ function mapOrderToCreditNote(order, calc, overrideStatus = null) {
   return {
     external_id: order.id,
     number: sanitizeString(order.ref) || `IOCAR-AV-${String(order.id || '').slice(0, 8).toUpperCase()}`,
-    issue_date: toIsoDate(order.date_facture || order.date_creation),
+    issue_date: dateDocumentStricte(order),
     status: overrideStatus || 'issued', // 'draft' à la création, 'issued' au remboursement complet
     source_invoice_number: order.facture_origine || null, // ⚠ requis côté IOBILL
     reason: sanitizeString(order.motif_avoir) || sanitizeString(order.notes) || null,
@@ -1946,6 +1946,60 @@ function sanitizeMultiline(s) {
 // Convertit une date IOCAR (souvent "DD/MM/YYYY" en français) vers ISO YYYY-MM-DD
 // Accepte aussi : Date object, timestamp, déjà-ISO, "YYYY-MM-DD".
 // Retourne toujours une string ISO "YYYY-MM-DD" ou today() en fallback.
+// v8.205 — Date de document : AUCUN repli sur la date du jour.
+//
+// `toIsoDate` se rabat sur aujourd'hui quand il ne comprend pas son entrée.
+// C'est acceptable pour la date d'un règlement, ça ne l'est pas pour la date
+// d'une facture : elle détermine la période de TVA, elle part telle quelle
+// dans le Factur-X (BT-2), et une facture datée du jour de la poussée
+// tomberait dans la mauvaise déclaration — en silence.
+//
+// Cette variante refait l'analyse elle-même plutôt que d'appeler `toIsoDate`
+// et d'essayer de deviner s'il a compris : lever sur l'illisible et deviner
+// après coup sont deux choses différentes, et la seconde se trompe.
+//
+// Elle accepte les mêmes formats que `toIsoDate` — AAAA-MM-JJ, JJ/MM/AAAA,
+// AAAAMMJJ, Date, horodatage — et lève sur tout le reste. Le handler du pont
+// attrape l'exception et la renvoie au client, qui l'affiche : on corrige la
+// commande, on repousse.
+function dateDocumentStricte(order) {
+  const brut = order?.date_facture || order?.date_creation;
+  const nom = order?.ref || order?.id || '?';
+
+  if (brut === null || brut === undefined || brut === '') {
+    throw new Error(
+      `Commande ${nom} : aucune date de facture ni de création. Poussée refusée — `
+      + "une facture sans date tomberait dans la mauvaise période de TVA."
+    );
+  }
+
+  if (brut instanceof Date && !isNaN(brut.getTime())) {
+    return brut.toISOString().slice(0, 10);
+  }
+  if (typeof brut === 'number' && !isNaN(new Date(brut).getTime())) {
+    return new Date(brut).toISOString().slice(0, 10);
+  }
+
+  const t = String(brut).trim();
+
+  const iso = t.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+
+  const fr = t.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
+  if (fr) return `${fr[3]}-${fr[2].padStart(2, '0')}-${fr[1].padStart(2, '0')}`;
+
+  const compact = t.match(/^(\d{4})(\d{2})(\d{2})$/);
+  if (compact) return `${compact[1]}-${compact[2]}-${compact[3]}`;
+
+  const natif = new Date(t);
+  if (!isNaN(natif.getTime())) return natif.toISOString().slice(0, 10);
+
+  throw new Error(
+    `Commande ${nom} : date « ${t} » illisible. Poussée refusée — formats acceptés : `
+    + "AAAA-MM-JJ ou JJ/MM/AAAA."
+  );
+}
+
 function toIsoDate(input) {
   const fallback = new Date().toISOString().slice(0, 10);
   if (!input) return fallback;
