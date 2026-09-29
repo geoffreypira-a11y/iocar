@@ -7244,24 +7244,23 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
     const matchS = !search || `${o.ref} ${o.client?.name} ${o.vehicle_label} ${o.vehicle_plate}`.toLowerCase().includes(search.toLowerCase());
     return matchT && matchS;
   }).sort((a, b) => {
-    // 1) Priorité : timestamp de création précis (created_at) — le plus récent en haut
-    if (a.created_at && b.created_at) {
-      return b.created_at.localeCompare(a.created_at);
-    }
-    // Si un seul a un created_at, il est considéré comme plus récent
-    if (a.created_at && !b.created_at) return -1;
-    if (!a.created_at && b.created_at) return 1;
-    // 2) Fallback pour les anciens documents sans timestamp : date de création (format fr)
-    const dateCmp = (b.date_creation || "").localeCompare(a.date_creation || "");
-    if (dateCmp !== 0) return dateCmp;
-    // 3) À date égale : numéro séquentiel de la ref le plus élevé en haut
+    // Ordre d'un registre de factures : date du document, puis numéro.
+    // Trier d'abord sur created_at (création de la ligne en base) plaçait mal
+    // un BC converti en facture — il garde la date de création du BC — ou une
+    // facture refaite, au-dessus d'un numéro plus élevé.
+    // 1) Date du document, la plus récente en haut
+    const tA = parseFr(a.date_creation)?.getTime() ?? 0;
+    const tB = parseFr(b.date_creation)?.getTime() ?? 0;
+    if (tA !== tB) return tB - tA;
+    // 2) À date égale : numéro séquentiel le plus élevé en haut
     const numA = parseInt((a.ref || "").match(/(\d+)$/)?.[1] || "0", 10);
     const numB = parseInt((b.ref || "").match(/(\d+)$/)?.[1] || "0", 10);
     if (numA !== numB) return numB - numA;
-    // 4) Si même numéro : la facture d'abord, puis son avoir juste après
+    // 3) Même numéro : la facture d'abord, puis son avoir juste après
     if (a.type === "facture" && b.type === "avoir") return -1;
     if (a.type === "avoir" && b.type === "facture") return 1;
-    return 0;
+    // 4) En dernier recours : création en base, la plus récente en haut
+    return (b.created_at || "").localeCompare(a.created_at || "");
   });
 
   return (
