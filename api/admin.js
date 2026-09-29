@@ -4,6 +4,25 @@
 import { verifyUser, setCors } from './_lib/auth.js';
 import { saveBackup, KEEP_DAYS } from './_lib/backup.js';
 
+// ─── DOCUMENTS : garde-fous de numérotation ─────────────────
+const estDocumentFiscal = (type) => type === 'facture' || type === 'avoir';
+
+// Transmis à IO BILL (ou à la plateforme) : le document ne bouge plus, il se
+// corrige par un avoir. Les marqueurs vivent en colonnes ou dans `data`
+// selon l'époque de l'écriture.
+function transmisIobill(row) {
+  const d = row?.data || {};
+  const v = (k) => row?.[k] ?? d[k];
+  return !!(v('iobill_invoice_id') || v('pdp_transmission_id') || v('pdp_transmitted_at'));
+}
+const MSG_TRANSMIS = "Ce document est déjà transmis à IO BILL : il ne peut plus être modifié. "
+  + "Corrigez-le par un avoir.";
+
+// « VEH-2026-0004 » → série « VEH-2026 », numéro 4.
+const serieDe = (ref) => (typeof ref === 'string' && ref.includes('-'))
+  ? ref.slice(0, ref.lastIndexOf('-')) : '';
+const numeroDe = (ref) => parseInt(String(ref || '').split('-').pop(), 10) || 0;
+
 export default async function handler(req, res) {
   setCors(res);
   if (req.method === 'OPTIONS') return res.status(204).end();
@@ -53,9 +72,109 @@ export default async function handler(req, res) {
         if (!allowed.includes(table) || !id) {
           return res.status(400).json({ error: 'Paramètres invalides' });
         }
+        // Une facture ou un avoir ne se supprime jamais : la suppression
+        // laissait un trou dans la numérotation (VEH-2026-0003 chez LV AUTOS).
+        // L'admin dispose de « Corriger » et « Repasser en BC » à la place.
+        if (table === 'orders') {
+          const { data: row } = await supabase
+            .from('orders').select('data').eq('id', id).maybeSingle();
+          if (row && estDocumentFiscal(row.data?.type)) {
+            return res.status(409).json({
+              error: "Une facture ou un avoir ne se supprime pas : la numérotation doit rester "
+                + "continue. Utilisez « Corriger » (même numéro) ou, pour la dernière facture, "
+                + "« Repasser en BC »."
+            });
+          }
+        }
         const { error } = await supabase.from(table).delete().eq('id', id);
         if (error) return res.status(500).json({ error: error.message });
         return res.status(200).json({ ok: true });
+      }
+
+      // ─── CORRIGER UN DOCUMENT D'UN GARAGE ────────────────────
+      // Remplace le contenu d'un BC, d'une facture ou d'un avoir. Pour une
+      // facture ou un avoir, le numéro et le type sont conservés quoi que
+      // le formulaire envoie. Refusé une fois le document transmis à IO BILL :
+      // la correction passe alors par un avoir.
+      case 'update_order': {
+        const { id, data } = payload || {};
+        if (!id || !data || typeof data !== 'object') {
+          return res.status(400).json({ error: 'Paramètres invalides' });
+        }
+        const { data: row, error: rowErr } = await supabase
+          .from('orders').select('*').eq('id', id).maybeSingle();
+        if (rowErr) return res.status(500).json({ error: rowErr.message });
+        if (!row) return res.status(404).json({ error: 'Document introuvable' });
+        if (transmisIobill(row)) {
+          return res.status(409).json({ error: MSG_TRANSMIS });
+        }
+        const ancien = row.data || {};
+        const { id: _i, garage_id: _g, created_at: _c, ...champs } = data;
+        const suivant = { ...champs };
+        if (estDocumentFiscal(ancien.type)) {
+          suivant.ref = ancien.ref;
+          suivant.type = ancien.type;
+        }
+        const { error } = await supabase.from('orders').update({ data: suivant }).eq('id', id);
+        if (error) return res.status(500).json({ error: error.message });
+        return res.status(200).json({ ok: true, data: suivant });
+      }
+
+      // ─── REPASSER LA DERNIÈRE FACTURE EN BON DE COMMANDE ─────
+      // Seule la dernière facture de sa série peut redevenir un BC : son
+      // numéro est alors libéré et resservira à la prochaine conversion, sans
+      // trou. Une facture au milieu de la série se corrige avec update_order.
+      case 'facture_to_bc': {
+        const { id } = payload || {};
+        if (!id) return res.status(400).json({ error: 'Paramètres invalides' });
+        const { data: row, error: rowErr } = await supabase
+          .from('orders').select('*').eq('id', id).maybeSingle();
+        if (rowErr) return res.status(500).json({ error: rowErr.message });
+        if (!row) return res.status(404).json({ error: 'Document introuvable' });
+        const facture = row.data || {};
+        if (facture.type !== 'facture') {
+          return res.status(400).json({ error: 'Seule une facture peut repasser en BC' });
+        }
+        if (transmisIobill(row)) {
+          return res.status(409).json({ error: MSG_TRANSMIS });
+        }
+
+        const { data: docs, error: docsErr } = await supabase
+          .from('orders').select('data').eq('garage_id', row.garage_id);
+        if (docsErr) return res.status(500).json({ error: docsErr.message });
+        const tous = (docs || []).map(d => d.data || {});
+
+        const serie = serieDe(facture.ref);
+        const derniere = Math.max(0, ...tous
+          .filter(d => d.type === 'facture' && serieDe(d.ref) === serie)
+          .map(d => numeroDe(d.ref)));
+        if (!serie || numeroDe(facture.ref) !== derniere) {
+          return res.status(409).json({
+            error: `Seule la dernière facture de la série peut repasser en BC `
+              + `(${serie}-${String(derniere).padStart(4, '0')}). `
+              + `Pour ${facture.ref}, utilisez « Corriger » : le numéro est conservé.`
+          });
+        }
+        if (tous.some(d => d.type === 'avoir' && d.facture_origine === facture.ref)) {
+          return res.status(409).json({
+            error: `${facture.ref} a un avoir : elle ne peut plus redevenir un BC.`
+          });
+        }
+
+        // Numéro de BC : même règle que nextRef côté application.
+        const annee = new Date().getFullYear();
+        const prefixeBc = `BC-${annee}`;
+        const dernierBc = Math.max(0, ...tous
+          .filter(d => d.type === 'bc' && serieDe(d.ref) === prefixeBc)
+          .map(d => numeroDe(d.ref)));
+        const suivant = {
+          ...facture,
+          type: 'bc',
+          ref: `${prefixeBc}-${String(dernierBc + 1).padStart(4, '0')}`,
+        };
+        const { error } = await supabase.from('orders').update({ data: suivant }).eq('id', id);
+        if (error) return res.status(500).json({ error: error.message });
+        return res.status(200).json({ ok: true, data: suivant });
       }
 
       // ─── TOGGLE is_active ───────────────────────────────────

@@ -4656,6 +4656,9 @@ function VehiclePicker({ vehicles, value, onSelect }) {
 
 function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClients, orders, setVehiclesRaw, usage, setUsage }) {
   const isEdit = !!order?.id;
+  // Une facture ou un avoir déjà numéroté garde son numéro et son type : les
+  // changer ici laissait un trou dans la série (ou la faisait repartir faux).
+  const numeroVerrouille = isEdit && (order?.type === "facture" || order?.type === "avoir");
   // ─── BROUILLON ───────────────────────────────────────────
   // Clé du brouillon — un seul à la fois pour les NOUVEAUX documents.
   // En mode édition, pas de brouillon (on travaille sur des données réelles).
@@ -4918,18 +4921,21 @@ function OrderForm({ order, vehicles, onSave, onClose, apiKey, clients, setClien
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 20 }}>
             <div className="form-group">
               <label className="form-label">Type de document</label>
-              <select className="form-input" value={form.type} onChange={e => {
+              <select className="form-input" value={form.type} disabled={numeroVerrouille} onChange={e => {
                 const t = e.target.value;
                 set("type", t);
                 set("ref", nextRef(orders, t));
               }}>
                 <option value="bc">Bon de commande</option>
                 <option value="facture">Facture</option>
+                {form.type === "avoir" && <option value="avoir">Avoir</option>}
               </select>
             </div>
             <div className="form-group">
               <label className="form-label">Référence</label>
-              <input className="form-input" value={form.ref || nextRef(orders, form.type)} onChange={e => set("ref", e.target.value)} />
+              <input className="form-input" value={form.ref || nextRef(orders, form.type)} onChange={e => set("ref", e.target.value)}
+                readOnly={numeroVerrouille} title={numeroVerrouille ? "Numéro attribué : il ne se modifie plus" : undefined}
+                style={numeroVerrouille ? { opacity: 0.7, cursor: "not-allowed" } : undefined} />
             </div>
             <div className="form-group">
               <label className="form-label">Date</label>
@@ -7701,7 +7707,7 @@ function OrdersPage({ orders, setOrders, vehicles, setVehiclesRaw, dealer, apiKe
                           style={{ opacity: 0.3, cursor: "not-allowed" }}
                           onClick={() => alert(MESSAGE_VERROU[verrouAvoir(o)])}
                         >🗑</button>
-                      ) : (o.type !== "facture" || viewMode === "admin") && (
+                      ) : o.type !== "facture" && (
                         <button className="btn btn-danger btn-xs" onClick={() => setPendingDelete({ id: o.id, label: o.ref })}>🗑</button>
                       )}
                     </div>
@@ -11804,6 +11810,37 @@ function AdminPage({ token }) {
     }
   };
 
+  // Document d'un garage ouvert en correction (ligne brute de la table orders).
+  const [adminEditOrder, setAdminEditOrder] = useState(null);
+  const aplatir = (rows) => (rows || []).map(r => ({ ...(r.data || {}), id: r.id, garage_id: r.garage_id, created_at: r.created_at }));
+  const majOrderLocal = (id, data) => setGarageData(prev => prev && ({
+    ...prev,
+    orders: prev.orders.map(r => r.id === id ? { ...r, data } : r),
+  }));
+
+  const corrigerDocument = async (form) => {
+    try {
+      const { data } = await adminCall("update_order", { id: form.id, data: form });
+      majOrderLocal(form.id, data);
+      setAdminEditOrder(null);
+      alert("Document corrigé. Demandez au garage de recharger IOCAR avant de retoucher ce document.");
+    } catch (e) {
+      alert("Erreur : " + e.message);
+    }
+  };
+
+  const repasserEnBc = async (row) => {
+    const ref = row.data?.ref;
+    if (!window.confirm(`Repasser ${ref} en bon de commande ?\n\nSon numéro sera réattribué à la prochaine facture du garage.`)) return;
+    try {
+      const { data } = await adminCall("facture_to_bc", { id: row.id });
+      majOrderLocal(row.id, data);
+      alert(`${ref} est redevenue le bon de commande ${data.ref}. Demandez au garage de recharger IOCAR.`);
+    } catch (e) {
+      alert("Erreur : " + e.message);
+    }
+  };
+
   const deleteEntry = async (table, id) => {
     if (!window.confirm("Supprimer cette entrée ? Irréversible.")) return;
     try {
@@ -12498,7 +12535,39 @@ function AdminPage({ token }) {
                                         {table === "clients" && <><td>{d.prenom} {d.nom}</td><td>{d.email}</td><td>{d.statut}</td></>}
                                         {table === "livre_police" && <><td>{d.num_ordre}</td><td>{d.marque}</td><td>{d.immat}</td><td>{d.date_entree}</td><td>{d.date_sortie || "—"}</td></>}
                                         <td>
-                                          <button className="btn btn-danger btn-xs" onClick={() => deleteEntry(table, row.id)}>🗑</button>
+                                          {table === "orders" ? (() => {
+                                            // Facture / avoir : jamais supprimés. « Corriger » garde le
+                                            // numéro ; seule la dernière facture peut repasser en BC.
+                                            const fiscal = d.type === "facture" || d.type === "avoir";
+                                            const transmis = !!(row.iobill_invoice_id || d.iobill_invoice_id
+                                              || row.pdp_transmission_id || d.pdp_transmission_id
+                                              || row.pdp_transmitted_at || d.pdp_transmitted_at);
+                                            const serie = (ref) => (ref || "").slice(0, (ref || "").lastIndexOf("-"));
+                                            const num = (ref) => parseInt((ref || "").split("-").pop(), 10) || 0;
+                                            const derniere = d.type === "facture" && !garageData.orders.some(r =>
+                                              r.data?.type === "facture" && serie(r.data?.ref) === serie(d.ref) && num(r.data?.ref) > num(d.ref));
+                                            return (
+                                              <div style={{ display: "flex", gap: 4 }}>
+                                                {transmis ? (
+                                                  <button className="btn btn-ghost btn-xs" style={{ opacity: 0.3, cursor: "not-allowed" }}
+                                                    title="Transmis à IO BILL : se corrige par un avoir"
+                                                    onClick={() => alert("Ce document est déjà transmis à IO BILL : il ne peut plus être modifié. Corrigez-le par un avoir.")}>✏️</button>
+                                                ) : (
+                                                  <button className="btn btn-ghost btn-xs" title={fiscal ? "Corriger (le numéro est conservé)" : "Modifier"}
+                                                    onClick={() => setAdminEditOrder(row)}>✏️</button>
+                                                )}
+                                                {d.type === "facture" && derniere && !transmis && (
+                                                  <button className="btn btn-ghost btn-xs" title="Dernière facture : repasser en bon de commande"
+                                                    onClick={() => repasserEnBc(row)}>↩ BC</button>
+                                                )}
+                                                {!fiscal && (
+                                                  <button className="btn btn-danger btn-xs" onClick={() => deleteEntry(table, row.id)}>🗑</button>
+                                                )}
+                                              </div>
+                                            );
+                                          })() : (
+                                            <button className="btn btn-danger btn-xs" onClick={() => deleteEntry(table, row.id)}>🗑</button>
+                                          )}
                                         </td>
                                       </tr>
                                     );
@@ -12519,6 +12588,17 @@ function AdminPage({ token }) {
         </div>
       )}
       </>)}
+
+      {adminEditOrder && garageData && (
+        <OrderForm
+          order={aplatir([adminEditOrder])[0]}
+          vehicles={aplatir(garageData.vehicles)}
+          clients={aplatir(garageData.clients)}
+          orders={aplatir(garageData.orders)}
+          onSave={corrigerDocument}
+          onClose={() => setAdminEditOrder(null)}
+        />
+      )}
 
       {adminTab === "tickets" && (
         <div>
