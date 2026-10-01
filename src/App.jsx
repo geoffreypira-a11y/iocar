@@ -4505,10 +4505,22 @@ function PaymentModal({ order, onSave, onClose }) {
   const displayPaiements = c.paiementsTotal;
   const displayEncaisse = Math.abs(c.encaisse);
   const displayReste = Math.abs(c.reste);
-  const [form, setForm] = useState({ date: today(), montant: displayReste.toFixed(2), mode: "Virement" });
+  // Plafond d'un paiement : le reste dû, qui tient déjà compte de l'acompte,
+  // de la reprise (règlement en nature) et des paiements précédents. Au-delà,
+  // la facture passait en trop-perçu et le garage devait de l'argent au client.
+  const maxPayable = Math.max(0, Math.round(c.reste * 100) / 100);
+  const [form, setForm] = useState({ date: today(), montant: maxPayable.toFixed(2), mode: "Virement" });
   const modes = ["Virement", "Chèque", "Espèces", "CB", "Financement"];
+  const montantSaisi = parseFloat(form.montant);
+  const erreurMontant = maxPayable <= 0
+    ? (isAvoir ? "Cet avoir est déjà entièrement remboursé." : "Cette facture est déjà entièrement réglée.")
+    : !(montantSaisi > 0)
+      ? "Saisissez un montant supérieur à 0."
+      : montantSaisi > maxPayable + 0.005
+        ? `Le montant dépasse le reste ${isAvoir ? "à rembourser" : "à payer"} (${fmtDec(maxPayable)}).`
+        : null;
   const submit = () => {
-    if (!parseFloat(form.montant)) return;
+    if (erreurMontant) return;
     const pmt = { id: uid(), ...form, montant: parseFloat(form.montant) };
     const updated = { ...order, paiements: [...(order.paiements || []), pmt] };
     const newC = calcOrder(updated);
@@ -4535,13 +4547,27 @@ function PaymentModal({ order, onSave, onClose }) {
                 <span style={{ color: "var(--green)" }}>- {fmtDec(displayAcompte)}</span>
               </div>
             )}
+            {/* La reprise est un règlement en nature : elle réduit le reste dû. */}
+            {c.repriseValeur > 0 && (
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginTop: 6 }}>
+                <span style={{ color: "var(--muted)" }}>{isAvoir ? "Reprise véhicule (restituée)" : "Reprise véhicule (règlement en nature)"}</span>
+                <span style={{ color: "var(--green)" }}>- {fmtDec(c.repriseValeur)}</span>
+              </div>
+            )}
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginTop: 6 }}>
               <span style={{ color: "var(--muted)" }}>{isAvoir ? "Déjà remboursé (paiements)" : "Déjà encaissé (paiements)"}</span>
               <span style={{ color: "var(--green)" }}>- {fmtDec(displayPaiements)}</span>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, fontWeight: 700, marginTop: 8, paddingTop: 8, borderTop: "1px solid var(--border2)" }}>
-              <span>{isAvoir ? "Reste à rembourser" : "Reste à payer"}</span>
-              <span style={{ color: displayReste <= 0.01 ? "var(--green)" : "var(--orange)" }}>{fmtDec(displayReste)}</span>
+              {/* Trop-perçu (déjà encaissé au-delà du total) : on le dit, au lieu
+                  d'afficher sa valeur absolue comme un reste à payer. */}
+              {c.reste < -0.01 ? (<>
+                <span style={{ color: "var(--red)" }}>{isAvoir ? "Trop remboursé" : "Trop-perçu (dû au client)"}</span>
+                <span style={{ color: "var(--red)" }}>{fmtDec(-c.reste)}</span>
+              </>) : (<>
+                <span>{isAvoir ? "Reste à rembourser" : "Reste à payer"}</span>
+                <span style={{ color: displayReste <= 0.01 ? "var(--green)" : "var(--orange)" }}>{fmtDec(displayReste)}</span>
+              </>)}
             </div>
           </div>
           <div className="form-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
@@ -4556,14 +4582,26 @@ function PaymentModal({ order, onSave, onClose }) {
               </select>
             </div>
             <div className="form-group full">
-              <label className="form-label">Montant (€)</label>
-              <input className="form-input" type="number" step="0.01" value={form.montant} onChange={e => setForm(f => ({ ...f, montant: e.target.value }))} />
+              <label className="form-label">Montant (€) · maximum {fmtDec(maxPayable)}</label>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input className="form-input" type="number" step="0.01" min="0" max={maxPayable.toFixed(2)}
+                  value={form.montant} onChange={e => setForm(f => ({ ...f, montant: e.target.value }))}
+                  style={erreurMontant && form.montant !== "" ? { borderColor: "var(--red)" } : undefined} />
+                {maxPayable > 0 && (
+                  <button type="button" className="btn btn-ghost btn-sm" style={{ whiteSpace: "nowrap" }}
+                    onClick={() => setForm(f => ({ ...f, montant: maxPayable.toFixed(2) }))}>Tout le reste</button>
+                )}
+              </div>
+              {erreurMontant && (
+                <div style={{ fontSize: 12, color: "var(--red)", marginTop: 6 }}>{erreurMontant}</div>
+              )}
             </div>
           </div>
         </div>
         <div className="modal-foot">
           <button className="btn btn-ghost" onClick={onClose}>Annuler</button>
-          <button className="btn btn-primary" onClick={submit}>✅ Enregistrer</button>
+          <button className="btn btn-primary" onClick={submit} disabled={!!erreurMontant}
+            style={erreurMontant ? { opacity: 0.5, cursor: "not-allowed" } : undefined}>✅ Enregistrer</button>
         </div>
       </div>
     </div>
