@@ -16,6 +16,10 @@
     {
       "path": "/api/backup-cron",
       "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/backup-cron?job=mails-essai",
+      "schedule": "0 7 * * *"
     }
   ],
   "headers": [

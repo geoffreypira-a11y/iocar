@@ -8831,6 +8831,8 @@ function SettingsPage({ token, dealer, setDealer, usage, isRealAdmin }) {
             // Modifiés en direct ailleurs sur cette page (interrupteur Agenda,
             // mentions IO BILL) : la copie prise à l'ouverture les écraserait.
             ui_prefs, business_mentions,
+            // Posés par le serveur à l'envoi des mails d'essai.
+            welcome_email_sent_at, feedback_email_sent_at,
             ...editableFields
           } = form;
           await setDealer(editableFields);
