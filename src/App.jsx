@@ -853,6 +853,18 @@ function prixAchatReel(v) {
   return ht > 0 ? ht : round2(ttc / TVA_VEHICULE);
 }
 
+// Marge d'une vente au Livre de Police : prix de vente − prix d'achat. Même
+// règle que la colonne Marge du registre : un prix d'achat en HT (TVA
+// normale) se compare à la vente ramenée au HT. null si l'un des deux prix
+// manque (la vente n'est alors pas comptée).
+function margeEntreeLivrePolice(e) {
+  const prixA = parseFloat(e?.prix_achat) || 0;
+  const prixVBrut = parseFloat(e?.prix_vente) || 0;
+  if (prixA <= 0 || prixVBrut <= 0) return null;
+  const prixV = e.prix_achat_base === "HT" ? round2(prixVBrut / TVA_VEHICULE) : prixVBrut;
+  return prixV - prixA;
+}
+
 // Coût d'acquisition TTC servant à la MARGE affichée en Flotte.
 // Un véhicule entré par reprise a prix_achat = 0 (aucun cash décaissé, donc
 // hors trésorerie) : sa valeur de reprise est pourtant bien son coût, comme au
@@ -1707,6 +1719,17 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
     return inPeriod(e.date_sortie, period);
   }).length;
 
+  // MARGE GAGNÉE — filtrée par période, sur les mêmes ventes que « Vendus ».
+  const margeSur = (dansPeriode) => (livrePolice || []).reduce((acc, e) => {
+    if (!e.date_sortie) return acc;
+    if (e.motif_sortie && e.motif_sortie !== "vente") return acc;
+    if (!dansPeriode(e.date_sortie)) return acc;
+    const m = margeEntreeLivrePolice(e);
+    return m === null ? { ...acc, sansPrix: acc.sansPrix + 1 } : { ...acc, total: acc.total + m, n: acc.n + 1 };
+  }, { total: 0, n: 0, sansPrix: 0 });
+  const marge = margeSur(d => inPeriod(d, period));
+  const margePrev = margeSur(d => inPreviousPeriod(d, period));
+
   // BC EN COURS — instantané, tous les BC non convertis.
   const nbBC = orders.filter(o => o.type === "bc").length;
 
@@ -2229,6 +2252,23 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
 
         {/* COLONNE GAUCHE : 3 KPIs période */}
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {/* Marge gagnée sur les ventes de la période (Livre de Police) */}
+          <div className="kpi" onClick={() => setTab("livrepolice")} style={{ cursor: "pointer", borderLeft: "3px solid var(--gold)" }}>
+            <div className="kpi-label">💹 Marge gagnée</div>
+            <div className="kpi-val" style={{ color: marge.total >= 0 ? "var(--green)" : "var(--red)" }}>{fmt(marge.total)}</div>
+            {period !== "all" ? (() => {
+              const pct = variationPct(marge.total, margePrev.total);
+              if (pct === null) return <div className="kpi-foot" style={{ color: "var(--muted)" }}>{marge.n} vente{marge.n > 1 ? "s" : ""} · pas de {periodLabel}</div>;
+              const color = pct > 0 ? "var(--green)" : pct < 0 ? "var(--red)" : "var(--muted)";
+              const arrow = pct > 0 ? "↗" : pct < 0 ? "↘" : "→";
+              return <div className="kpi-foot" style={{ color }}>{arrow} {pct >= 0 ? "+" : ""}{pct}% vs {periodLabel} · {marge.n} vente{marge.n > 1 ? "s" : ""}</div>;
+            })() : <div className="kpi-foot">{marge.n} vente{marge.n > 1 ? "s" : ""}</div>}
+            {marge.sansPrix > 0 && (
+              <div className="kpi-foot" style={{ color: "var(--orange)" }}>
+                {marge.sansPrix} vente{marge.sansPrix > 1 ? "s" : ""} sans prix d'achat ou de vente au Livre de Police, non comptée{marge.sansPrix > 1 ? "s" : ""}
+              </div>
+            )}
+          </div>
           <div className="kpi" onClick={() => setTab("fleet")} style={{ cursor: "pointer", borderLeft: "3px solid var(--gold)" }}>
             <div className="kpi-label">🏷 Vendus</div>
             <div className="kpi-val" style={{ color: "var(--muted2)" }}>{vendu}</div>
@@ -2249,14 +2289,6 @@ function Dashboard({ vehicles, setVehicles, orders, setTab, apiKey, usage, setUs
               const arrow = pct > 0 ? "↗" : pct < 0 ? "↘" : "→";
               return <div className="kpi-foot" style={{ color }}>{arrow} {pct >= 0 ? "+" : ""}{pct}% vs {periodLabel}</div>;
             })() : <div className="kpi-foot">depuis le début</div>}
-          </div>
-          <div className="kpi" style={{ borderLeft: "3px solid var(--gold)" }}>
-            <div className="kpi-label">💰 Panier moyen</div>
-            {(() => {
-              const panier = vendu > 0 ? encaisse / vendu : 0;
-              return <div className="kpi-val gold">{fmt(panier)}</div>;
-            })()}
-            <div className="kpi-foot">{vendu > 0 ? `${vendu} vente${vendu > 1 ? "s" : ""}` : "aucune vente"}</div>
           </div>
           {/* v8.49.11 — TVA collectée (par période, art. 269 CGI) */}
           <div className="kpi" style={{ borderLeft: "3px solid var(--gold)" }}>
