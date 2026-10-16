@@ -3358,7 +3358,7 @@ function VehicleModal({ vehicle, depotVente = false, onSave, onClose, apiKey, us
           <div className="form-grid">
             {[["marque", "Marque *"], ["modele", "Modèle *"], ["finition", "Finition"], ["genre", "Genre national"], ["date_mise_en_circulation", "Date 1ère MEC"],
               ["motorisation", "Motorisation"], ["puissance_cv", "Puissance (ch)", "number"], ["puissance_fiscale", "Puissance fiscale (CV)", "number"], ["co2", "CO₂ (g/km)", "number"], ["boite", "Boîte"],
-              ["couleur", "Couleur ext."], ["couleur_int", "Couleur int."], ["kilometrage", "Kilométrage", "number"],
+              ["couleur", "Couleur ext."], ["couleur_int", "Couleur int."], ["nb_portes", "Nb portes", "number"], ["kilometrage", "Kilométrage", "number"],
               ["vin", "N° VIN"], ["date_entree", depotVente ? "Date de dépôt" : "Date d'entrée (achat)"], ["carburant", "Carburant"]].map(([k, label, type]) => (
                 <div className="form-group" key={k}>
                   <label className="form-label" style={k === "numero_formule" ? { color: "var(--gold)" } : undefined}>{label}</label>
@@ -3382,7 +3382,14 @@ function VehicleModal({ vehicle, depotVente = false, onSave, onClose, apiKey, us
               </div>
             <div className="form-group">
               <label className="form-label">Transmission</label>
-              <select className="form-input" value={form.transmission} onChange={e => set("transmission", e.target.value)}>
+              <select className="form-input" value={form.transmission || ""} onChange={e => set("transmission", e.target.value)}>
+                <option value="">— Non renseignée —</option>
+                {/* Valeur hors liste (ex. « INCONNU » venu de la recherche de
+                    plaque) : affichée telle quelle, sinon la liste montrait
+                    « Traction » alors que la fiche disait autre chose. */}
+                {form.transmission && !["Traction", "Propulsion", "Intégrale (4x4)"].includes(form.transmission) && (
+                  <option value={form.transmission}>{form.transmission}</option>
+                )}
                 {["Traction", "Propulsion", "Intégrale (4x4)"].map(c => <option key={c}>{c}</option>)}
               </select>
             </div>
@@ -3528,10 +3535,10 @@ function VehicleFiche({ v, dealer, onClose }) {
               {[
                 ["1ère MEC", v.date_mise_en_circulation || getYear(v)], ["Kilométrage", `${Number(v.kilometrage || 0).toLocaleString("fr-FR")} km`],
                 ["Motorisation", v.motorisation], ["Carburant", v.carburant],
-                ["Puissance", `${v.puissance_cv} ch`], ["Boîte", v.boite],
+                ["Puissance", v.puissance_cv ? `${v.puissance_cv} ch` : ""], ["Boîte", v.boite],
                 ["Transmission", v.transmission], ["Couleur ext.", v.couleur],
                 ["Couleur int.", v.couleur_int], ["Nb portes", v.nb_portes],
-                ["Nb places", v.nb_places], ["N° VIN", v.vin],
+                ["Puissance fiscale", v.puissance_fiscale ? `${v.puissance_fiscale} CV` : ""], ["N° VIN", v.vin],
               ].map(([l, val], i) => (
                 <div className="fiche-spec" key={i}>
                   <div className="fiche-slabel">{l}</div>
