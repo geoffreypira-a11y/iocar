@@ -30,6 +30,12 @@ export const GARAGE_TABLES = [
   'livre_police',
   'support_tickets',
   'ticket_messages',
+  // Agenda des rendez-vous (module optionnel)
+  'agenda_staff',
+  'agenda_schedules',
+  'agenda_time_off',
+  'agenda_types',
+  'agenda_appointments',
 ];
 
 /**

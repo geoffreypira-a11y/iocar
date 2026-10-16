@@ -17,6 +17,9 @@ import IobillInvoiceSync from "./components/IobillInvoiceSync.jsx";
 // v8.49.16 — Système d'essai gratuit 7 jours + paywall
 import { TrialBanner, hasValidAccess } from "./components/TrialBanner.jsx";
 import { TrialExpiredPage } from "./modules/core/TrialExpiredPage.jsx";
+// Agenda des RDV : module autonome, chargé seulement à l'ouverture de l'onglet
+// (aucun poids sur le reste de l'application tant qu'il n'est pas utilisé).
+const AgendaPage = React.lazy(() => import("./modules/agenda/AgendaPage.jsx"));
 
 /* ═══════════════════════════════════════════════════════════════
    SUPABASE CONFIG
@@ -8417,6 +8420,35 @@ function SettingsPage({ token, dealer, setDealer, usage, isRealAdmin }) {
         <div><div className="page-title">Paramètres</div><div className="page-sub">Informations de votre concession</div></div>
       </div>
 
+      {/* ─── Agenda des rendez-vous (module optionnel, désactivé par défaut) ─── */}
+      <div style={{ maxWidth: 900, marginBottom: 20 }}>
+        <div className="card card-pad" style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+          <div style={{ flex: 1, minWidth: 220 }}>
+            <div style={{ fontFamily: "Syne", fontSize: 14, fontWeight: 700, letterSpacing: 1, color: "var(--gold)", textTransform: "uppercase", marginBottom: 4 }}>
+              📅 Agenda des rendez-vous
+            </div>
+            <div style={{ fontSize: 12, color: "var(--muted)", lineHeight: 1.5 }}>
+              Planning des RDV de l'équipe (essais, livraisons, reprises…). Ajoute un onglet « Agenda » au menu.
+            </div>
+          </div>
+          {(() => {
+            const actif = dealer?.ui_prefs?.agenda_enabled === true;
+            return (
+              <div
+                role="switch" aria-checked={actif} tabIndex={0}
+                onClick={() => setDealer({ ...dealer, ui_prefs: { ...(dealer?.ui_prefs || {}), agenda_enabled: !actif } })}
+                style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}
+              >
+                <div style={{ width: 40, height: 22, borderRadius: 11, background: actif ? "var(--gold)" : "var(--card2)", border: "1px solid var(--border2)", position: "relative", transition: "background .2s" }}>
+                  <div style={{ width: 16, height: 16, borderRadius: "50%", background: "#fff", position: "absolute", top: 2, left: actif ? 21 : 3, transition: "left .2s", boxShadow: "0 1px 3px rgba(0,0,0,.3)" }} />
+                </div>
+                <span style={{ fontSize: 13, fontWeight: 600, color: actif ? "var(--gold)" : "var(--muted)" }}>{actif ? "Activé" : "Désactivé"}</span>
+              </div>
+            );
+          })()}
+        </div>
+      </div>
+
       {/* ─── v8.37 — Carte Pont IO BILL ─── */}
       <div style={{ maxWidth: 900, marginBottom: 20 }}>
         <IobillBridgeCard
@@ -8757,6 +8789,9 @@ function SettingsPage({ token, dealer, setDealer, usage, isRealAdmin }) {
             is_admin, is_active, sub_status, stripe_customer_id,
             stripe_subscription_id, subscribed_at, payment_failed_at,
             _archived, user_id, created_at,
+            // Modifiés en direct ailleurs sur cette page (interrupteur Agenda,
+            // mentions IO BILL) : la copie prise à l'ouverture les écraserait.
+            ui_prefs, business_mentions,
             ...editableFields
           } = form;
           await setDealer(editableFields);
@@ -13388,11 +13423,16 @@ export default function App() {
   const setLivrePoliceRaw = useTrial ? setDemoLivrePolice : setLivrePolice;
   const setDealerRaw      = saveDealer;
 
+  // Agenda : activé par le garage dans ses Paramètres (ui_prefs.agenda_enabled).
+  // Jamais en démo : le module lit et écrit directement en base.
+  const agendaActif = !useTrial && !!token && !!garageId && dealer?.ui_prefs?.agenda_enabled === true;
+
   const navItems = [
     { id: "dashboard",   icon: "📊", label: "Dashboard" },
     { id: "fleet",       icon: "🚗", label: "Flotte" },
     { id: "orders",      icon: "📄", label: "Factures" },
     { id: "crm",         icon: "👥", label: "CRM" },
+    ...(agendaActif ? [{ id: "agenda", icon: "📅", label: "Agenda" }] : []),
     { id: "livrepolice", icon: "📋", label: "Police" },
     { id: "docsadmin",   icon: "🗂", label: "Docs admin" },
     { id: "settings",    icon: "⚙️", label: "Paramètres" },
@@ -13625,6 +13665,12 @@ export default function App() {
             {tab === "dashboard"   && <Dashboard vehicles={activeVehicles} setVehicles={setVehiclesRaw} orders={activeOrders} setTab={setTab} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} livrePolice={livrePolice} dealer={dealer} setDealer={setDealerRaw} />}
             {tab === "fleet"       && <FleetPage vehicles={activeVehicles} setVehicles={setVehiclesRaw} orders={activeOrders} setOrders={setOrdersRaw} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} livrePolice={activeLivrePolice} setLivrePolice={setLivrePoliceRaw} viewMode={viewMode} garageId={garageId} dealer={dealer} token={token} />}
             {tab === "orders"      && <OrdersPage orders={activeOrders} setOrders={setOrdersRaw} vehicles={activeVehicles} setVehiclesRaw={setVehiclesRaw} dealer={dealer} apiKey={dealer.rapidapi_key} usage={usage} setUsage={setUsage} clients={activeClients} setClients={setClientsRaw} viewMode={viewMode} token={token} livrePolice={activeLivrePolice} />}
+            {tab === "agenda" && agendaActif && (
+              <React.Suspense fallback={<div className="page" style={{ color: "var(--muted)" }}>Chargement de l'agenda…</div>}>
+                <AgendaPage token={token} garageId={garageId} supabaseUrl={SUPABASE_URL} supabaseKey={SUPABASE_KEY}
+                  dealer={dealer} setDealer={setDealerRaw} />
+              </React.Suspense>
+            )}
             {tab === "crm"         && <CrmPage clients={activeClients} setClients={setClientsRaw} orders={activeOrders} viewMode={viewMode} dealer={dealer} setDealer={setDealerRaw} token={token} livrePolice={activeLivrePolice} />}
             {tab === "livrepolice" && (viewMode === "trial" ? (
               <div className="page" style={{ textAlign: "center", paddingTop: 80 }}>
