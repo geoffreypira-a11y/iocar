@@ -17,8 +17,13 @@
 // Deux authentifications acceptées :
 //   • header `x-vercel-cron: 1`, injecté par Vercel sur ses propres appels
 //   • `Authorization: Bearer <CRON_SECRET>`, pour un déclenchement manuel
+//
+// Deuxième tâche quotidienne, sur la même fonction pour la même raison
+// (plafond de fonctions) : `?job=mails-essai` envoie les mails automatiques
+// de la période d'essai, 2e et 7e jour (voir _lib/mails-essai.js).
 
 import { saveBackup } from './_lib/backup.js';
+import { envoyerMailsEssai } from './_lib/mails-essai.js';
 
 export default async function handler(req, res) {
   const isVercelCron = req.headers['x-vercel-cron'] === '1';
@@ -27,6 +32,17 @@ export default async function handler(req, res) {
 
   if (!isVercelCron && !hasSecret) {
     return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  if (req.query?.job === 'mails-essai') {
+    try {
+      const result = await envoyerMailsEssai({ dryRun: req.query?.dry === '1' });
+      console.log('[mails-essai] OK', JSON.stringify(result));
+      return res.status(200).json(result);
+    } catch (e) {
+      console.error('[mails-essai] ÉCHEC', e?.stack || e?.message);
+      return res.status(500).json({ error: e?.message || 'Échec des mails d\'essai' });
+    }
   }
 
   try {
