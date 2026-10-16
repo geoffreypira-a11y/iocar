@@ -48,8 +48,7 @@ const PIED_CONTACT_HTML = `
 
 function salutation(nomGarage) {
   const nom = (nomGarage || '').trim();
-  // « Mon Garage » : nom posé par défaut à l'inscription, pas un vrai nom.
-  return nom && nom !== 'Mon Garage' ? `Bonjour ${nom},` : 'Bonjour,';
+  return nom ? `Bonjour ${nom},` : 'Bonjour,';
 }
 
 function miseEnPage(titre, paragraphesHtml) {
@@ -62,12 +61,14 @@ function miseEnPage(titre, paragraphesHtml) {
   `;
 }
 
+const DERNIER_JOUR = 'C\'est votre dernier jour d\'essai !';
+
 const MAILS = {
   bienvenue: {
     colonne: 'welcome_email_sent_at',
     jour: 2,
-    contenu(nomGarage) {
-      const salut = salutation(nomGarage);
+    contenu({ name }) {
+      const salut = salutation(name);
       return {
         subject: 'Bienvenue sur IO Car — besoin d\'un coup de main ?',
         html: miseEnPage('Bienvenue sur IO Car !', [
@@ -89,19 +90,29 @@ const MAILS = {
   avis: {
     colonne: 'feedback_email_sent_at',
     jour: 7,
-    contenu(nomGarage) {
-      const salut = salutation(nomGarage);
+    contenu({ name, trial_ends_at }, maintenant) {
+      const salut = salutation(name);
+      // « Dernier jour » seulement si l'essai se termine au plus tard demain
+      // (l'essai de 7 jours expire le 8e jour à l'heure d'inscription) : un
+      // essai déjà prolongé par l'admin n'est pas concerné.
+      const fin = trial_ends_at ? new Date(trial_ends_at).getTime() : null;
+      const finDemain = debutDuJourParis(maintenant).getTime() + 2 * JOUR_MS;
+      const dernierJour = fin !== null && fin <= finDemain;
+      const intro = (dernierJour ? `${DERNIER_JOUR} ` : '')
+        + 'Voilà une semaine que vous essayez IO Car. Votre retour est très important pour nous : ce qui vous plaît, ce qui vous manque, ce que nous pourrions améliorer. Il suffit de répondre à ce mail, quelques lignes nous aident déjà beaucoup.';
       return {
-        subject: 'Votre avis sur IO Car compte pour nous',
+        subject: dernierJour
+          ? 'Dernier jour d\'essai — votre avis sur IO Car compte pour nous'
+          : 'Votre avis sur IO Car compte pour nous',
         html: miseEnPage('Une semaine avec IO Car', [
           escapeHtml(salut),
-          'Voilà une semaine que vous essayez IO Car. Votre retour est très important pour nous : ce qui vous plaît, ce qui vous manque, ce que nous pourrions améliorer. Il suffit de répondre à ce mail, quelques lignes nous aident déjà beaucoup.',
+          dernierJour ? intro.replace(DERNIER_JOUR, `<strong>${DERNIER_JOUR}</strong>`) : intro,
           'Vous avez besoin de <strong>quelques jours d\'essai supplémentaires</strong> pour bien prendre l\'application en main ? Dites-le-nous simplement, nous prolongerons votre essai.',
           `Et bien sûr, pour toute aide ou tout renseignement, n'hésitez pas à nous appeler au ${PIED_CONTACT_HTML}.`,
         ]),
         text: [
           salut, '',
-          'Voilà une semaine que vous essayez IO Car. Votre retour est très important pour nous : ce qui vous plaît, ce qui vous manque, ce que nous pourrions améliorer. Il suffit de répondre à ce mail, quelques lignes nous aident déjà beaucoup.', '',
+          intro, '',
           'Vous avez besoin de quelques jours d\'essai supplémentaires pour bien prendre l\'application en main ? Dites-le-nous simplement, nous prolongerons votre essai.', '',
           `Et bien sûr, pour toute aide ou tout renseignement, n'hésitez pas à nous appeler au ${TELEPHONE} ou à nous écrire à ${EMAIL_CONTACT}.`, '',
           'Bonne journée,', 'L\'équipe IO Car',
@@ -135,7 +146,7 @@ async function envoyerUnMail(mail, { maintenant, dryRun }) {
 
   const { data: garages, error } = await supabase
     .from('garages')
-    .select('id, name, email, plan, sub_status, is_admin, _archived, created_at')
+    .select('id, name, email, plan, sub_status, is_admin, _archived, created_at, trial_ends_at')
     .eq('plan', 'trial')
     .is(mail.colonne, null)
     .lt('created_at', finFenetre.toISOString())
@@ -160,7 +171,7 @@ async function envoyerUnMail(mail, { maintenant, dryRun }) {
 
     const liberer = () => supabase.from('garages')
       .update({ [mail.colonne]: null }).eq('id', g.id);
-    const { subject, html, text } = mail.contenu(g.name);
+    const { subject, html, text } = mail.contenu(g, maintenant);
     try {
       const r = await fetch('https://api.resend.com/emails', {
         method: 'POST',
