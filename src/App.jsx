@@ -13428,11 +13428,11 @@ export default function App() {
   const agendaActif = !useTrial && !!token && !!garageId && dealer?.ui_prefs?.agenda_enabled === true;
 
   const navItems = [
+    ...(agendaActif ? [{ id: "agenda", icon: "📅", label: "Agenda" }] : []),
     { id: "dashboard",   icon: "📊", label: "Dashboard" },
     { id: "fleet",       icon: "🚗", label: "Flotte" },
     { id: "orders",      icon: "📄", label: "Factures" },
     { id: "crm",         icon: "👥", label: "CRM" },
-    ...(agendaActif ? [{ id: "agenda", icon: "📅", label: "Agenda" }] : []),
     { id: "livrepolice", icon: "📋", label: "Police" },
     { id: "docsadmin",   icon: "🗂", label: "Docs admin" },
     { id: "settings",    icon: "⚙️", label: "Paramètres" },
